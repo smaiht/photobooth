@@ -151,23 +151,4 @@ screens.idle.addEventListener("click", () => {
 });
 
 // --- Admin panel: hold top-left corner 3s ---
-const adminTrigger = document.getElementById("admin-trigger");
-const adminPanel = document.getElementById("admin-panel");
-let holdTimer = null;
-
-adminTrigger.addEventListener("pointerdown", () => {
-    holdTimer = setTimeout(() => { adminPanel.hidden = false; }, 3000);
-});
-adminTrigger.addEventListener("pointerup", () => clearTimeout(holdTimer));
-adminTrigger.addEventListener("pointerleave", () => clearTimeout(holdTimer));
-
-document.getElementById("btn-close-admin").addEventListener("click", () => {
-    adminPanel.hidden = true;
-});
-
-document.getElementById("btn-exit").addEventListener("click", () => {
-    fetch("/api/shutdown", { method: "POST" });
-    document.body.innerHTML = "<div style='display:flex;height:100vh;align-items:center;justify-content:center;font-size:3vw'>Выключено. Закройте окно.</div>";
-});
-
 connect();

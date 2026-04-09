@@ -114,6 +114,13 @@ echo.
 
 :kiosk_loop
 start /wait msedge --kiosk http://localhost:8000 --edge-kiosk-type=fullscreen --no-first-run --disable-features=TranslateUI --autoplay-policy=no-user-gesture-required
-echo [WARN] Browser closed! Restarting in 2 seconds...
+:: Check if server still alive — if shutdown was called, exit cleanly
 timeout /t 2 /nobreak >nul
+curl -s -o nul http://localhost:8000/api/config >nul 2>&1
+if errorlevel 1 (
+    echo [STOP] Server shut down. Exiting.
+    pause
+    exit /b 0
+)
+echo [WARN] Browser closed! Restarting...
 goto kiosk_loop
