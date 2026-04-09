@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 photos/
 .DS_Store
+.env

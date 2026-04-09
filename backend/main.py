@@ -7,6 +7,7 @@ State machine:
 import asyncio
 import json
 import logging
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -19,6 +20,7 @@ from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
 from .composer import compose_strip, compose_grid
 from .uploader import Uploader
 from .video import VideoRecorder
+from .bot import start_bot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -29,6 +31,7 @@ app = FastAPI()
 STATE = "idle"
 SESSION_ID = ""
 SESSION_PHOTOS: list[str] = []
+SESSION_COUNT = 0
 CONFIG = load_event_config()
 CLIENTS: list[WebSocket] = []
 
@@ -101,7 +104,9 @@ def on_camera_error(error: str):
 
 # --- Session flow ---
 async def run_session():
-    global SESSION_ID, SESSION_PHOTOS
+    global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
+
+    SESSION_COUNT += 1
 
     SESSION_ID = uuid.uuid4().hex[:8]
     SESSION_PHOTOS = []
@@ -279,3 +284,18 @@ async def startup():
             await uploader.retry_pending()
 
     asyncio.create_task(retry_loop())
+
+    # Status callback for bot
+    def get_status():
+        return {
+            "state": STATE,
+            "session_count": SESSION_COUNT,
+            "print_enabled": CONFIG.get("print_enabled", False),
+            "tg_enabled": CONFIG.get("tg_enabled", False),
+            "reset_to_idle": lambda: asyncio.create_task(set_state("idle")),
+        }
+
+    # Start Telegram admin bot
+    token = os.environ.get("TG_BOT_TOKEN", "")
+    admin_id = int(os.environ.get("TG_ADMIN_ID", "0") or "0")
+    asyncio.create_task(start_bot(token, admin_id, get_status))

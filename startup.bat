@@ -64,6 +64,16 @@ if errorlevel 1 (
 )
 echo.
 
+:: Load .env if exists
+if exist ".env" (
+    echo [CONFIG] Loading .env...
+    for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
+        if not "%%a"=="" if not "%%b"=="" set "%%a=%%b"
+    )
+    echo [OK] .env loaded
+    echo.
+)
+
 :: Kill leftover processes
 echo [CLEANUP] Killing old processes...
 taskkill /f /fi "WINDOWTITLE eq PhotoboothServer*" >nul 2>&1
@@ -73,7 +83,7 @@ echo.
 
 :: Start server
 echo [START] Starting server...
-start "PhotoboothServer" cmd /k "cd /d "%~dp0" && venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 2>&1"
+start "PhotoboothServer" cmd /k "cd /d "%~dp0" && venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 2>&1"
 echo [OK] Server process launched (check PhotoboothServer window)
 echo.
 

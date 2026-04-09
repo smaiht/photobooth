@@ -3,4 +3,5 @@ uvicorn[standard]
 websockets
 pillow
 aiohttp
+aiogram
 pywin32; sys_platform == "win32"
