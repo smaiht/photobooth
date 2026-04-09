@@ -63,7 +63,7 @@ async def cmd_unknown(message: Message):
 
 
 async def start_bot(token: str, admin_id: int, get_status_cb=None):
-    """Start bot polling. Call as asyncio task."""
+    """Start bot polling as background task. Never blocks the server."""
     global _admin_id, _get_status
     _admin_id = admin_id
     _get_status = get_status_cb
@@ -74,9 +74,17 @@ async def start_bot(token: str, admin_id: int, get_status_cb=None):
 
     bot = Bot(token=token)
     log.info(f"Telegram bot starting (admin: {admin_id})")
-    try:
-        await dp.start_polling(bot)
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        log.error(f"Bot error: {e}")
+
+    while True:
+        try:
+            # Test connection first with timeout
+            await asyncio.wait_for(bot.get_me(), timeout=5)
+            log.info("Telegram bot connected, starting polling")
+            await dp.start_polling(bot)
+        except asyncio.TimeoutError:
+            log.warning("Telegram unreachable, retrying in 30s...")
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            log.warning(f"Bot error: {e}, retrying in 30s...")
+        await asyncio.sleep(30)

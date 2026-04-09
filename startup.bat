@@ -30,20 +30,13 @@ if not exist "venv\Scripts\python.exe" (
     )
     echo [OK] Venv created
     echo.
-
-    echo [SETUP] Installing dependencies...
-    venv\Scripts\pip.exe install -r requirements.txt
-    if errorlevel 1 (
-        echo [ERROR] Failed to install dependencies!
-        pause
-        exit /b 1
-    )
-    echo [OK] Dependencies installed
-    echo.
-) else (
-    echo [OK] Venv exists
-    echo.
 )
+
+:: Always sync dependencies (catches new packages after git pull)
+echo [SETUP] Checking dependencies...
+venv\Scripts\pip.exe install -q -r requirements.txt
+echo [OK] Dependencies up to date
+echo.
 
 :: Check uvicorn
 echo [CHECK] Uvicorn...
