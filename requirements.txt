@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+websockets
+pillow
+aiohttp
+pywin32; sys_platform == "win32"

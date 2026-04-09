@@ -1,0 +1,242 @@
+------------------------------------------------------------------------------------------
+                             Ver 13.20.10 Release Note
+                                   09/24/2025
+                                   Canon Inc.
+------------------------------------------------------------------------------------------
+
+1.History
+09/24/2025 Ver 13.20.10 Release
+	* Added support for the EOS R6 Mark III
+	* Added functionality as follows:
+	    * kEdsPropID_Evf_FocalLength 
+
+05/12/2025 Ver 13.19.10 Release
+	* Added functionality as follows:
+	    * kEdsPropID_IBIS_HighResoShot
+	    * kEdsPropID_Flash_Target
+
+02/28/2025 Ver 13.19.0 Release
+	* Added support for macOS v15
+	* Stopped support for macOS v12
+	* Added support for the EOS R50V
+	* Added functionality as follows:
+	    * EdsCreateFolder
+	    * EdsCreateFlashSettingRef
+	    * EdsGetPropertyDescEx
+	    * kEdsPropID_Flash_Firing
+	    * kEdsPropID_StillFileNameSetting
+	    * kEdsPropID_StillFileNameUserSet1
+	    * kEdsPropID_StillFileNameUserSet2
+	    * kEdsPropID_StillFolderName
+	    * kEdsPropID_MovieFileNameIndex
+	    * kEdsPropID_MovieFileNameReelNo
+	    * kEdsPropID_MovieFileNameClipNo
+	    * kEdsPropID_MovieFileNameUserDef
+	    * kEdsPropID_MovieParamEx
+	    * kEdsPropID_SlowFastMode
+
+09/26/2024 Ver 13.18.40 Release
+	* Added support for the EOS R1
+
+
+07/26/2024 Ver 13.18.30 Release
+	* Released a Linux version.(Intel 64bit)
+	* Added support for the EOS R5 Mark II
+	* Added functionality as follows:
+	    * kEdsPropID_ApertureLockSetting 
+	    * kEdsPropID_LensIsSetting 
+	    * kEdsPropID_ScreenOffTime
+	    * kEdsPropID_ViewfinderOffTime
+	    * kEdsPropID_ScreenDimmerTime
+	* Added EOS R8 / EOS R50 for Models with confirmed operation
+	    * Focus potision Memory
+	* Added EOS R50 / EOS R100 for Models with confirmed operation
+	    * EdsSetMetaImage
+	* Changed the following interfaces. Modification of program code is ecessary.
+	    * EdsObjectFormat
+	    * EdsFocusShiftSet
+	    * EdsEvfZoom
+	    * EdsEvfAFMode
+	    	    
+04/01/2024 Ver 13.18.10 Release
+	* Added functionality as follows:
+	    * kEdsPropID_RegisterFocusEdge
+	    * kEdsPropID_DriveFocusToEdge
+	    * kEdsPropID_FocusPosition
+	* Added EOS R7 / EOS R10 for Models with confirmed operation
+	    * EdsSetMetaImage
+
+02/05/2024 Ver 13.18.0 Release
+	* Added support for macOS v14
+	* Stopped support for macOS v11
+	* Added functionality as follows:
+		* kEdsPropID_AFTrackingObject
+		* kEdsPropID_ContinuousAfMode
+		* EdsSetMetaImage
+
+11/15/2023 Ver 13.17.12 Release
+	* Minor bug fixes and Improvements.
+
+10/17/2023 Ver 13.17.11 Release
+	* Added EOS R50 for Models with confirmed operation
+		* kEdsPropID_FocusShiftSetting
+		* kEdsPropID_MovieHFRSetting
+		* kEdsCameraCommand_SetModeDialDisable
+
+
+08/23/2023 Ver 13.17.10 Release
+	* Released a Linux version.(ARMv8 32bit/64bit)
+	* Added support for the PowerShot V10
+	* Added functionality as follows:
+		* kEdsPropID_AfLockState
+		* kEdsPropID_ColorFilter
+		* kEdsPropID_BrightnessSetting
+		* kEdsPropID_DigitalZoomSetting
+		* kEdsPropID_ShutterType
+	* Added EOS R6 Mark II / EOS R8 for Models with confirmed operation
+		* kEdsPropID_FocusShiftSetting
+		* kEdsPropID_MovieHFRSetting
+		* kEdsCameraCommand_SetModeDialDisable
+
+			 
+05/25/2023 Ver 13.17.0 Release
+	* Added support for the EOS R100
+	* Fixed property "kEdsPropID_FocusShiftSetting"
+		* Add the following values to Value:
+			 "FocusStackingFunction" / "FocusStackingTrimming"
+
+03/10/2023 Ver 13.16.20 Release
+	* Added support for the PowerShot Zoom
+	* Stopping support OS
+		* Windows 8.1
+
+12/14/2022 Ver 13.16.01 Release
+	* Added EOS R7 / EOS R10 for Models with confirmed operation
+		* kEdsPropID_FocusShiftSetting
+		* kEdsPropID_MovieHFRSetting
+		* kEdsCameraCommand_RequestSensorCleaning
+		* kEdsCameraCommand_SetModeDialDisable
+
+11/09/2022 Ver 13.16.0 Release
+	* Added support for the EOS R6 Mark II
+	* Added functionality as follows:
+		* kEdsPropID_Evf_ViewType
+	* Added Multiple camera connection samples for the following programming languages
+		* VC
+
+07/21/2022 Ver 13.15.20 Release
+	* Added functionality as follows:
+		* kEdsCameraCommand_SetModeDialDisable
+		* kEdsPropID_AFEyeDetect
+		* kEdsPropID_MovieServoAf
+	* Fixed functionality as follows:
+		* kEdsPropID_AFMode (Target object)
+
+04/06/2022 Ver 13.15.10 Release
+	* Added support for the EOS R7 / EOS R10 
+        
+01/27/2022 Ver 13.14.40 Release
+	* Added functionality as follows:
+		* kEdsPropID_FocusShiftSetting
+		* kEdsPropID_MovieHFRSetting
+		* kEdsCameraCommand_RequestSensorCleaning
+
+12/02/2021 Ver 13.14.30 Release
+	* Added support for the EOS R3
+	* Added functionality as follows:
+		* kEdsPropID_StillMovieDivideSetting
+		* kEdsPropID_CardExtension
+		* kEdsPropID_MovieCardExtension
+		* kEdsPropID_StillCurrentMedia 
+		* kEdsPropID_MovieCurrentMedia
+	* Added Error messages 
+		* 3.2.13 TakePicture Errors
+                
+10/14/2021 Ver 13.13.41 Release
+	* Fixed issues as follows:
+		* Unable to Build for Windows (64 bit) Architecture Using EDSDK.lib.
+                
+09/16/2021 Ver 13.13.40 Release
+	* Added value to the definition as follows:
+		* Enum EdsAEMode
+
+06/01/2021 Ver 13.13.30 Release
+	* EDSDK API Programming Reference
+		* Updated the description of the API for power zoom control.
+	
+	* EDSDKTypes.h
+		* Added EdsObjectFormat definition.
+	
+	
+03/31/2021 Ver 13.13.20 Release
+	* Added functionality as follows:
+		* EdsSetFramePoint
+		* kEdsPropID_Aspect
+		* kEdsPropID_Evf_VisibleRect
+	* Added support for macOS v11
+	* Stopping support OS
+		* macOS v10.13
+		* Windows 7
+	* Changed the following interfaces. Modification of program code is necessar.
+		* kEdsPropID_Evf_OutputDevice
+			* Added Value "0x08 : kEdsEvfOutputDevice_PC_Small"
+
+09/08/2020 Ver 13.13.0 Release
+	* Added support for the EOS Kiss M2 / EOS M50 Mark II
+	* Added functionality as follows:
+		* EdsGetEvent
+
+06/30/2020 Ver 13.12.31 Release
+	* Added support for the EOS R6 / EOS R5
+	* Added functionality as follows:
+		* Auto power off settings
+	* Changed the following interfaces. Modification of program code is necessar.
+		* EdsFocusInfo
+			* The number of "focusPoint" has been changed from "600" to "1053"
+
+02/14/2020 Ver 13.12.10 Release
+	* Added support for the EOS Kiss X10i / EOS Rebel T8i / EOS 850D / EOS Ra
+	* Stopping support OS
+		* Mac OS 10.12
+
+01/09/2020 Ver 13.12.1 Release
+	* Added support for the EOS-1D X Mark III
+	* Added support for Mac OSX 10.15
+
+11/08/2019 Ver 13.11.10 Release
+	* Added functionality as follows:
+		* UTC date time
+		* Evf Click White Balance
+		* Mirror Lockup Control
+		* Switching still image and movie mode
+		* Movie recording image quality
+		* Temperature Warning Information
+		* Get Angle Information 
+
+08/23/2019 Ver 13.11.0 Release
+	* Added support for the EOS M200
+
+07/24/2019 Ver 13.10.30 Release
+	* Added support for the EOS M6 Mark II / EOS 90D
+	* Change the sample language version as follows:
+		* Swift3 -> Swift5
+
+05/16/2019 Ver 13.10.21 Release
+	* Added support for the PowerShot G7X Mark III / PowerShot G5X Mark II
+
+03/12/2019 Ver 13.10.20 Release
+	* Added support for the EOS Kiss X10 / EOS Rebel SL3 / EOS 250D / EOS 200D II
+	* Added Power Zoom Adapter Control functionality
+
+02/22/2019 Ver 13.10.0 Release
+	* Added support for the EOS RP
+
+12/13/2018 Ver 13.9.10 Release
+	* Deleted RAW development functionality
+	* Added samples for the following programming languages
+		* Swift
+		* CSharp
+
+
+2. Usage of EDSDK
+Please refer to EDSDK_API.pdf for the detail.

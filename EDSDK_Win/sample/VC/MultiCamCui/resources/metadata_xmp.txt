@@ -1,0 +1,4 @@
+xmlns:test12345="http://pix4d.com/camera/1.0/"
+test12345:Yaw="261.927"
+test12345:Pitch="-0.038"
+test12345:Roll="0.096"

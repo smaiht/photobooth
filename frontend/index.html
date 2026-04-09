@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photobooth</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- IDLE screen -->
+        <div class="screen" id="screen-idle">
+            <div class="tap-prompt">НАЖМИ ЧТОБЫ НАЧАТЬ</div>
+        </div>
+
+        <!-- COUNTDOWN + LIVE VIEW screen -->
+        <div class="screen" id="screen-capture" hidden>
+            <img id="live-view" alt="">
+            <div id="countdown-number"></div>
+            <div id="photo-counter"></div>
+        </div>
+
+        <!-- FREEZE screen (shows last captured photo) -->
+        <div class="screen" id="screen-freeze" hidden>
+            <img id="freeze-img" alt="">
+        </div>
+
+        <!-- TEMPLATE SELECT screen -->
+        <div class="screen" id="screen-template" hidden>
+            <div class="template-title">ВЫБЕРИ ФОРМАТ</div>
+            <div class="template-options">
+                <button class="template-btn" data-template="strip">
+                    <div class="template-preview strip-preview">
+                        <div></div><div></div><div></div><div></div>
+                    </div>
+                    <span>2 полоски</span>
+                </button>
+                <button class="template-btn" data-template="grid">
+                    <div class="template-preview grid-preview">
+                        <div></div><div></div><div></div><div></div>
+                    </div>
+                    <span>4 фото</span>
+                </button>
+            </div>
+            <div id="template-timer"></div>
+        </div>
+
+        <!-- PRINTING screen -->
+        <div class="screen" id="screen-printing" hidden>
+            <div class="printing-msg">ПЕЧАТАЕМ... 🖨️</div>
+        </div>
+
+        <!-- Print status overlay (shows while printing + next session) -->
+        <div id="print-overlay" hidden>
+            <span>⏳ Печать...</span>
+        </div>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

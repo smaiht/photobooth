@@ -1,0 +1,16 @@
+{
+    "countdown_seconds": 5,
+    "freeze_seconds": 1,
+    "num_photos": 4,
+    "template_select_timeout": 5,
+    "default_template": "strip",
+    "mirror_live_view": true,
+
+    "print_enabled": false,
+    "printer_name": "",
+    "hot_folder": "",
+
+    "tg_enabled": false,
+    "tg_bot_token": "",
+    "tg_chat_id": ""
+}

@@ -1,0 +1,273 @@
+"""Photobooth backend — FastAPI + WebSocket.
+
+State machine:
+  IDLE → COUNTDOWN → CAPTURE → FREEZE → (repeat num_photos times) → TEMPLATE_SELECT → COMPOSING → PRINTING → IDLE
+"""
+
+import asyncio
+import json
+import logging
+import sys
+import uuid
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
+from .composer import compose_strip, compose_grid
+from .uploader import Uploader
+from .video import VideoRecorder
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
+
+app = FastAPI()
+
+# --- State ---
+STATE = "idle"
+SESSION_ID = ""
+SESSION_PHOTOS: list[str] = []
+CONFIG = load_event_config()
+CLIENTS: list[WebSocket] = []
+
+# --- Camera (Windows only) ---
+camera = None
+if sys.platform == "win32":
+    try:
+        from .camera.edsdk import Camera
+        camera = Camera(EDSDK_DLL)
+        camera.set_download_dir(PHOTOS_DIR)
+    except Exception as e:
+        log.warning(f"EDSDK not available: {e}")
+
+# --- Services ---
+uploader = Uploader(CONFIG)
+video_recorder = VideoRecorder()
+_event_loop = None
+
+
+# --- WebSocket broadcast ---
+async def broadcast(msg: dict):
+    data = json.dumps(msg)
+    for ws in list(CLIENTS):
+        try:
+            await ws.send_text(data)
+        except Exception:
+            CLIENTS.remove(ws)
+
+
+async def broadcast_binary(data: bytes):
+    for ws in list(CLIENTS):
+        try:
+            await ws.send_bytes(data)
+        except Exception:
+            CLIENTS.remove(ws)
+
+
+async def set_state(new_state: str, extra: dict | None = None):
+    global STATE
+    STATE = new_state
+    msg = {"type": "state", "state": new_state}
+    if extra:
+        msg.update(extra)
+    log.info(f"State → {new_state}")
+    await broadcast(msg)
+
+
+# --- Callbacks from EDSDK thread ---
+def on_evf_frame(jpeg_bytes: bytes):
+    """Called from EDSDK thread — forward to clients + record video."""
+    video_recorder.add_frame(jpeg_bytes)
+    if _event_loop:
+        asyncio.run_coroutine_threadsafe(broadcast_binary(jpeg_bytes), _event_loop)
+
+
+def on_photo_downloaded(file_path: str):
+    SESSION_PHOTOS.append(file_path)
+    if _event_loop:
+        asyncio.run_coroutine_threadsafe(
+            broadcast({"type": "photo_taken", "index": len(SESSION_PHOTOS) - 1}),
+            _event_loop)
+
+
+def on_camera_error(error: str):
+    if _event_loop:
+        asyncio.run_coroutine_threadsafe(
+            broadcast({"type": "error", "message": f"Camera: {error}"}),
+            _event_loop)
+
+
+# --- Session flow ---
+async def run_session():
+    global SESSION_ID, SESSION_PHOTOS
+
+    SESSION_ID = uuid.uuid4().hex[:8]
+    SESSION_PHOTOS = []
+    session_dir = PHOTOS_DIR / SESSION_ID
+    session_dir.mkdir(exist_ok=True)
+
+    if camera:
+        camera.set_download_dir(session_dir)
+        camera.start_live_view()
+
+    # Start video recording from live view frames
+    video_recorder.start(session_dir)
+
+    num_photos = CONFIG["num_photos"]
+    countdown_sec = CONFIG["countdown_seconds"]
+    freeze_sec = CONFIG["freeze_seconds"]
+
+    for photo_idx in range(num_photos):
+        await set_state("countdown", {"photo_index": photo_idx, "total": num_photos})
+        for sec in range(countdown_sec, 0, -1):
+            await broadcast({"type": "countdown", "value": sec})
+            await asyncio.sleep(1)
+
+        await set_state("capture", {"photo_index": photo_idx})
+        if camera:
+            camera.take_picture()
+            for _ in range(30):
+                if len(SESSION_PHOTOS) > photo_idx:
+                    break
+                await asyncio.sleep(0.1)
+        else:
+            log.info(f"No camera: skipping capture {photo_idx}")
+            await asyncio.sleep(0.5)
+
+        await set_state("freeze", {"photo_index": photo_idx})
+        await asyncio.sleep(freeze_sec)
+
+    if camera:
+        camera.stop_live_view()
+
+    # Encode video from saved frames
+    video_path = session_dir / "session.mp4"
+    video_file = video_recorder.stop_and_encode(video_path)
+
+    # Template selection
+    await set_state("template_select")
+    selected_template = CONFIG["default_template"]
+    template_event = asyncio.Event()
+    chosen = {"template": selected_template}
+
+    def on_template_choice(t):
+        chosen["template"] = t
+        template_event.set()
+
+    app.state.on_template_choice = on_template_choice
+
+    try:
+        await asyncio.wait_for(template_event.wait(), timeout=CONFIG["template_select_timeout"])
+    except asyncio.TimeoutError:
+        pass
+
+    selected_template = chosen["template"]
+
+    # Compose
+    await set_state("composing")
+    output_path = None
+    if SESSION_PHOTOS:
+        template_dir = Path("templates") / "default"
+        overlay = template_dir / f"{selected_template}.png"
+        overlay_path = str(overlay) if overlay.exists() else None
+
+        if selected_template == "strip":
+            result = compose_strip(SESSION_PHOTOS[:4], overlay_path)
+        else:
+            result = compose_grid(SESSION_PHOTOS[:4], overlay_path)
+
+        output_path = session_dir / f"print_{selected_template}.jpg"
+        result.save(str(output_path), "JPEG", quality=95, dpi=(300, 300))
+        log.info(f"Composed: {output_path}")
+
+    # Print (async queue — doesn't block next session)
+    if CONFIG["print_enabled"] and output_path:
+        await set_state("printing")
+        from .printer import enqueue_print
+        await enqueue_print(str(output_path), CONFIG)
+
+    # Upload to Telegram — runs in background
+    if CONFIG.get("tg_enabled"):
+        await uploader.upload_session(
+            session_id=SESSION_ID,
+            photos=SESSION_PHOTOS[:4],
+            collage=str(output_path) if output_path else None,
+            video=video_file,
+        )
+
+    await set_state("idle")
+
+
+# --- Routes ---
+app.mount("/photos", StaticFiles(directory=str(PHOTOS_DIR)), name="photos")
+app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")), name="assets")
+
+
+@app.get("/")
+async def index():
+    return FileResponse(str(FRONTEND_DIR / "index.html"))
+
+
+@app.get("/style.css")
+async def style():
+    return FileResponse(str(FRONTEND_DIR / "style.css"))
+
+
+@app.get("/app.js")
+async def script():
+    return FileResponse(str(FRONTEND_DIR / "app.js"))
+
+
+@app.get("/api/config")
+async def get_config():
+    return CONFIG
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    CLIENTS.append(ws)
+    await ws.send_text(json.dumps({"type": "state", "state": STATE}))
+
+    try:
+        while True:
+            data = await ws.receive_text()
+            msg = json.loads(data)
+
+            if msg["type"] == "start_session" and STATE == "idle":
+                asyncio.create_task(run_session())
+
+            elif msg["type"] == "select_template" and STATE == "template_select":
+                cb = getattr(app.state, "on_template_choice", None)
+                if cb:
+                    cb(msg.get("template", "strip"))
+
+    except WebSocketDisconnect:
+        CLIENTS.remove(ws)
+
+
+@app.on_event("startup")
+async def startup():
+    global _event_loop
+    _event_loop = asyncio.get_event_loop()
+
+    if camera:
+        camera.set_callbacks(
+            on_evf_frame=on_evf_frame,
+            on_photo=on_photo_downloaded,
+            on_error=on_camera_error,
+        )
+        camera.start()
+        log.info("Camera started")
+    else:
+        log.info("Running without camera (not Windows or EDSDK not found)")
+
+    # Periodic retry of failed Telegram uploads
+    async def retry_loop():
+        while True:
+            await asyncio.sleep(30)
+            await uploader.retry_pending()
+
+    asyncio.create_task(retry_loop())
