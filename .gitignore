@@ -4,3 +4,7 @@ __pycache__/
 photos/
 .DS_Store
 .env
+.stop
+dist/
+build/
+*.spec

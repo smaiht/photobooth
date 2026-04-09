@@ -29,14 +29,9 @@ def is_admin(message: Message) -> bool:
 async def cmd_stop(message: Message):
     await message.answer("🛑 Выключаю...")
     await asyncio.sleep(1)
-    import subprocess, sys
-    # Kill Edge kiosk
-    subprocess.run(["taskkill", "/f", "/im", "msedge.exe"], capture_output=True)
-    # Kill all CMD windows related to photobooth
-    subprocess.run(["taskkill", "/f", "/fi", "WINDOWTITLE eq PhotoboothServer*"], capture_output=True)
-    subprocess.run(["taskkill", "/f", "/fi", "WINDOWTITLE eq Photobooth"], capture_output=True)
-    # Kill self
-    sys.exit(0)
+    # Signal startup.bat to not restart
+    open(".stop", "w").close()
+    os._exit(0)
 
 
 @dp.message(Command("status"), F.func(is_admin))

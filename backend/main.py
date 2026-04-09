@@ -232,9 +232,9 @@ async def get_config():
 
 @app.post("/api/shutdown")
 async def shutdown():
-    """Shutdown the server. Used by admin panel and Telegram bot."""
-    import sys
-    sys.exit(0)
+    """Shutdown the server. Used by Telegram bot."""
+    import os
+    os._exit(0)
 
 
 @app.websocket("/ws")
