@@ -7,7 +7,6 @@ Commands (admin only):
 """
 
 import os
-import signal
 import asyncio
 import logging
 
@@ -29,7 +28,10 @@ def is_admin(message: Message) -> bool:
 @dp.message(Command("stop"), F.func(is_admin))
 async def cmd_stop(message: Message):
     await message.answer("🛑 Выключаю...")
-    os.kill(os.getpid(), signal.SIGTERM)
+    import sys
+    # Give time for the message to send, then kill
+    await asyncio.sleep(1)
+    sys.exit(0)
 
 
 @dp.message(Command("status"), F.func(is_admin))

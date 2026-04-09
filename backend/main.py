@@ -233,9 +233,8 @@ async def get_config():
 @app.post("/api/shutdown")
 async def shutdown():
     """Shutdown the server. Used by admin panel and Telegram bot."""
-    import os, signal
-    os.kill(os.getpid(), signal.SIGTERM)
-    return {"status": "shutting down"}
+    import sys
+    sys.exit(0)
 
 
 @app.websocket("/ws")
