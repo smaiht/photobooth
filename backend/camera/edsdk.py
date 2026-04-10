@@ -79,6 +79,7 @@ class Camera:
         self._sdk = None
         self._camera = EdsBaseRef()
         self._running = False
+        self._connected = False
         self._thread: threading.Thread | None = None
         self._cmd_queue: Queue = Queue()
         self._evf_frame_cb = None  # callback(jpeg_bytes)
@@ -130,6 +131,7 @@ class Camera:
             self._connect_camera()
             self._configure_for_photobooth()
             self._register_handlers()
+            self._connected = True
 
             evf_active = False
             while self._running:

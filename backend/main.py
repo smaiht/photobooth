@@ -249,7 +249,7 @@ async def shutdown():
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     CLIENTS.append(ws)
-    cam_ok = camera and camera._running
+    cam_ok = camera and camera._connected
     await ws.send_text(json.dumps({"type": "state", "state": STATE if cam_ok else "no_camera"}))
 
     try:
@@ -258,7 +258,7 @@ async def websocket_endpoint(ws: WebSocket):
             msg = json.loads(data)
 
             if msg["type"] == "start_session" and STATE == "idle":
-                if camera and camera._running:
+                if camera and camera._connected:
                     asyncio.create_task(run_session())
                 else:
                     await broadcast({"type": "state", "state": "no_camera"})
