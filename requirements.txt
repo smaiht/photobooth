@@ -4,5 +4,5 @@ websockets
 pillow
 aiohttp
 aiogram
-proxy_tools
-bottle
+pywebview
+pywin32; sys_platform == "win32"

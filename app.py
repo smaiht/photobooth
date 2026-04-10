@@ -55,12 +55,11 @@ def main():
         zoomable=False,
     )
 
-    # Disable right-click context menu via JS after page loads
     def on_loaded():
         window.evaluate_js("document.addEventListener('contextmenu', e => e.preventDefault())")
 
     window.events.loaded += on_loaded
-    webview.start(gui="edgechromium")
+    webview.start()
 
 
 if __name__ == "__main__":
