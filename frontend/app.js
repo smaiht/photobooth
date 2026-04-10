@@ -67,10 +67,12 @@ function handleMessage(msg) {
             break;
         case "countdown":
             showCountdown(msg.value);
-            if (msg.value <= 3) beep(440 + (3 - msg.value) * 110, 400); // 3→440Hz, 2→550Hz, 1→660Hz
+            if (msg.value <= 3 && msg.value >= 1) {
+                setTimeout(() => beep(440 + (3 - msg.value) * 110, 500), 750);
+            }
             break;
         case "flash":
-            beep(880, 400);
+            beep(880, 500);
             document.body.classList.add("flash");
             setTimeout(() => document.body.classList.remove("flash"), 200);
             break;
