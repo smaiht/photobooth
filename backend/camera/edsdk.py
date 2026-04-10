@@ -253,9 +253,9 @@ class Camera:
         q = IMAGE_QUALITY_MAP.get(cfg.get("image_quality", "jpeg_large_fine"), EdsImageQuality_LJF)
         self._set_prop_u32(kEdsPropID_ImageQuality, q)
 
-        # AE Mode (P/Tv/Av/M)
-        ae = AE_MODE_MAP.get(cfg.get("ae_mode", "manual"), 0x03)
-        self._set_prop_u32(kEdsPropID_AEMode, ae)
+        # AE Mode — set on camera dial manually (SDK can't override the physical dial)
+        # ae = AE_MODE_MAP.get(cfg.get("ae_mode", "manual"), 0x03)
+        # self._set_prop_u32(kEdsPropID_AEMode, ae)
 
         # Aperture
         av_val = AV_MAP.get(str(cfg.get("av", "5.6")))
@@ -316,8 +316,11 @@ class Camera:
 
     def _set_prop_u32(self, prop_id: int, value: int):
         val = EdsUInt32(value)
-        _check(f"SetProp(0x{prop_id:04X})", self._sdk.EdsSetPropertyData(
-            self._camera, prop_id, 0, ctypes.sizeof(val), ctypes.byref(val)))
+        err = self._sdk.EdsSetPropertyData(
+            self._camera, prop_id, 0, ctypes.sizeof(val), ctypes.byref(val))
+        if err != EDS_ERR_OK:
+            log.warning(f"SetProp(0x{prop_id:04X})=0x{value:X} failed: 0x{err:08X} (skipping)")
+        return err
 
     def _register_handlers(self):
         def on_object_event(event, ref, context):
