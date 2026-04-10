@@ -42,6 +42,22 @@ function send(msg) {
     }
 }
 
+// --- Sound ---
+let audioCtx = null;
+function beep(freq, duration) {
+    if (!audioCtx) audioCtx = new AudioContext();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = freq;
+    osc.type = "sine";
+    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration / 1000);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration / 1000);
+}
+
 // --- Message handler ---
 function handleMessage(msg) {
     switch (msg.type) {
@@ -50,8 +66,10 @@ function handleMessage(msg) {
             break;
         case "countdown":
             showCountdown(msg.value);
+            if (msg.value <= 3) beep(440 + (3 - msg.value) * 110, 400); // 3→440Hz, 2→550Hz, 1→660Hz
             break;
         case "flash":
+            beep(880, 400);
             document.body.classList.add("flash");
             setTimeout(() => document.body.classList.remove("flash"), 200);
             break;
