@@ -106,6 +106,14 @@ def on_camera_error(error: str):
             _event_loop)
 
 
+def on_camera_connected():
+    log.info("Camera connected")
+    if _event_loop and _event_loop.is_running():
+        asyncio.run_coroutine_threadsafe(
+            set_state("idle"),
+            _event_loop)
+
+
 # --- Session flow ---
 async def run_session():
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
@@ -250,12 +258,6 @@ async def shutdown():
     os._exit(0)
 
 
-@app.post("/api/restart")
-async def restart():
-    """Restart the app. Used by no_camera screen."""
-    os.execv(sys.executable, [sys.executable] + sys.argv)
-
-
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
@@ -292,6 +294,7 @@ async def startup():
             on_evf_frame=on_evf_frame,
             on_photo=on_photo_downloaded,
             on_error=on_camera_error,
+            on_connected=on_camera_connected,
         )
         camera.start()
         log.info("Camera started")

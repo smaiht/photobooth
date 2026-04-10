@@ -159,10 +159,6 @@ screens.idle.addEventListener("click", () => {
     if (currentState === "idle") send({ type: "start_session" });
 });
 
-screens.no_camera.addEventListener("click", () => {
-    fetch("/api/restart", { method: "POST" });
-});
-
 // --- Load config and apply settings ---
 fetch("/api/config").then(r => r.json()).then(cfg => {
     if (cfg.mirror_live_view) {

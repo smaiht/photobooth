@@ -3,7 +3,7 @@
     "num_photos": 4,
     "template_select_timeout": 5,
     "default_template": "strip",
-    "mirror_live_view": false,
+    "mirror_live_view": true,
 
     "print_enabled": false,
     "printer_name": "",

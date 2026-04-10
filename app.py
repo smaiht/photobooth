@@ -35,6 +35,24 @@ justify-content:center;height:100vh;font-family:system-ui;font-size:4vw">
 """
 
 
+def kill_port(port=8000):
+    """Kill any process using our port."""
+    import socket
+    try:
+        s = socket.socket()
+        s.settimeout(0.5)
+        s.connect(("127.0.0.1", port))
+        s.close()
+        # Port busy — kill it
+        if sys.platform == "win32":
+            os.system(f'for /f "tokens=5" %a in (\'netstat -ano ^| findstr :{port}\') do taskkill /F /PID %a 2>nul')
+        else:
+            os.system(f"lsof -ti:{port} | xargs kill -9 2>/dev/null")
+        time.sleep(1)
+    except Exception:
+        pass  # Port free
+
+
 def start_server():
     import uvicorn
     from backend.main import app
@@ -42,17 +60,15 @@ def start_server():
 
 
 def wait_and_load(window):
-    """Wait for server, then load the app. Restart if server didn't start."""
+    """Wait for server, then load the app."""
     import urllib.request
-    for _ in range(30):
+    while True:
         try:
             urllib.request.urlopen("http://127.0.0.1:8000/api/config", timeout=1)
             window.evaluate_js("window.location.replace('http://127.0.0.1:8000')")
             return
         except Exception:
             time.sleep(0.5)
-    # Server didn't start — restart the whole app
-    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 def main():
@@ -70,6 +86,9 @@ def main():
                     key, val = line.split("=", 1)
                     if key.strip() and val.strip():
                         os.environ[key.strip()] = val.strip()
+
+    # Kill leftover process on our port
+    kill_port()
 
     # Start backend
     threading.Thread(target=start_server, daemon=True).start()
@@ -97,8 +116,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        logging.exception("Fatal error, restarting...")
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+    main()

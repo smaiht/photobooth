@@ -85,16 +85,18 @@ class Camera:
         self._evf_frame_cb = None  # callback(jpeg_bytes)
         self._photo_cb = None  # callback(file_path)
         self._error_cb = None  # callback(error_str)
+        self._connected_cb = None  # callback()
         self._download_dir = Path("photos")
 
         # Must keep references to prevent GC of ctypes callbacks
         self._obj_handler_ref = None
         self._state_handler_ref = None
 
-    def set_callbacks(self, on_evf_frame=None, on_photo=None, on_error=None):
+    def set_callbacks(self, on_evf_frame=None, on_photo=None, on_error=None, on_connected=None):
         self._evf_frame_cb = on_evf_frame
         self._photo_cb = on_photo
         self._error_cb = on_error
+        self._connected_cb = on_connected
 
     def set_download_dir(self, path: Path):
         self._download_dir = path
@@ -128,10 +130,20 @@ class Camera:
             self._sdk = ctypes.WinDLL(self._dll_path)
             self._setup_sdk_functions()
             self._init_sdk()
-            self._connect_camera()
-            self._configure_for_photobooth()
-            self._register_handlers()
-            self._connected = True
+
+            # Retry camera connection until found
+            while self._running and not self._connected:
+                try:
+                    self._connect_camera()
+                    self._configure_for_photobooth()
+                    self._register_handlers()
+                    self._connected = True
+                    log.info("Camera ready")
+                    if self._connected_cb:
+                        self._connected_cb()
+                except RuntimeError:
+                    log.info("Waiting for camera...")
+                    time.sleep(3)
 
             evf_active = False
             while self._running:
@@ -163,8 +175,6 @@ class Camera:
 
                 time.sleep(0.03)  # ~30fps
 
-        except RuntimeError as e:
-            log.warning(str(e))
         except Exception as e:
             log.exception("EDSDK thread error")
             if self._error_cb:
