@@ -7,12 +7,16 @@ Saves frames during session, stitches into mp4 via ffmpeg after session ends.
 import subprocess
 import logging
 import shutil
+import sys
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# ffmpeg: сначала ищем в bin/ проекта, потом в системном PATH
-_BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
+# ffmpeg: check bundled bin/ first, then system PATH
+if getattr(sys, 'frozen', False):
+    _BIN_DIR = Path(sys._MEIPASS) / "bin"
+else:
+    _BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
 _FFMPEG = str(_BIN_DIR / "ffmpeg.exe") if (_BIN_DIR / "ffmpeg.exe").exists() else "ffmpeg"
 
 
