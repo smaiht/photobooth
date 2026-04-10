@@ -1,7 +1,7 @@
 """Photobooth — single entry point.
 
 Starts FastAPI backend + pywebview fullscreen window.
-No browser, no Edge, no kiosk mode needed.
+Shows loading screen instantly, switches to app when server is ready.
 """
 
 import sys
@@ -9,14 +9,36 @@ import os
 import threading
 import time
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+LOADING_HTML = """
+<html>
+<body style="margin:0;background:#000;color:#fff;display:flex;align-items:center;
+justify-content:center;height:100vh;font-family:system-ui;font-size:4vw">
+Загрузка...
+</body>
+</html>
+"""
 
 
 def start_server():
     import uvicorn
     from backend.main import app
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+
+
+def wait_and_load(window):
+    """Wait for server, then load the app. Restart if server didn't start."""
+    import urllib.request
+    for _ in range(30):
+        try:
+            urllib.request.urlopen("http://127.0.0.1:8000/api/config", timeout=1)
+            window.load_url("http://127.0.0.1:8000")
+            return
+        except Exception:
+            time.sleep(0.5)
+    # Server didn't start — restart the whole app
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 def main():
@@ -31,24 +53,14 @@ def main():
                     if key.strip() and val.strip():
                         os.environ[key.strip()] = val.strip()
 
-    # Start backend in background thread
-    server_thread = threading.Thread(target=start_server, daemon=True)
-    server_thread.start()
+    # Start backend
+    threading.Thread(target=start_server, daemon=True).start()
 
-    # Wait for server to be ready
-    import urllib.request
-    for _ in range(30):
-        try:
-            urllib.request.urlopen("http://127.0.0.1:8000/api/config", timeout=1)
-            break
-        except Exception:
-            time.sleep(0.5)
-
-    # Start fullscreen window
+    # Show loading screen immediately, then switch to app
     import webview
     window = webview.create_window(
         title="Photobooth",
-        url="http://127.0.0.1:8000",
+        html=LOADING_HTML,
         fullscreen=True,
         easy_drag=False,
         text_select=False,
@@ -59,6 +71,10 @@ def main():
         window.evaluate_js("document.addEventListener('contextmenu', e => e.preventDefault())")
 
     window.events.loaded += on_loaded
+
+    # Wait for server in background, then load app
+    threading.Thread(target=wait_and_load, args=(window,), daemon=True).start()
+
     webview.start()
 
 

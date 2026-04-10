@@ -5,7 +5,6 @@ echo        BUILDING PHOTOBOOTH.EXE
 echo ============================================
 echo.
 
-:: Ensure venv + deps
 if not exist "venv\Scripts\python.exe" (
     echo [SETUP] Creating venv...
     python -m venv venv
@@ -15,7 +14,7 @@ venv\Scripts\pip.exe install -q -r requirements.txt
 echo.
 
 echo [BUILD] Running PyInstaller...
-venv\Scripts\pyinstaller.exe --onefile --console --name Photobooth ^
+venv\Scripts\pyinstaller.exe --onefile --noconsole --name Photobooth ^
     --add-data "frontend;frontend" ^
     --add-data "templates;templates" ^
     --add-data "bin;bin" ^
@@ -23,5 +22,4 @@ venv\Scripts\pyinstaller.exe --onefile --console --name Photobooth ^
     app.py
 echo.
 echo [DONE] dist\Photobooth.exe
-echo NOTE: using --console for debugging. Change to --noconsole when stable.
 pause
