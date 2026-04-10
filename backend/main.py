@@ -246,9 +246,14 @@ async def get_config():
 
 @app.post("/api/shutdown")
 async def shutdown():
-    """Shutdown the server. Used by Telegram bot."""
-    import os
+    """Full stop. Used by Telegram bot /stop."""
     os._exit(0)
+
+
+@app.post("/api/restart")
+async def restart():
+    """Restart the app. Used by no_camera screen."""
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 @app.websocket("/ws")

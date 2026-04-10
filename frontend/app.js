@@ -160,7 +160,7 @@ screens.idle.addEventListener("click", () => {
 });
 
 screens.no_camera.addEventListener("click", () => {
-    fetch("/api/shutdown", { method: "POST" });
+    fetch("/api/restart", { method: "POST" });
 });
 
 // --- Load config and apply settings ---

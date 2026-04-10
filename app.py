@@ -97,4 +97,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        logging.exception("Fatal error, restarting...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
