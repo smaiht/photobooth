@@ -8,6 +8,11 @@ echo           PHOTOBOOTH STARTUP
 echo ============================================
 echo.
 
+:: Pull latest code
+echo [UPDATE] Git pull...
+git pull 2>nul
+echo.
+
 :: Check Python
 echo [CHECK] Python...
 python --version 2>nul

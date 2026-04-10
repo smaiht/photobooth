@@ -21,7 +21,7 @@ echo [OK]
 
 :: 2. Set custom shell
 echo [2/3] Setting custom shell...
-powershell -ExecutionPolicy Bypass -File "%~dp0set_shell.ps1" "%EXE_PATH%"
+powershell -ExecutionPolicy Bypass -File "%~dp0_set_shell.ps1" "%EXE_PATH%"
 echo.
 
 :: 3. Auto-login
