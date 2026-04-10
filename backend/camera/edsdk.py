@@ -221,8 +221,15 @@ class Camera:
         _check("EdsGetDeviceInfo", self._sdk.EdsGetDeviceInfo(self._camera, ctypes.byref(info)))
         log.info(f"Camera: {info.szDeviceDescription.decode()}")
 
-        _check("EdsOpenSession", self._sdk.EdsOpenSession(self._camera))
-        log.info("Session opened")
+        # Retry OpenSession — camera may need time after USB connect
+        for attempt in range(5):
+            err = self._sdk.EdsOpenSession(self._camera)
+            if err == EDS_ERR_OK:
+                log.info("Session opened")
+                return
+            log.warning(f"OpenSession attempt {attempt+1}/5 failed: 0x{err:08X}")
+            time.sleep(2)
+        raise RuntimeError(f"Failed to open camera session after 5 attempts")
 
     def _configure_for_photobooth(self):
         # Save photos to host PC (not camera SD card)

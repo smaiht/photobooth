@@ -83,23 +83,25 @@ async def set_state(new_state: str, extra: dict | None = None):
 def on_evf_frame(jpeg_bytes: bytes):
     """Called from EDSDK thread — forward to clients + record video."""
     video_recorder.add_frame(jpeg_bytes)
-    if _event_loop:
+    if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(broadcast_binary(jpeg_bytes), _event_loop)
 
 
 def on_photo_downloaded(file_path: str):
     SESSION_PHOTOS.append(file_path)
-    if _event_loop:
+    if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(
             broadcast({"type": "photo_taken", "index": len(SESSION_PHOTOS) - 1}),
             _event_loop)
 
 
 def on_camera_error(error: str):
-    if _event_loop:
+    if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(
             broadcast({"type": "error", "message": f"Camera: {error}"}),
             _event_loop)
+    else:
+        log.error(f"Camera error (no event loop): {error}")
 
 
 # --- Session flow ---
