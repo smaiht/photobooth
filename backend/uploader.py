@@ -147,7 +147,8 @@ class Uploader:
             data.add_field(name, open(path, "rb"), filename=path.name)
 
         async with session.post(f"{base}/sendMediaGroup", data=data,
-                                 timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                                 timeout=aiohttp.ClientTimeout(total=120),
+                                 ssl=False) as resp:
             if resp.status != 200:
                 body = await resp.text()
                 raise RuntimeError(f"Telegram {resp.status}: {body}")
