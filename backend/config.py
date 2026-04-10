@@ -26,7 +26,7 @@ DEFAULT_CONFIG = {
     "num_photos": 4,
     "template_select_timeout": 5,
     "default_template": "strip",
-    "mirror_live_view": True,
+    "mirror_live_view": False,
     "print_enabled": False,
     "printer_name": "",
     "hot_folder": "",
