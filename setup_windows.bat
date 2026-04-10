@@ -5,51 +5,57 @@ echo   PHOTOBOOTH KIOSK SETUP (run as Admin!)
 echo ============================================
 echo.
 
-:: Get path to Photobooth.exe
-set /p EXE_PATH="Full path to Photobooth.exe (e.g. C:\photobooth\dist\Photobooth.exe): "
+set EXE_PATH=C:\photobooth\dist\Photobooth.exe
 if not exist "%EXE_PATH%" (
-    echo [ERROR] File not found: %EXE_PATH%
+    echo [ERROR] %EXE_PATH% not found!
+    echo         Run build.bat first.
     pause
     exit /b 1
 )
-echo.
 
 :: 1. Create kiosk user
-echo [1/4] Creating Photobooth user...
+echo [1/3] Creating Photobooth user...
 net user Photobooth /add /passwordreq:no >nul 2>&1
 net user Photobooth "" >nul 2>&1
-echo [OK] User created
+echo [OK]
+
+:: 2. Set custom shell for Photobooth user (PowerShell for SID lookup)
+echo [2/3] Setting custom shell...
+powershell -Command ^
+    "$sid = (New-Object System.Security.Principal.NTAccount('Photobooth')).Translate([System.Security.Principal.SecurityIdentifier]).Value; ^
+    $hivePath = \"C:\Users\Photobooth\NTUSER.DAT\"; ^
+    $loaded = $false; ^
+    if (!(Test-Path \"Registry::HKU\$sid\")) { ^
+        if (Test-Path $hivePath) { ^
+            reg load \"HKU\$sid\" $hivePath 2>$null; ^
+            $loaded = $true; ^
+        } else { ^
+            Write-Host '[WARN] User profile not created yet. Log in as Photobooth once, then re-run setup.'; ^
+            exit 1; ^
+        } ^
+    }; ^
+    reg add \"HKU\$sid\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\" /v Shell /t REG_SZ /d \"%EXE_PATH%\" /f; ^
+    if ($loaded) { reg unload \"HKU\$sid\" 2>$null }; ^
+    Write-Host '[OK]'"
 echo.
 
-:: 2. Replace shell for kiosk user
-echo [2/4] Setting custom shell...
-for /f "tokens=2" %%i in ('wmic useraccount where name^="Photobooth" get sid /value ^| find "="') do set KIOSK_SID=%%i
-reg add "HKU\%KIOSK_SID%\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Shell /t REG_SZ /d "%EXE_PATH%" /f >nul
-echo [OK] Shell set to %EXE_PATH%
-echo.
-
-:: 3. Auto-login as Photobooth user
-echo [3/4] Setting auto-login...
+:: 3. Auto-login
+echo [3/3] Setting auto-login...
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 1 /f >nul
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultUserName /t REG_SZ /d Photobooth /f >nul
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /t REG_SZ /d "" /f >nul
-echo [OK] Auto-login configured
-echo.
-
-:: 4. Disable lock screen and gestures
-echo [4/4] Disabling lock screen and gestures...
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f >nul
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\EdgeUI" /v AllowEdgeSwipe /t REG_DWORD /d 0 /f >nul
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Explorer" /v DisableNotificationCenter /t REG_DWORD /d 1 /f >nul
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Dsh" /v AllowNewsAndInterests /t REG_DWORD /d 0 /f >nul
-echo [OK] Lock screen and gestures disabled
+echo [OK]
 echo.
 
 echo ============================================
-echo   DONE! Reboot to enter kiosk mode.
-echo   To exit kiosk: Ctrl+Alt+Del, switch user,
-echo   login to your admin account.
-echo ============================================
+echo   DONE!
+echo   1. Log in as Photobooth user once (if first time)
+echo   2. Log back to your admin account
+echo   3. Re-run this script if step 2/3 showed WARN
+echo   4. Reboot to enter kiosk mode
 echo.
-echo To undo: run undo_setup.bat
+echo   Exit kiosk: Ctrl+Alt+Del, switch user
+echo   Undo: run undo_setup.bat as admin
+echo ============================================
 pause
