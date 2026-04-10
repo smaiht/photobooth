@@ -23,6 +23,8 @@ venv\Scripts\pyinstaller.exe --onefile --noconsole --name Photobooth ^
     --add-data "templates;templates" ^
     --add-data "bin;bin" ^
     --add-data "EDSDK_Win\EDSDK_64\Dll;EDSDK_Win\EDSDK_64\Dll" ^
+    --add-data ".env;." ^
+    --add-data "camera_config.json;." ^
     app.py
 echo.
 echo [DONE] dist\Photobooth.exe

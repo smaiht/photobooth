@@ -57,9 +57,9 @@ def wait_and_load(window):
 
 def main():
     dev = "--dev" in sys.argv
-    # Load .env
+    # Load .env (bundled inside exe or next to source)
     if getattr(sys, 'frozen', False):
-        env_path = os.path.join(os.path.dirname(sys.executable), ".env")
+        env_path = os.path.join(sys._MEIPASS, ".env")
     else:
         env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(env_path):

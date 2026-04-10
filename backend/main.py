@@ -157,20 +157,12 @@ async def run_session():
             await set_state("idle")
             return
 
-    # Background: encode video + upload to TG (doesn't block anything)
+    # Start video encoding in background (all frames + photos ready)
     photos_copy = SESSION_PHOTOS[:]
     video_path = session_dir / "session.mp4"
-
-    async def _bg_video_and_upload():
-        video_file = await asyncio.get_event_loop().run_in_executor(
-            None, video_recorder.stop_and_encode, video_path, photos_copy, 30
-        )
-        await uploader.upload_session(
-            session_id=SESSION_ID,
-            photos=photos_copy,
-            collage=str(output_path) if output_path else None,
-            video=video_file,
-        )
+    video_future = asyncio.get_event_loop().run_in_executor(
+        None, video_recorder.stop_and_encode, video_path, photos_copy, 30
+    )
 
     # Template selection
     await set_state("template_select")
@@ -213,8 +205,16 @@ async def run_session():
         from .printer import enqueue_print
         await enqueue_print(str(output_path), CONFIG)
 
-    # Start background video + upload (now that output_path is known)
-    asyncio.create_task(_bg_video_and_upload())
+    # Upload in background (wait for video, then send)
+    async def _bg_upload():
+        video_file = await video_future
+        await uploader.upload_session(
+            session_id=SESSION_ID,
+            photos=photos_copy,
+            collage=str(output_path) if output_path else None,
+            video=video_file,
+        )
+    asyncio.create_task(_bg_upload())
 
     await set_state("idle")
 

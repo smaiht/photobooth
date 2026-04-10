@@ -67,6 +67,9 @@ class VideoRecorder:
         log.info(f"Encoding {self._frame_count} frames to video...")
 
         try:
+            kwargs = {"capture_output": True, "timeout": 60}
+            if sys.platform == "win32":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             result = subprocess.run([
                 _FFMPEG, "-y",
                 "-framerate", str(fps),
@@ -76,7 +79,7 @@ class VideoRecorder:
                 "-preset", "fast",
                 "-crf", "23",
                 str(output_path),
-            ], capture_output=True, timeout=60)
+            ], **kwargs)
 
             if result.returncode != 0:
                 log.error(f"ffmpeg error: {result.stderr.decode()}")
