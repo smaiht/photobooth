@@ -99,12 +99,11 @@ def on_photo_downloaded(file_path: str):
 
 
 def on_camera_error(error: str):
+    log.warning(f"Camera error: {error}")
     if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(
-            broadcast({"type": "error", "message": f"Camera: {error}"}),
+            broadcast({"type": "state", "state": "no_camera"}),
             _event_loop)
-    else:
-        log.error(f"Camera error (no event loop): {error}")
 
 
 # --- Session flow ---
@@ -249,8 +248,7 @@ async def shutdown():
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     CLIENTS.append(ws)
-    cam_ok = camera and camera._connected
-    await ws.send_text(json.dumps({"type": "state", "state": STATE if cam_ok else "no_camera"}))
+    await ws.send_text(json.dumps({"type": "state", "state": STATE}))
 
     try:
         while True:
