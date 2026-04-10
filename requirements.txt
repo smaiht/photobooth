@@ -5,4 +5,5 @@ pillow
 aiohttp
 aiogram
 pywebview
+pyinstaller
 pywin32; sys_platform == "win32"
