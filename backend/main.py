@@ -141,6 +141,7 @@ async def run_session():
         if camera:
             camera.take_picture()
         await broadcast({"type": "flash"})
+        video_recorder.mark_capture()
 
     if camera:
         camera.stop_live_view()
@@ -157,7 +158,7 @@ async def run_session():
 
     # Encode video from saved frames
     video_path = session_dir / "session.mp4"
-    video_file = video_recorder.stop_and_encode(video_path)
+    video_file = video_recorder.stop_and_encode(video_path, photos=SESSION_PHOTOS)
 
     # Template selection
     await set_state("template_select")
