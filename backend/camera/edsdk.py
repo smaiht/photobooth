@@ -140,7 +140,10 @@ class Camera:
                 try:
                     cmd = self._cmd_queue.get_nowait()
                     if cmd[0] == "capture":
-                        self._do_capture()
+                        try:
+                            self._do_capture()
+                        except EDSDKError as e:
+                            log.warning(f"Capture failed: {e}")
                     elif cmd[0] == "start_evf":
                         self._do_start_evf()
                         evf_active = True
@@ -327,8 +330,14 @@ class Camera:
                 self._sdk.EdsRelease(stream)
 
     def _do_capture(self):
-        _check("TakePicture", self._sdk.EdsSendCommand(
-            self._camera, kEdsCameraCommand_TakePicture, 0))
+        # Use PressShutterButton without AF — avoids AF failure errors
+        _check("ShutterPress", self._sdk.EdsSendCommand(
+            self._camera, kEdsCameraCommand_PressShutterButton,
+            kEdsCameraCommand_ShutterButton_Completely_NonAF))
+        time.sleep(0.5)
+        _check("ShutterRelease", self._sdk.EdsSendCommand(
+            self._camera, kEdsCameraCommand_PressShutterButton,
+            kEdsCameraCommand_ShutterButton_OFF))
         log.info("Capture triggered")
 
     def _download_photo(self, dir_item):
