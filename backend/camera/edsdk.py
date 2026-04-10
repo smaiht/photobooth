@@ -241,7 +241,8 @@ class Camera:
     def _configure_for_photobooth(self):
         # Load camera config
         import json
-        config_path = Path(__file__).resolve().parent.parent.parent / "camera_config.json"
+        from ..config import RUN_DIR
+        config_path = RUN_DIR / "camera_config.json"
         if config_path.exists():
             cfg = json.loads(config_path.read_text())
         else:

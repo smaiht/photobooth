@@ -15,7 +15,9 @@ from datetime import datetime
 
 log = logging.getLogger(__name__)
 
-QUEUE_FILE = Path("photos") / "_upload_queue.json"
+from .config import PHOTOS_DIR
+
+QUEUE_FILE = PHOTOS_DIR / "_upload_queue.json"
 
 
 class Uploader:
