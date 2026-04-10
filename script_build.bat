@@ -5,6 +5,10 @@ echo        BUILDING PHOTOBOOTH.EXE
 echo ============================================
 echo.
 
+echo [UPDATE] Git pull...
+git pull 2>nul
+echo.
+
 if not exist "venv\Scripts\python.exe" (
     echo [SETUP] Creating venv...
     python -m venv venv
@@ -14,7 +18,7 @@ venv\Scripts\pip.exe install -q -r requirements.txt
 echo.
 
 echo [BUILD] Running PyInstaller...
-venv\Scripts\pyinstaller.exe --onefile --noconsole --name Photobooth ^
+venv\Scripts\pyinstaller.exe --onefile --console --name Photobooth ^
     --add-data "frontend;frontend" ^
     --add-data "templates;templates" ^
     --add-data "bin;bin" ^

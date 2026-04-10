@@ -38,7 +38,7 @@ echo.
 :: Launch app with auto-restart on crash
 :run_loop
 echo [START] Launching Photobooth...
-venv\Scripts\python.exe app.py
+venv\Scripts\python.exe app.py --dev
 if exist ".stop" (
     del ".stop"
     echo [STOP] Photobooth stopped by admin.

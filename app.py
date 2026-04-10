@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 LOADING_HTML = """
 <html>
-<body style="margin:0;background:#000;color:#fff;display:flex;align-items:center;
+<body style="margin:0;background:#fff;color:#000;display:flex;align-items:center;
 justify-content:center;height:100vh;font-family:system-ui;font-size:4vw">
 Загрузка...
 </body>
@@ -42,6 +42,7 @@ def wait_and_load(window):
 
 
 def main():
+    dev = "--dev" in sys.argv
     # Load .env
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(env_path):
@@ -61,7 +62,9 @@ def main():
     window = webview.create_window(
         title="Photobooth",
         html=LOADING_HTML,
-        fullscreen=True,
+        fullscreen=not dev,
+        width=1024 if dev else None,
+        height=600 if dev else None,
         easy_drag=False,
         text_select=False,
         zoomable=False,
