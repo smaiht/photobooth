@@ -77,8 +77,6 @@ def main():
         title="Photobooth",
         html=LOADING_HTML,
         fullscreen=not dev,
-        width=1024 if dev else None,
-        height=600 if dev else None,
         easy_drag=False,
         text_select=False,
         zoomable=False,
