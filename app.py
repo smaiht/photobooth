@@ -8,8 +8,22 @@ import sys
 import os
 import threading
 import time
+import logging
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Log to file so we can debug when console is hidden
+_log_dir = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    _log_dir = os.path.dirname(sys.executable)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    handlers=[
+        logging.FileHandler(os.path.join(_log_dir, "photobooth.log"), encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
 
 LOADING_HTML = """
 <html>

@@ -1,4 +1,5 @@
 const screens = {
+    no_camera: document.getElementById("screen-no-camera"),
     idle: document.getElementById("screen-idle"),
     shooting: document.getElementById("screen-shooting"),
     template: document.getElementById("screen-template"),
@@ -91,6 +92,7 @@ function switchScreen(state, data = {}) {
     Object.values(screens).forEach((s) => (s.hidden = true));
 
     const map = {
+        no_camera: "no_camera",
         idle: "idle",
         countdown: "shooting",
         shooting: "shooting",
@@ -155,6 +157,10 @@ document.querySelectorAll(".template-btn").forEach((btn) => {
 // --- Start session ---
 screens.idle.addEventListener("click", () => {
     if (currentState === "idle") send({ type: "start_session" });
+});
+
+screens.no_camera.addEventListener("click", () => {
+    fetch("/api/shutdown", { method: "POST" });
 });
 
 // --- Load config and apply settings ---

@@ -161,6 +161,8 @@ class Camera:
 
                 time.sleep(0.03)  # ~30fps
 
+        except RuntimeError as e:
+            log.warning(str(e))
         except Exception as e:
             log.exception("EDSDK thread error")
             if self._error_cb:

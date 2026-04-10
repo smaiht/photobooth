@@ -249,7 +249,8 @@ async def shutdown():
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     CLIENTS.append(ws)
-    await ws.send_text(json.dumps({"type": "state", "state": STATE}))
+    cam_ok = camera and camera._running
+    await ws.send_text(json.dumps({"type": "state", "state": STATE if cam_ok else "no_camera"}))
 
     try:
         while True:
@@ -257,7 +258,10 @@ async def websocket_endpoint(ws: WebSocket):
             msg = json.loads(data)
 
             if msg["type"] == "start_session" and STATE == "idle":
-                asyncio.create_task(run_session())
+                if camera and camera._running:
+                    asyncio.create_task(run_session())
+                else:
+                    await broadcast({"type": "state", "state": "no_camera"})
 
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)

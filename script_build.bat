@@ -18,7 +18,7 @@ venv\Scripts\pip.exe install -q -r requirements.txt
 echo.
 
 echo [BUILD] Running PyInstaller...
-venv\Scripts\pyinstaller.exe --onefile --console --name Photobooth ^
+venv\Scripts\pyinstaller.exe --onefile --noconsole --name Photobooth ^
     --add-data "frontend;frontend" ^
     --add-data "templates;templates" ^
     --add-data "bin;bin" ^
