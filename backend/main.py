@@ -46,7 +46,10 @@ if sys.platform == "win32":
         log.warning(f"EDSDK not available: {e}")
 
 # --- Services ---
-uploader = Uploader(CONFIG)
+uploader = Uploader({
+    "tg_bot_token": os.environ.get("TG_BOT_TOKEN", ""),
+    "tg_chat_id": os.environ.get("TG_CHAT_ID", ""),
+})
 video_recorder = VideoRecorder()
 _event_loop = None
 
@@ -115,31 +118,33 @@ async def run_session():
     session_dir = PHOTOS_DIR / SESSION_ID
     session_dir.mkdir(exist_ok=True)
 
+    log.info(f"=== Session {SESSION_ID} started ===")
+
     if camera:
         camera.set_download_dir(session_dir)
         camera.start_live_view()
+        log.info("Live view started")
 
-    # Start video recording from live view frames
     video_recorder.start(session_dir)
 
     num_photos = CONFIG["num_photos"]
     countdown_sec = CONFIG["countdown_seconds"]
 
     for photo_idx in range(num_photos):
-        # Countdown — live view streaming, AF tracking faces
+        n = photo_idx + 1
+        log.info(f"Countdown {n}/{num_photos} started ({countdown_sec}s)")
         await set_state("countdown", {"photo_index": photo_idx, "total": num_photos})
         for sec in range(countdown_sec, 0, -1):
             await broadcast({"type": "countdown", "value": sec})
             await asyncio.sleep(1)
-
-        # Take photo — live view pauses naturally, frontend keeps last frame
+        log.info(f"Countdown {n}/{num_photos} finished, sending capture command")
         if camera:
             camera.take_picture()
         await broadcast({"type": "flash"})
 
     if camera:
         camera.stop_live_view()
-        # Wait for all photos to download (max 30s, should never take this long)
+        log.info(f"Waiting for {num_photos} photos to download...")
         for _ in range(300):
             if len(SESSION_PHOTOS) >= num_photos:
                 break
@@ -197,13 +202,12 @@ async def run_session():
         await enqueue_print(str(output_path), CONFIG)
 
     # Upload to Telegram — runs in background
-    if CONFIG.get("tg_enabled"):
-        await uploader.upload_session(
-            session_id=SESSION_ID,
-            photos=SESSION_PHOTOS[:4],
-            collage=str(output_path) if output_path else None,
-            video=video_file,
-        )
+    await uploader.upload_session(
+        session_id=SESSION_ID,
+        photos=SESSION_PHOTOS[:4],
+        collage=str(output_path) if output_path else None,
+        video=video_file,
+    )
 
     await set_state("idle")
 
@@ -293,7 +297,7 @@ async def startup():
             "state": STATE,
             "session_count": SESSION_COUNT,
             "print_enabled": CONFIG.get("print_enabled", False),
-            "tg_enabled": CONFIG.get("tg_enabled", False),
+            "tg_enabled": bool(uploader.tg_bot_token and uploader.tg_chat_id),
             "reset_to_idle": lambda: asyncio.create_task(set_state("idle")),
         }
 

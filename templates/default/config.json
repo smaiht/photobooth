@@ -7,9 +7,5 @@
 
     "print_enabled": false,
     "printer_name": "",
-    "hot_folder": "",
-
-    "tg_enabled": false,
-    "tg_bot_token": "",
-    "tg_chat_id": ""
+    "hot_folder": ""
 }

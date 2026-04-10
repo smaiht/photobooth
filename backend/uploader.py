@@ -20,7 +20,6 @@ QUEUE_FILE = Path("photos") / "_upload_queue.json"
 
 class Uploader:
     def __init__(self, config: dict):
-        self.tg_enabled = config.get("tg_enabled", False)
         self.tg_bot_token = config.get("tg_bot_token", "")
         self.tg_chat_id = config.get("tg_chat_id", "")
         self._queue: list[dict] = []
@@ -52,7 +51,8 @@ class Uploader:
         asyncio.create_task(self._process_entry(entry))
 
     async def _process_entry(self, entry: dict):
-        if not self.tg_enabled or not self.tg_bot_token:
+        if not self.tg_bot_token or not self.tg_chat_id:
+            log.warning("TG_BOT_TOKEN or TG_CHAT_ID not set")
             return
 
         # Retry up to 3 times immediately, then give up to background queue

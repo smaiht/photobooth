@@ -30,9 +30,6 @@ DEFAULT_CONFIG = {
     "print_enabled": False,
     "printer_name": "",
     "hot_folder": "",
-    "tg_enabled": False,
-    "tg_bot_token": "",
-    "tg_chat_id": "",
 }
 
 
