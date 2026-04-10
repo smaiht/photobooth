@@ -67,9 +67,7 @@ function handleMessage(msg) {
             break;
         case "countdown":
             showCountdown(msg.value);
-            if (msg.value <= 3 && msg.value >= 1) {
-                setTimeout(() => beep(440 + (3 - msg.value) * 110, 500), 750);
-            }
+            if (msg.value <= 3) beep(440 + (3 - msg.value) * 110, 500);
             break;
         case "flash":
             beep(880, 500);
