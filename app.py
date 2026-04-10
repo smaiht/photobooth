@@ -60,7 +60,7 @@ def main():
         window.evaluate_js("document.addEventListener('contextmenu', e => e.preventDefault())")
 
     window.events.loaded += on_loaded
-    webview.start()
+    webview.start(gui="edgechromium")
 
 
 if __name__ == "__main__":

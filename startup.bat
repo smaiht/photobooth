@@ -27,6 +27,7 @@ if not exist "venv\Scripts\python.exe" (
 :: Sync dependencies
 echo [SETUP] Checking dependencies...
 venv\Scripts\pip.exe install -q -r requirements.txt
+venv\Scripts\pip.exe install -q pywebview --no-deps 2>nul
 echo [OK] Ready
 echo.
 
