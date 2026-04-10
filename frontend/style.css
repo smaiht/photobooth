@@ -8,9 +8,9 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #000;
+    background: #fff;
     font-family: 'Segoe UI', system-ui, sans-serif;
-    color: #fff;
+    color: #000;
     cursor: none;
     user-select: none;
     -webkit-user-select: none;
@@ -20,6 +20,8 @@ html, body {
     width: 100%;
     height: 100%;
     position: relative;
+    background: #fff;
+    color: #000;
 }
 
 .screen {
@@ -34,7 +36,7 @@ html, body {
 .screen[hidden] { display: none; }
 
 /* NO CAMERA */
-#screen-no-camera { background: #fff; color: #000; gap: 2vh; }
+#screen-no-camera { gap: 2vh; }
 .error-msg { font-size: 4vw; font-weight: 700; }
 .error-sub { font-size: 2vw; opacity: 0.5; }
 
@@ -51,8 +53,7 @@ html, body {
     50% { opacity: 0.6; transform: scale(1.05); }
 }
 
-/* SHOOTING — live view + countdown */
-#screen-shooting { background: #000; }
+#screen-shooting { background: #000; color: #fff; }
 
 #live-view {
     width: 100%;
@@ -92,7 +93,7 @@ html, body {
 }
 
 /* TEMPLATE SELECT */
-#screen-template { background: #111; gap: 4vh; }
+#screen-template { gap: 4vh; }
 
 .template-title { font-size: 4vw; font-weight: 700; }
 
@@ -136,7 +137,7 @@ html, body {
 #template-timer { font-size: 2.5vw; opacity: 0.6; }
 
 /* PRINTING */
-#screen-printing { background: #111; }
+#screen-printing { }
 
 .printing-msg {
     font-size: 4vw;
