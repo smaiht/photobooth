@@ -19,24 +19,9 @@ net user Photobooth /add /passwordreq:no >nul 2>&1
 net user Photobooth "" >nul 2>&1
 echo [OK]
 
-:: 2. Set custom shell for Photobooth user (PowerShell for SID lookup)
+:: 2. Set custom shell
 echo [2/3] Setting custom shell...
-powershell -Command ^
-    "$sid = (New-Object System.Security.Principal.NTAccount('Photobooth')).Translate([System.Security.Principal.SecurityIdentifier]).Value; ^
-    $hivePath = \"C:\Users\Photobooth\NTUSER.DAT\"; ^
-    $loaded = $false; ^
-    if (!(Test-Path \"Registry::HKU\$sid\")) { ^
-        if (Test-Path $hivePath) { ^
-            reg load \"HKU\$sid\" $hivePath 2>$null; ^
-            $loaded = $true; ^
-        } else { ^
-            Write-Host '[WARN] User profile not created yet. Log in as Photobooth once, then re-run setup.'; ^
-            exit 1; ^
-        } ^
-    }; ^
-    reg add \"HKU\$sid\Software\Microsoft\Windows NT\CurrentVersion\Winlogon\" /v Shell /t REG_SZ /d \"%EXE_PATH%\" /f; ^
-    if ($loaded) { reg unload \"HKU\$sid\" 2>$null }; ^
-    Write-Host '[OK]'"
+powershell -ExecutionPolicy Bypass -File "%~dp0set_shell.ps1" "%EXE_PATH%"
 echo.
 
 :: 3. Auto-login
@@ -50,10 +35,9 @@ echo.
 
 echo ============================================
 echo   DONE!
-echo   1. Log in as Photobooth user once (if first time)
-echo   2. Log back to your admin account
-echo   3. Re-run this script if step 2/3 showed WARN
-echo   4. Reboot to enter kiosk mode
+echo   1. Log in as Photobooth user once (if WARN above)
+echo   2. Log back to admin, re-run this script
+echo   3. Reboot to enter kiosk mode
 echo.
 echo   Exit kiosk: Ctrl+Alt+Del, switch user
 echo   Undo: run undo_setup.bat as admin
