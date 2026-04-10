@@ -203,14 +203,16 @@ async def run_session():
         from .printer import enqueue_print
         await enqueue_print(str(output_path), CONFIG)
 
-    # Upload to Telegram — wait for video, then upload in background
-    video_file = await video_future
-    await uploader.upload_session(
-        session_id=SESSION_ID,
-        photos=SESSION_PHOTOS[:4],
-        collage=str(output_path) if output_path else None,
-        video=video_file,
-    )
+    # Upload to Telegram in background (don't block return to idle)
+    async def _bg_upload():
+        video_file = await video_future
+        await uploader.upload_session(
+            session_id=SESSION_ID,
+            photos=SESSION_PHOTOS[:4],
+            collage=str(output_path) if output_path else None,
+            video=video_file,
+        )
+    asyncio.create_task(_bg_upload())
 
     await set_state("idle")
 
