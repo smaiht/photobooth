@@ -33,7 +33,7 @@ def wait_and_load(window):
     for _ in range(30):
         try:
             urllib.request.urlopen("http://127.0.0.1:8000/api/config", timeout=1)
-            window.load_url("http://127.0.0.1:8000")
+            window.evaluate_js("window.location.replace('http://127.0.0.1:8000')")
             return
         except Exception:
             time.sleep(0.5)
