@@ -111,24 +111,23 @@ async def run_session():
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
 
     SESSION_COUNT += 1
-
     SESSION_ID = uuid.uuid4().hex[:8]
     SESSION_PHOTOS = []
     session_dir = PHOTOS_DIR / SESSION_ID
     session_dir.mkdir(exist_ok=True)
-
     log.info(f"=== Session {SESSION_ID} started ===")
-
-    if camera:
-        camera.set_download_dir(session_dir)
-        camera.start_live_view()
-        log.info("Live view started")
-
-    video_recorder.start(session_dir)
 
     num_photos = CONFIG["num_photos"]
     countdown_sec = CONFIG["countdown_seconds"]
 
+    # Start live view + video recording
+    if camera:
+        camera.set_download_dir(session_dir)
+        camera.start_live_view()
+        log.info("Live view started")
+    video_recorder.start(session_dir)
+
+    # Countdown → capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
         n = photo_idx + 1
         log.info(f"Countdown {n}/{num_photos} started ({countdown_sec}s)")
@@ -142,24 +141,36 @@ async def run_session():
         await broadcast({"type": "flash"})
         video_recorder.mark_capture()
 
+    # Wait for all photos to download (live view still running)
     if camera:
-        camera.stop_live_view()
         log.info(f"Waiting for {num_photos} photos to download...")
         for _ in range(300):
             if len(SESSION_PHOTOS) >= num_photos:
                 break
             await asyncio.sleep(0.1)
+        camera.stop_live_view()
+        log.info("Live view stopped")
+
         if len(SESSION_PHOTOS) < num_photos:
             await broadcast({"type": "error", "message": "Ошибка загрузки фото. Попробуйте снова."})
             await asyncio.sleep(3)
             await set_state("idle")
             return
 
-    # Encode video in background thread
+    # Background: encode video + upload to TG (doesn't block anything)
+    photos_copy = SESSION_PHOTOS[:]
     video_path = session_dir / "session.mp4"
-    video_future = asyncio.get_event_loop().run_in_executor(
-        None, video_recorder.stop_and_encode, video_path, SESSION_PHOTOS[:], 30
-    )
+
+    async def _bg_video_and_upload():
+        video_file = await asyncio.get_event_loop().run_in_executor(
+            None, video_recorder.stop_and_encode, video_path, photos_copy, 30
+        )
+        await uploader.upload_session(
+            session_id=SESSION_ID,
+            photos=photos_copy,
+            collage=str(output_path) if output_path else None,
+            video=video_file,
+        )
 
     # Template selection
     await set_state("template_select")
@@ -172,19 +183,18 @@ async def run_session():
         template_event.set()
 
     app.state.on_template_choice = on_template_choice
-
     try:
         await asyncio.wait_for(template_event.wait(), timeout=CONFIG["template_select_timeout"])
     except asyncio.TimeoutError:
         pass
-
     selected_template = chosen["template"]
 
-    # Compose
+    # Compose collage
     await set_state("composing")
     output_path = None
     if SESSION_PHOTOS:
-        template_dir = Path("templates") / "default"
+        from .config import TEMPLATES_DIR
+        template_dir = TEMPLATES_DIR / "default"
         overlay = template_dir / f"{selected_template}.png"
         overlay_path = str(overlay) if overlay.exists() else None
 
@@ -197,22 +207,14 @@ async def run_session():
         result.save(str(output_path), "JPEG", quality=95, dpi=(300, 300))
         log.info(f"Composed: {output_path}")
 
-    # Print (async queue — doesn't block next session)
+    # Print
     if CONFIG["print_enabled"] and output_path:
         await set_state("printing")
         from .printer import enqueue_print
         await enqueue_print(str(output_path), CONFIG)
 
-    # Upload to Telegram in background (don't block return to idle)
-    async def _bg_upload():
-        video_file = await video_future
-        await uploader.upload_session(
-            session_id=SESSION_ID,
-            photos=SESSION_PHOTOS[:4],
-            collage=str(output_path) if output_path else None,
-            video=video_file,
-        )
-    asyncio.create_task(_bg_upload())
+    # Start background video + upload (now that output_path is known)
+    asyncio.create_task(_bg_video_and_upload())
 
     await set_state("idle")
 

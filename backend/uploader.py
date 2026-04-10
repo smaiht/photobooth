@@ -100,7 +100,6 @@ class Uploader:
             media.append({
                 "type": "photo",
                 "media": f"attach://{key}",
-                **({"caption": f"📸 #{entry['session_id']}"} if i == 0 else {}),
             })
             files[key] = p
 
@@ -126,7 +125,6 @@ class Uploader:
             media.append({
                 "type": "document",
                 "media": f"attach://{key}",
-                **({"caption": "📎 Оригиналы"} if i == 0 else {}),
             })
             files[key] = p
 
