@@ -155,9 +155,11 @@ async def run_session():
             await set_state("idle")
             return
 
-    # Encode video from saved frames
+    # Encode video in background thread
     video_path = session_dir / "session.mp4"
-    video_file = video_recorder.stop_and_encode(video_path, photos=SESSION_PHOTOS)
+    video_future = asyncio.get_event_loop().run_in_executor(
+        None, video_recorder.stop_and_encode, video_path, SESSION_PHOTOS[:], 30
+    )
 
     # Template selection
     await set_state("template_select")
@@ -201,7 +203,8 @@ async def run_session():
         from .printer import enqueue_print
         await enqueue_print(str(output_path), CONFIG)
 
-    # Upload to Telegram — runs in background
+    # Upload to Telegram — wait for video, then upload in background
+    video_file = await video_future
     await uploader.upload_session(
         session_id=SESSION_ID,
         photos=SESSION_PHOTOS[:4],
