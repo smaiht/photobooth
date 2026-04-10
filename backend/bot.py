@@ -59,9 +59,23 @@ async def cmd_restart(message: Message):
     await message.answer("⚠️ Не удалось сбросить")
 
 
+@dp.message(Command("ip"), F.func(is_admin))
+async def cmd_ip(message: Message):
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "не удалось определить"
+    finally:
+        s.close()
+    await message.answer(f"🌐 {ip}")
+
+
 @dp.message(F.func(is_admin))
 async def cmd_unknown(message: Message):
-    await message.answer("Команды: /stop /status /restart")
+    await message.answer("Команды: /stop /status /restart /ip")
 
 
 async def start_bot(token: str, admin_id: int, get_status_cb=None):
