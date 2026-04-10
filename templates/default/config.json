@@ -1,6 +1,5 @@
 {
     "countdown_seconds": 5,
-    "freeze_seconds": 1,
     "num_photos": 4,
     "template_select_timeout": 5,
     "default_template": "strip",

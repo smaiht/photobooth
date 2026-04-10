@@ -1,0 +1,63 @@
+{
+    "_comment": "Canon EDSDK Camera Settings for Photobooth",
+
+    "image_quality": "jpeg_large_fine",
+    "_image_quality_options": [
+        "jpeg_large_fine", "jpeg_large_normal",
+        "jpeg_middle_fine", "jpeg_middle_normal",
+        "jpeg_small_fine", "jpeg_small_normal",
+        "raw", "raw_jpeg_large_fine"
+    ],
+
+    "ae_mode": "manual",
+    "_ae_mode_options": ["program", "tv", "av", "manual"],
+
+    "av": "5.6",
+    "_av_comment": "Aperture. Examples: 1.8, 2.8, 4.0, 5.6, 8.0, 11, 16. Set ae_mode to manual or av.",
+
+    "tv": "1/125",
+    "_tv_comment": "Shutter speed. Examples: 1/60, 1/125, 1/250, 1/500. Set ae_mode to manual or tv.",
+
+    "iso": 400,
+    "_iso_options": [100, 200, 400, 800, 1600, 3200, 6400, "auto"],
+
+    "white_balance": "auto",
+    "_white_balance_options": [
+        "auto", "daylight", "cloudy", "tungsten",
+        "fluorescent", "strobe", "shade", "color_temp"
+    ],
+
+    "color_temperature": 5200,
+    "_color_temperature_comment": "Only used when white_balance is color_temp. Range: 2500-10000K.",
+
+    "picture_style": "standard",
+    "_picture_style_options": [
+        "standard", "portrait", "landscape", "neutral",
+        "faithful", "monochrome", "auto", "fine_detail"
+    ],
+
+    "evf_af_mode": "face_tracking",
+    "_evf_af_mode_options": [
+        "face_tracking", "whole_area", "zone", "large_zone_h", "large_zone_v",
+        "spot", "single_point", "expand_cross", "expand_around"
+    ],
+    "_evf_af_mode_comment": "AF area mode during live view. face_tracking = detect and track faces/eyes.",
+
+    "continuous_af": true,
+    "_continuous_af_comment": "true = Servo AF (continuous focus during live view, instant capture). false = One-Shot AF (focus only when capturing).",
+
+    "eye_detection_af": true,
+    "_eye_detection_af_comment": "true = detect and focus on eyes. Canon R8 has excellent eye AF.",
+
+    "drive_mode": "single",
+    "_drive_mode_options": ["single"],
+
+    "color_space": "srgb",
+    "_color_space_options": ["srgb", "adobe_rgb"],
+
+    "lock_camera_ui": true,
+    "_lock_camera_ui_comment": "true = lock all buttons/dials on camera body. Prevents accidental changes.",
+
+    "lock_mode_dial": true,
+    "_lock_mode_dial_comment": "true = lock mode dial (M/Av/Tv/P). Prevents switching modes."
+}

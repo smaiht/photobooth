@@ -13,16 +13,11 @@
             <div class="tap-prompt">НАЖМИ ЧТОБЫ НАЧАТЬ</div>
         </div>
 
-        <!-- COUNTDOWN + LIVE VIEW screen -->
-        <div class="screen" id="screen-capture" hidden>
+        <!-- SHOOTING screen: live view + countdown + flash -->
+        <div class="screen" id="screen-shooting" hidden>
             <img id="live-view" alt="">
             <div id="countdown-number"></div>
             <div id="photo-counter"></div>
-        </div>
-
-        <!-- FREEZE screen (shows last captured photo) -->
-        <div class="screen" id="screen-freeze" hidden>
-            <img id="freeze-img" alt="">
         </div>
 
         <!-- TEMPLATE SELECT screen -->
@@ -50,7 +45,7 @@
             <div class="printing-msg">ПЕЧАТАЕМ... 🖨️</div>
         </div>
 
-        <!-- Print status overlay (shows while printing + next session) -->
+        <!-- Print status overlay -->
         <div id="print-overlay" hidden>
             <span>⏳ Печать...</span>
         </div>

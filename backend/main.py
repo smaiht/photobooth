@@ -124,30 +124,31 @@ async def run_session():
 
     num_photos = CONFIG["num_photos"]
     countdown_sec = CONFIG["countdown_seconds"]
-    freeze_sec = CONFIG["freeze_seconds"]
 
     for photo_idx in range(num_photos):
+        # Countdown — live view streaming, AF tracking faces
         await set_state("countdown", {"photo_index": photo_idx, "total": num_photos})
         for sec in range(countdown_sec, 0, -1):
             await broadcast({"type": "countdown", "value": sec})
             await asyncio.sleep(1)
 
-        await set_state("capture", {"photo_index": photo_idx})
+        # Take photo — live view pauses naturally, frontend keeps last frame
         if camera:
             camera.take_picture()
-            for _ in range(30):
-                if len(SESSION_PHOTOS) > photo_idx:
-                    break
-                await asyncio.sleep(0.1)
-        else:
-            log.info(f"No camera: skipping capture {photo_idx}")
-            await asyncio.sleep(0.5)
-
-        await set_state("freeze", {"photo_index": photo_idx})
-        await asyncio.sleep(freeze_sec)
+        await broadcast({"type": "flash"})
 
     if camera:
         camera.stop_live_view()
+        # Wait for all photos to download (max 30s, should never take this long)
+        for _ in range(300):
+            if len(SESSION_PHOTOS) >= num_photos:
+                break
+            await asyncio.sleep(0.1)
+        if len(SESSION_PHOTOS) < num_photos:
+            await broadcast({"type": "error", "message": "Ошибка загрузки фото. Попробуйте снова."})
+            await asyncio.sleep(3)
+            await set_state("idle")
+            return
 
     # Encode video from saved frames
     video_path = session_dir / "session.mp4"

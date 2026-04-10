@@ -1,7 +1,6 @@
 const screens = {
     idle: document.getElementById("screen-idle"),
-    capture: document.getElementById("screen-capture"),
-    freeze: document.getElementById("screen-freeze"),
+    shooting: document.getElementById("screen-shooting"),
     template: document.getElementById("screen-template"),
     printing: document.getElementById("screen-printing"),
 };
@@ -9,14 +8,12 @@ const screens = {
 const liveView = document.getElementById("live-view");
 const countdownNum = document.getElementById("countdown-number");
 const photoCounter = document.getElementById("photo-counter");
-const freezeImg = document.getElementById("freeze-img");
 const templateTimer = document.getElementById("template-timer");
 const printOverlay = document.getElementById("print-overlay");
 
 let ws = null;
 let currentState = "idle";
 let templateTimeout = null;
-let liveViewFrozen = false;
 
 // --- WebSocket ---
 function connect() {
@@ -26,11 +23,10 @@ function connect() {
 
     ws.onmessage = (e) => {
         if (e.data instanceof Blob) {
-            if (!liveViewFrozen) {
-                const url = URL.createObjectURL(e.data);
-                liveView.onload = () => URL.revokeObjectURL(url);
-                liveView.src = url;
-            }
+            // Live view frame — just update img, nothing else
+            const url = URL.createObjectURL(e.data);
+            liveView.onload = () => URL.revokeObjectURL(url);
+            liveView.src = url;
             return;
         }
         handleMessage(JSON.parse(e.data));
@@ -55,8 +51,18 @@ function handleMessage(msg) {
         case "countdown":
             showCountdown(msg.value);
             break;
+        case "flash":
+            document.body.classList.add("flash");
+            setTimeout(() => document.body.classList.remove("flash"), 200);
+            break;
         case "error":
-            console.error("Server error:", msg.message);
+            console.error("Server:", msg.message);
+            // Show error on screen for 3s
+            const errDiv = document.createElement("div");
+            errDiv.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.9);display:flex;align-items:center;justify-content:center;font-size:3vw;z-index:999;color:#f55";
+            errDiv.textContent = msg.message;
+            document.body.appendChild(errDiv);
+            setTimeout(() => errDiv.remove(), 3000);
             break;
     }
 }
@@ -66,38 +72,24 @@ function switchScreen(state, data = {}) {
     currentState = state;
     Object.values(screens).forEach((s) => (s.hidden = true));
 
-    const stateScreenMap = {
+    const map = {
         idle: "idle",
-        countdown: "capture",
-        capture: "capture",
-        freeze: "freeze",
+        countdown: "shooting",
+        shooting: "shooting",
         template_select: "template",
         composing: "printing",
         printing: "printing",
     };
 
-    const screenKey = stateScreenMap[state];
-    if (screenKey && screens[screenKey]) {
-        screens[screenKey].hidden = false;
-    }
+    const key = map[state];
+    if (key && screens[key]) screens[key].hidden = false;
 
-    if (state === "countdown") {
-        liveViewFrozen = false;
+    if (state === "countdown" || state === "shooting") {
         const idx = (data.photo_index ?? 0) + 1;
-        const total = data.total ?? 4;
-        photoCounter.textContent = `${idx} / ${total}`;
-    }
-
-    if (state === "freeze") {
-        // Freeze = stop updating live view, copy current frame, flash
-        liveViewFrozen = true;
-        freezeImg.src = liveView.src;
-        document.body.classList.add("flash");
-        setTimeout(() => document.body.classList.remove("flash"), 200);
+        photoCounter.textContent = `${idx} / ${data.total ?? 4}`;
     }
 
     if (state === "template_select") {
-        liveViewFrozen = false;
         startTemplateTimer(data.timeout ?? 5);
     }
 
@@ -106,12 +98,11 @@ function switchScreen(state, data = {}) {
     }
 
     if (state === "idle") {
-        liveViewFrozen = false;
         setTimeout(() => { printOverlay.hidden = true; }, 15000);
     }
 }
 
-// --- Countdown display ---
+// --- Countdown ---
 function showCountdown(value) {
     countdownNum.textContent = value;
     countdownNum.classList.add("visible");
@@ -143,12 +134,9 @@ document.querySelectorAll(".template-btn").forEach((btn) => {
     });
 });
 
-// --- Start session on tap ---
+// --- Start session ---
 screens.idle.addEventListener("click", () => {
-    if (currentState === "idle") {
-        send({ type: "start_session" });
-    }
+    if (currentState === "idle") send({ type: "start_session" });
 });
 
-// --- Admin panel: hold top-left corner 3s ---
 connect();

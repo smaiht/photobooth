@@ -29,12 +29,9 @@ html, body {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    transition: opacity 0.3s;
 }
 
-.screen[hidden] {
-    display: none;
-}
+.screen[hidden] { display: none; }
 
 /* IDLE */
 .tap-prompt {
@@ -49,16 +46,14 @@ html, body {
     50% { opacity: 0.6; transform: scale(1.05); }
 }
 
-/* CAPTURE / LIVE VIEW */
-#screen-capture {
-    background: #000;
-}
+/* SHOOTING — live view + countdown */
+#screen-shooting { background: #000; }
 
 #live-view {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    transform: scaleX(-1); /* Mirror for selfie feel */
+    transform: scaleX(-1);
 }
 
 #countdown-number {
@@ -71,10 +66,7 @@ html, body {
     transition: opacity 0.15s, transform 0.15s;
 }
 
-#countdown-number.visible {
-    opacity: 1;
-    transform: scale(1);
-}
+#countdown-number.visible { opacity: 1; }
 
 #photo-counter {
     position: absolute;
@@ -87,22 +79,8 @@ html, body {
     border-radius: 1em;
 }
 
-/* FREEZE */
-#screen-freeze {
-    background: #000;
-}
-
-#freeze-img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    transform: scaleX(-1);
-}
-
 /* Flash effect */
-.flash {
-    animation: flash-anim 0.15s ease-out;
-}
+.flash { animation: flash-anim 0.15s ease-out; }
 
 @keyframes flash-anim {
     0% { filter: brightness(3); }
@@ -110,20 +88,11 @@ html, body {
 }
 
 /* TEMPLATE SELECT */
-#screen-template {
-    background: #111;
-    gap: 4vh;
-}
+#screen-template { background: #111; gap: 4vh; }
 
-.template-title {
-    font-size: 4vw;
-    font-weight: 700;
-}
+.template-title { font-size: 4vw; font-weight: 700; }
 
-.template-options {
-    display: flex;
-    gap: 5vw;
-}
+.template-options { display: flex; gap: 5vw; }
 
 .template-btn {
     background: #222;
@@ -156,32 +125,14 @@ html, body {
     border-radius: 0.5vw;
 }
 
-.strip-preview {
-    flex-direction: column;
-}
+.strip-preview { flex-direction: column; }
+.strip-preview div { flex: 1; background: #666; border-radius: 2px; }
+.grid-preview div { width: calc(50% - 2px); height: calc(50% - 2px); background: #666; border-radius: 2px; }
 
-.strip-preview div {
-    flex: 1;
-    background: #666;
-    border-radius: 2px;
-}
-
-.grid-preview div {
-    width: calc(50% - 2px);
-    height: calc(50% - 2px);
-    background: #666;
-    border-radius: 2px;
-}
-
-#template-timer {
-    font-size: 2.5vw;
-    opacity: 0.6;
-}
+#template-timer { font-size: 2.5vw; opacity: 0.6; }
 
 /* PRINTING */
-#screen-printing {
-    background: #111;
-}
+#screen-printing { background: #111; }
 
 .printing-msg {
     font-size: 4vw;
@@ -189,7 +140,7 @@ html, body {
     animation: pulse 1.5s ease-in-out infinite;
 }
 
-/* Print overlay (corner notification during next session) */
+/* Print overlay */
 #print-overlay {
     position: fixed;
     bottom: 3vh;
@@ -199,9 +150,6 @@ html, body {
     border-radius: 1vw;
     font-size: 1.8vw;
     z-index: 100;
-    backdrop-filter: blur(10px);
 }
 
-#print-overlay[hidden] {
-    display: none;
-}
+#print-overlay[hidden] { display: none; }

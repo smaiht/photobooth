@@ -23,7 +23,6 @@ PHOTOS_DIR.mkdir(exist_ok=True)
 # Session settings
 DEFAULT_CONFIG = {
     "countdown_seconds": 5,
-    "freeze_seconds": 1,
     "num_photos": 4,
     "template_select_timeout": 5,
     "default_template": "strip",

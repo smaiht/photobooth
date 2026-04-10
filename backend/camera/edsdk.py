@@ -235,20 +235,84 @@ class Camera:
         raise RuntimeError(f"Failed to open camera session after 5 attempts")
 
     def _configure_for_photobooth(self):
-        # Save photos to host PC (not camera SD card)
-        self._set_prop_u32(kEdsPropID_SaveTo, kEdsSaveTo_Host)
+        # Load camera config
+        import json
+        config_path = Path(__file__).resolve().parent.parent.parent / "camera_config.json"
+        if config_path.exists():
+            cfg = json.loads(config_path.read_text())
+        else:
+            cfg = {}
+            log.warning("camera_config.json not found, using defaults")
 
-        # Tell camera we have plenty of disk space
+        # Save photos to host PC
+        self._set_prop_u32(kEdsPropID_SaveTo, kEdsSaveTo_Host)
         capacity = EdsCapacity(numberOfFreeClusters=0x7FFFFFFF, bytesPerSector=0x1000, reset=1)
         _check("EdsSetCapacity", self._sdk.EdsSetCapacity(self._camera, capacity))
 
-        # JPEG Large Fine — best quality for print, no RAW (faster transfer)
-        self._set_prop_u32(kEdsPropID_ImageQuality, EdsImageQuality_LJF)
+        # Image quality
+        q = IMAGE_QUALITY_MAP.get(cfg.get("image_quality", "jpeg_large_fine"), EdsImageQuality_LJF)
+        self._set_prop_u32(kEdsPropID_ImageQuality, q)
 
-        # Single shot drive mode
+        # AE Mode (P/Tv/Av/M)
+        ae = AE_MODE_MAP.get(cfg.get("ae_mode", "manual"), 0x03)
+        self._set_prop_u32(kEdsPropID_AEMode, ae)
+
+        # Aperture
+        av_val = AV_MAP.get(str(cfg.get("av", "5.6")))
+        if av_val is not None:
+            self._set_prop_u32(kEdsPropID_Av, av_val)
+
+        # Shutter speed
+        tv_val = TV_MAP.get(str(cfg.get("tv", "1/125")))
+        if tv_val is not None:
+            self._set_prop_u32(kEdsPropID_Tv, tv_val)
+
+        # ISO
+        iso_raw = cfg.get("iso", 400)
+        iso_val = ISO_MAP.get(iso_raw if isinstance(iso_raw, str) else int(iso_raw))
+        if iso_val is not None:
+            self._set_prop_u32(kEdsPropID_ISOSpeed, iso_val)
+
+        # White balance
+        wb = WHITE_BALANCE_MAP.get(cfg.get("white_balance", "auto"), 0)
+        self._set_prop_u32(kEdsPropID_WhiteBalance, wb)
+
+        # Color temperature (only if white_balance = color_temp)
+        if cfg.get("white_balance") == "color_temp":
+            self._set_prop_u32(kEdsPropID_ColorTemperature, cfg.get("color_temperature", 5200))
+
+        # Picture style
+        ps = PICTURE_STYLE_MAP.get(cfg.get("picture_style", "standard"), 0x0081)
+        self._set_prop_u32(kEdsPropID_PictureStyle, ps)
+
+        # Color space
+        cs = COLOR_SPACE_MAP.get(cfg.get("color_space", "srgb"), 1)
+        self._set_prop_u32(kEdsPropID_ColorSpace, cs)
+
+        # Drive mode
         self._set_prop_u32(kEdsPropID_DriveMode, kEdsDriveMode_Single)
 
-        log.info("Camera configured: JPEG-L-Fine, SaveTo=Host, Single drive")
+        # EVF AF mode (face tracking, zone, etc.)
+        af_mode = EVF_AF_MODE_MAP.get(cfg.get("evf_af_mode", "face_tracking"), 0x02)
+        self._set_prop_u32(kEdsPropID_Evf_AFMode, af_mode)
+
+        # Continuous AF (Servo) — keeps focus during live view, instant capture
+        if cfg.get("continuous_af", True):
+            self._set_prop_u32(kEdsPropID_ContinuousAfMode, 1)  # 1 = enable
+
+        # Eye detection AF
+        if cfg.get("eye_detection_af", True):
+            self._set_prop_u32(kEdsPropID_AFEyeDetect, 1)  # 1 = enable
+
+        # Lock camera UI
+        if cfg.get("lock_camera_ui", True):
+            self._sdk.EdsSendStatusCommand(self._camera, kEdsCameraStatusCommand_UILock, 0)
+
+        # Lock mode dial
+        if cfg.get("lock_mode_dial", True):
+            self._sdk.EdsSendCommand(self._camera, kEdsCameraCommand_SetModeDialDisable, 1)
+
+        log.info("Camera configured from camera_config.json")
 
     def _set_prop_u32(self, prop_id: int, value: int):
         val = EdsUInt32(value)
@@ -366,6 +430,8 @@ class Camera:
     def _cleanup(self):
         try:
             if self._camera:
+                self._sdk.EdsSendStatusCommand(self._camera, kEdsCameraStatusCommand_UIUnLock, 0)
+                self._sdk.EdsSendCommand(self._camera, kEdsCameraCommand_SetModeDialDisable, 0)
                 self._sdk.EdsCloseSession(self._camera)
                 self._sdk.EdsRelease(self._camera)
             self._sdk.EdsTerminateSDK()
