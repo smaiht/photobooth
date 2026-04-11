@@ -4,6 +4,7 @@
     "template_select_timeout": 5,
     "default_template": "strip",
     "mirror_live_view": true,
+    "debug_overlay": true,
 
     "print_enabled": false,
     "printer_name": "",

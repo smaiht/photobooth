@@ -76,12 +76,20 @@ function handleMessage(msg) {
             break;
         case "error":
             console.error("Server:", msg.message);
-            // Show error on screen for 3s
             const errDiv = document.createElement("div");
             errDiv.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.9);display:flex;align-items:center;justify-content:center;font-size:3vw;z-index:999;color:#f55";
             errDiv.textContent = msg.message;
             document.body.appendChild(errDiv);
             setTimeout(() => errDiv.remove(), 3000);
+            break;
+        case "log":
+            const logEl = document.getElementById("debug-log");
+            if (logEl) {
+                logEl.hidden = false;
+                logEl.textContent += msg.text + "\n";
+                if (logEl.childNodes.length > 100) logEl.textContent = logEl.textContent.split("\n").slice(-50).join("\n");
+                logEl.scrollTop = logEl.scrollHeight;
+            }
             break;
     }
 }

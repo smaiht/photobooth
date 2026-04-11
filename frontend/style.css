@@ -158,3 +158,21 @@ html, body {
 }
 
 #print-overlay[hidden] { display: none; }
+
+/* Debug log overlay */
+#debug-log {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-height: 30vh;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.75);
+    color: #0f0;
+    font-family: monospace;
+    font-size: 1.2vw;
+    padding: 1vh 1vw;
+    z-index: 9999;
+    pointer-events: none;
+}
+#debug-log[hidden] { display: none; }

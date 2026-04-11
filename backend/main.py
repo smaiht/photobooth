@@ -33,6 +33,25 @@ SESSION_ID = ""
 SESSION_PHOTOS: list[str] = []
 SESSION_COUNT = 0
 CONFIG = load_event_config()
+DEBUG_OVERLAY = CONFIG.get("debug_overlay", False)
+
+
+# --- WebSocket log handler ---
+class WSLogHandler(logging.Handler):
+    def emit(self, record):
+        if not DEBUG_OVERLAY or not _event_loop:
+            return
+        try:
+            msg = self.format(record)
+            asyncio.run_coroutine_threadsafe(
+                broadcast({"type": "log", "text": msg}), _event_loop
+            )
+        except Exception:
+            pass
+
+_ws_log = WSLogHandler()
+_ws_log.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+logging.getLogger().addHandler(_ws_log)
 CLIENTS: list[WebSocket] = []
 
 # --- Camera (Windows only) ---
