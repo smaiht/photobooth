@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
-from .composer import compose_strip, compose_grid
+from .composer import compose
 from .uploader import Uploader
 from .video import VideoRecorder
 from .bot import start_bot
@@ -214,14 +214,7 @@ async def run_session():
     if SESSION_PHOTOS:
         from .config import TEMPLATES_DIR
         template_dir = TEMPLATES_DIR / "default"
-        overlay = template_dir / f"{selected_template}.png"
-        overlay_path = str(overlay) if overlay.exists() else None
-
-        if selected_template == "strip":
-            result = compose_strip(SESSION_PHOTOS[:4], overlay_path)
-        else:
-            result = compose_grid(SESSION_PHOTOS[:4], overlay_path)
-
+        result = compose(template_dir, selected_template, SESSION_PHOTOS[:4], CONFIG)
         output_path = session_dir / f"print_{selected_template}.jpg"
         result.save(str(output_path), "JPEG", quality=95, dpi=(300, 300))
         log.info(f"Composed: {output_path}")
@@ -297,7 +290,7 @@ async def websocket_endpoint(ws: WebSocket):
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)
                 if cb:
-                    cb(msg.get("template", "strip"))
+                    cb(msg.get("template", "strips"))
 
     except WebSocketDisconnect:
         CLIENTS.remove(ws)

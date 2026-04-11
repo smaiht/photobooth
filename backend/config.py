@@ -25,7 +25,7 @@ DEFAULT_CONFIG = {
     "countdown_seconds": 5,
     "num_photos": 4,
     "template_select_timeout": 5,
-    "default_template": "strip",
+    "default_template": "strips",
     "mirror_live_view": False,
     "print_enabled": False,
     "printer_name": "",

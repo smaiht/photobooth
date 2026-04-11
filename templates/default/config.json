@@ -2,11 +2,33 @@
     "countdown_seconds": 5,
     "num_photos": 4,
     "template_select_timeout": 5,
-    "default_template": "strip",
+    "default_template": "strips",
     "mirror_live_view": true,
     "debug_overlay": true,
 
     "print_enabled": false,
     "printer_name": "",
-    "hot_folder": ""
+    "hot_folder": "",
+
+    "templates": {
+        "strips": {
+            "background": "strip_bg.jpg",
+            "duplicate": true,
+            "photos": [
+                {"x": 30, "y": 30, "w": 540, "h": 360},
+                {"x": 30, "y": 420, "w": 540, "h": 360},
+                {"x": 30, "y": 810, "w": 540, "h": 360},
+                {"x": 30, "y": 1200, "w": 540, "h": 360}
+            ]
+        },
+        "grid": {
+            "background": "grid_bg.jpg",
+            "photos": [
+                {"x": 30, "y": 30, "w": 840, "h": 560},
+                {"x": 930, "y": 30, "w": 840, "h": 560},
+                {"x": 30, "y": 620, "w": 840, "h": 560},
+                {"x": 930, "y": 620, "w": 840, "h": 560}
+            ]
+        }
+    }
 }
