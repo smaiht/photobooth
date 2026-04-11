@@ -119,7 +119,7 @@ def on_photo_downloaded(file_path: str):
 
 def on_camera_error(error: str):
     log.warning(f"Camera error: {error}")
-    if _event_loop and _event_loop.is_running():
+    if STATE == "idle" and _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(
             broadcast({"type": "state", "state": "no_camera"}),
             _event_loop)
@@ -214,9 +214,14 @@ async def run_session():
     if SESSION_PHOTOS:
         from .config import TEMPLATES_DIR
         template_dir = TEMPLATES_DIR / "default"
-        result = compose(template_dir, selected_template, SESSION_PHOTOS[:4], CONFIG)
-        output_path = session_dir / f"print_{selected_template}.jpg"
-        result.save(str(output_path), "JPEG", quality=95, dpi=(300, 300))
+
+        def _compose():
+            result = compose(template_dir, selected_template, SESSION_PHOTOS[:4], CONFIG)
+            path = session_dir / f"print_{selected_template}.jpg"
+            result.save(str(path), "JPEG", quality=95, dpi=(300, 300))
+            return path
+
+        output_path = await asyncio.get_event_loop().run_in_executor(None, _compose)
         log.info(f"Composed: {output_path}")
 
     # Print
@@ -226,10 +231,11 @@ async def run_session():
         await enqueue_print(str(output_path), CONFIG)
 
     # Upload in background (wait for video, then send)
+    session_id = SESSION_ID
     async def _bg_upload():
         video_file = await video_future
         await uploader.upload_session(
-            session_id=SESSION_ID,
+            session_id=session_id,
             photos=photos_copy,
             collage=str(output_path) if output_path else None,
             video=video_file,
