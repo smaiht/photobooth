@@ -171,6 +171,7 @@ html, body {
     color: #0f0;
     font-family: monospace;
     font-size: 1.2vw;
+    white-space: pre-wrap;
     padding: 1vh 1vw;
     z-index: 9999;
     pointer-events: none;

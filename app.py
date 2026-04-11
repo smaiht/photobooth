@@ -99,6 +99,8 @@ def main():
         title="Photobooth",
         html=LOADING_HTML,
         fullscreen=not dev,
+        width=1200,
+        height=900,
         easy_drag=False,
         text_select=False,
         zoomable=False,
