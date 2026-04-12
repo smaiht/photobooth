@@ -37,20 +37,32 @@ justify-content:center;height:100vh;font-family:system-ui;font-size:4vw">
 
 def kill_port(port=8000):
     """Kill any process using our port."""
-    import socket
+    import socket, subprocess
     try:
         s = socket.socket()
         s.settimeout(0.5)
         s.connect(("127.0.0.1", port))
         s.close()
-        # Port busy — kill it
         if sys.platform == "win32":
-            os.system(f'for /f "tokens=5" %a in (\'netstat -ano ^| findstr :{port}\') do taskkill /F /PID %a 2>nul')
+            # Find PID on port and kill it
+            result = subprocess.run(
+                f'netstat -ano | findstr :{port}',
+                capture_output=True, text=True, shell=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            for line in result.stdout.strip().split('\n'):
+                parts = line.split()
+                if parts and parts[-1].isdigit():
+                    subprocess.run(
+                        f'taskkill /F /PID {parts[-1]}',
+                        capture_output=True, shell=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
         else:
-            os.system(f"lsof -ti:{port} | xargs kill -9 2>/dev/null")
+            subprocess.run(f"lsof -ti:{port} | xargs kill -9", shell=True, capture_output=True)
         time.sleep(1)
     except Exception:
-        pass  # Port free
+        pass
 
 
 def start_server():

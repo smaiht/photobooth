@@ -71,8 +71,9 @@ function handleMessage(msg) {
             break;
         case "flash":
             beep(880, 500);
-            document.body.classList.add("flash");
-            setTimeout(() => document.body.classList.remove("flash"), 200);
+            const flashEl = document.getElementById("flash-overlay");
+            flashEl.style.opacity = "1";
+            setTimeout(() => flashEl.style.opacity = "0", 150);
             break;
         case "error":
             console.error("Server:", msg.message);

@@ -85,11 +85,14 @@ html, body {
 }
 
 /* Flash effect */
-.flash { animation: flash-anim 0.15s ease-out; }
-
-@keyframes flash-anim {
-    0% { filter: brightness(3); }
-    100% { filter: brightness(1); }
+#flash-overlay {
+    position: fixed;
+    inset: 0;
+    background: #fff;
+    opacity: 0;
+    transition: opacity 0.15s ease-out;
+    z-index: 500;
+    pointer-events: none;
 }
 
 /* TEMPLATE SELECT */

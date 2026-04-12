@@ -21,5 +21,5 @@ if not exist "venv\Scripts\python.exe" (
 :: Sync dependencies
 venv\Scripts\pip.exe install -q -r requirements.txt
 
-:: Launch app (no console, like exe)
-venv\Scripts\pythonw.exe app.py --dev
+:: Launch app (no console)
+start "" venv\Scripts\pythonw.exe app.py --dev
