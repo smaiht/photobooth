@@ -13,7 +13,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 WEBDAV_BASE = "https://webdav.yandex.ru"
-UPLOAD_PATH = "/_traffic/send_photos_to_vps"
+UPLOAD_PATH = "/_traffic/photos_to_vps"
 LOGIN = os.environ.get("YADISK_LOGIN", "")
 PASSWORD = os.environ.get("YADISK_PASSWORD", "")
 
