@@ -45,9 +45,14 @@
             <div id="template-timer"></div>
         </div>
 
-        <!-- PRINTING screen -->
-        <div class="screen" id="screen-printing" hidden>
-            <div class="printing-msg">ПЕЧАТАЕМ... 🖨️</div>
+        <!-- DONE screen: printing + QR -->
+        <div class="screen" id="screen-done" hidden>
+            <div class="done-title">ИДЁТ ПЕЧАТЬ 🖨️</div>
+            <div class="done-content">
+                <img id="done-collage" class="done-collage" />
+                <div id="done-qr"></div>
+            </div>
+            <div class="done-hint">Сканируйте QR для скачивания</div>
         </div>
 
         <!-- Print status overlay -->
@@ -56,9 +61,11 @@
         </div>
 
         <div id="flash-overlay"></div>
+        <div id="last-qr" hidden></div>
         <div id="debug-log" hidden></div>
     </div>
 
+    <script src="/assets/qrcode.min.js"></script>
     <script src="/app.js"></script>
 </body>
 </html>

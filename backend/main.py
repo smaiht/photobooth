@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -133,7 +134,7 @@ async def run_session():
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
 
     SESSION_COUNT += 1
-    SESSION_ID = uuid.uuid4().hex[:8]
+    SESSION_ID = uuid.uuid4().hex[:8] + hex(int(time.time() * 1000000))[2:]
     SESSION_PHOTOS = []
     session_dir = PHOTOS_DIR / SESSION_ID
     session_dir.mkdir(exist_ok=True)
@@ -219,13 +220,21 @@ async def run_session():
         output_path = await asyncio.get_event_loop().run_in_executor(None, _compose)
         log.info(f"Composed: {output_path}")
 
-    # Print
+    # Show result screen with QR code
+    vps_url = os.environ.get("VPS_URL", "")
+    vps_path = os.environ.get("VPS_SESSION_PATH", "/s")
+    session_url = f"{vps_url}{vps_path}/{SESSION_ID}" if vps_url else ""
+    await set_state("done", {
+        "session_url": session_url,
+        "collage": f"/photos/{SESSION_ID}/{output_path.name}" if output_path else "",
+    })
+
+    # Print in background
     if CONFIG["print_enabled"] and output_path:
-        await set_state("printing")
         from .printer import enqueue_print
         await enqueue_print(str(output_path), CONFIG)
 
-    # Upload in background (wait for video, then send)
+    # Upload in background
     session_id = SESSION_ID
     async def _bg_upload():
         video_file = await video_future
@@ -234,6 +243,8 @@ async def run_session():
                             video_file)
     asyncio.create_task(_bg_upload())
 
+    # Show QR screen for 12 seconds
+    await asyncio.sleep(5)
     await set_state("idle")
 
 

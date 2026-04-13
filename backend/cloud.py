@@ -23,7 +23,7 @@ async def cloud_init():
     try:
         auth = aiohttp.BasicAuth(login, password)
         async with aiohttp.ClientSession(auth=auth) as s:
-            async with s.request("MKCOL", f"{WEBDAV_URL}/", timeout=aiohttp.ClientTimeout(total=10)):
+            async with s.request("MKCOL", f"{WEBDAV_URL}/", timeout=aiohttp.ClientTimeout(total=10), ssl=False):
                 pass
         log.info("Cloud: ready")
     except Exception as e:
@@ -89,7 +89,8 @@ async def _upload(file_path: str, login: str, password: str):
 
     async with aiohttp.ClientSession(auth=auth) as session:
         async with session.put(url, data=data,
-                               timeout=aiohttp.ClientTimeout(total=600)) as resp:
+                               timeout=aiohttp.ClientTimeout(total=600),
+                               ssl=False) as resp:
             if resp.status not in (200, 201, 204):
                 body = await resp.text()
                 raise RuntimeError(f"WebDAV PUT {resp.status}: {body}")

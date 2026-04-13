@@ -3,7 +3,7 @@ const screens = {
     idle: document.getElementById("screen-idle"),
     shooting: document.getElementById("screen-shooting"),
     template: document.getElementById("screen-template"),
-    printing: document.getElementById("screen-printing"),
+    printing: document.getElementById("screen-done"),
 };
 
 const liveView = document.getElementById("live-view");
@@ -64,6 +64,22 @@ function handleMessage(msg) {
     switch (msg.type) {
         case "state":
             switchScreen(msg.state, msg);
+            if (msg.state === "done") {
+                if (msg.collage) document.getElementById("done-collage").src = msg.collage;
+                if (msg.session_url && typeof qrcode !== "undefined") {
+                    const qr = qrcode(0, "M");
+                    qr.addData(msg.session_url);
+                    qr.make();
+                    document.getElementById("done-qr").innerHTML = qr.createSvgTag(8);
+                    // Save for idle overlay
+                    const lastQr = document.getElementById("last-qr");
+                    lastQr.innerHTML = qr.createSvgTag(4);
+                    lastQr.hidden = false;
+                }
+            }
+            if (msg.state === "countdown" && msg.photo_index === 0) {
+                document.getElementById("last-qr").hidden = true;
+            }
             break;
         case "countdown":
             showCountdown(msg.value);
@@ -108,6 +124,7 @@ function switchScreen(state, data = {}) {
         template_select: "template",
         composing: "printing",
         printing: "printing",
+        done: "printing",
     };
 
     const key = map[state];
