@@ -221,6 +221,11 @@ class Camera:
             fn.argtypes = argtypes
 
     def _init_sdk(self):
+        # Terminate first to reset any leftover session from previous run
+        try:
+            self._sdk.EdsTerminateSDK()
+        except Exception:
+            pass
         _check("EdsInitializeSDK", self._sdk.EdsInitializeSDK())
         log.info("EDSDK initialized")
 
