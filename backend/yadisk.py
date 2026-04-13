@@ -83,14 +83,13 @@ async def _upload_webdav(file_path: str, login: str, password: str):
         }) as resp:
             pass  # 201=created, 405=already exists, both ok
 
+        log.info(f"Yandex Disk: PUT {url} ({len(data)} bytes)...")
         async with session.put(url, data=data, headers={
             "Authorization": f"Basic {auth}",
             "Content-Type": "application/binary",
-            "Content-Length": str(len(data)),
             "Etag": md5,
             "Sha256": sha256,
-            "Expect": "100-continue",
-        }, timeout=aiohttp.ClientTimeout(total=300), expect100=True) as resp:
+        }, timeout=aiohttp.ClientTimeout(total=300)) as resp:
             if resp.status not in (200, 201, 204):
                 body = await resp.text()
                 raise RuntimeError(f"WebDAV PUT {resp.status}: {body}")
