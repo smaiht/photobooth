@@ -1,4 +1,4 @@
-"""Photobooth — single entry point.
+"""Photobooth - single entry point.
 
 Starts FastAPI backend + pywebview fullscreen window.
 Shows loading screen instantly, switches to app when server is ready.

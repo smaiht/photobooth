@@ -1,4 +1,4 @@
-"""Canon EDSDK wrapper via ctypes — Windows only.
+"""Canon EDSDK wrapper via ctypes - Windows only.
 
 Uses EdsGetEvent() polling (no Windows message pump needed).
 All EDSDK calls must happen from the same thread that called EdsInitializeSDK().
@@ -238,7 +238,7 @@ class Camera:
         _check("EdsGetDeviceInfo", self._sdk.EdsGetDeviceInfo(self._camera, ctypes.byref(info)))
         log.info(f"Camera: {info.szDeviceDescription.decode()}")
 
-        # Retry OpenSession — camera may need time after USB connect
+        # Retry OpenSession - camera may need time after USB connect
         for attempt in range(5):
             err = self._sdk.EdsOpenSession(self._camera)
             if err == EDS_ERR_OK:
@@ -268,7 +268,7 @@ class Camera:
         q = IMAGE_QUALITY_MAP.get(cfg.get("image_quality", "jpeg_large_fine"), EdsImageQuality_LJF)
         self._set_prop_u32(kEdsPropID_ImageQuality, q)
 
-        # AE Mode — set on camera dial manually (SDK can't override the physical dial)
+        # AE Mode - set on camera dial manually (SDK can't override the physical dial)
         # ae = AE_MODE_MAP.get(cfg.get("ae_mode", "manual"), 0x03)
         # self._set_prop_u32(kEdsPropID_AEMode, ae)
 
@@ -311,7 +311,7 @@ class Camera:
         af_mode = EVF_AF_MODE_MAP.get(cfg.get("evf_af_mode", "face_tracking"), 0x02)
         self._set_prop_u32(kEdsPropID_Evf_AFMode, af_mode)
 
-        # Continuous AF (Servo) — keeps focus during live view, instant capture
+        # Continuous AF (Servo) - keeps focus during live view, instant capture
         if cfg.get("continuous_af", True):
             self._set_prop_u32(kEdsPropID_ContinuousAfMode, 1)  # 1 = enable
 

@@ -127,7 +127,7 @@ PICTURE_STYLE_MAP = {
 
 # --- EVF AF Mode ---
 EVF_AF_MODE_MAP = {
-    "face_tracking": 0x02,   # LiveFace — face/eye detect + tracking
+    "face_tracking": 0x02,   # LiveFace - face/eye detect + tracking
     "whole_area": 0x0e,      # WholeArea
     "zone": 0x04,            # LiveZone
     "large_zone_h": 0x07,    # LiveZoneLargeH
@@ -147,7 +147,7 @@ COLOR_SPACE_MAP = {
 # --- Drive Mode ---
 kEdsDriveMode_Single = 0x00000000
 
-# --- Av (Aperture) values — EDSDK uses hex codes ---
+# --- Av (Aperture) values - EDSDK uses hex codes ---
 AV_MAP = {
     "1.0": 0x08, "1.1": 0x0B, "1.2": 0x0D, "1.4": 0x10,
     "1.6": 0x13, "1.8": 0x15, "2.0": 0x18, "2.2": 0x1B,
@@ -158,7 +158,7 @@ AV_MAP = {
     "16": 0x48, "18": 0x4B, "20": 0x4D, "22": 0x50,
 }
 
-# --- Tv (Shutter speed) values — EDSDK uses hex codes ---
+# --- Tv (Shutter speed) values - EDSDK uses hex codes ---
 TV_MAP = {
     "30": 0x10, "25": 0x13, "20": 0x15, "15": 0x18,
     "13": 0x1B, "10": 0x1D, "8": 0x20, "6": 0x23,

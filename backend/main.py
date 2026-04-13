@@ -1,7 +1,7 @@
-"""Photobooth backend — FastAPI + WebSocket.
+"""Photobooth backend - FastAPI + WebSocket.
 
 State machine:
-  IDLE → COUNTDOWN → CAPTURE → FREEZE → (repeat num_photos times) → TEMPLATE_SELECT → COMPOSING → PRINTING → IDLE
+  IDLE -> COUNTDOWN -> CAPTURE -> FREEZE -> (repeat num_photos times) -> TEMPLATE_SELECT -> COMPOSING -> PRINTING -> IDLE
 """
 
 import asyncio
@@ -92,13 +92,13 @@ async def set_state(new_state: str, extra: dict | None = None):
     msg = {"type": "state", "state": new_state}
     if extra:
         msg.update(extra)
-    log.info(f"State → {new_state}")
+    log.info(f"State -> {new_state}")
     await broadcast(msg)
 
 
 # --- Callbacks from EDSDK thread ---
 def on_evf_frame(jpeg_bytes: bytes):
-    """Called from EDSDK thread — forward to clients + record video."""
+    """Called from EDSDK thread - forward to clients + record video."""
     video_recorder.add_frame(jpeg_bytes)
     if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(broadcast_binary(jpeg_bytes), _event_loop)
@@ -149,7 +149,7 @@ async def run_session():
         log.info("Live view started")
     video_recorder.start(session_dir)
 
-    # Countdown → capture loop (live view continues throughout)
+    # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
         n = photo_idx + 1
         log.info(f"Countdown {n}/{num_photos} started ({countdown_sec}s)")

@@ -1,8 +1,8 @@
 """Print service for DNP RX1HS.
 
 Two modes:
-  1. Hot Folder — copy image to watched folder, DNP utility prints automatically
-  2. Windows Print Driver — send to printer via win32print / subprocess
+  1. Hot Folder - copy image to watched folder, DNP utility prints automatically
+  2. Windows Print Driver - send to printer via win32print / subprocess
 
 Print queue runs in background, one job at a time.
 """
@@ -42,7 +42,7 @@ async def _process_queue():
 
 
 def _do_print(image_path: str, config: dict):
-    """Execute print — runs in thread pool."""
+    """Execute print - runs in thread pool."""
     hot_folder = config.get("hot_folder", "")
     printer_name = config.get("printer_name", "")
 
@@ -53,7 +53,7 @@ def _do_print(image_path: str, config: dict):
 
 
 def _print_hot_folder(image_path: str, folder: str):
-    """Copy image to DNP Hot Folder — utility handles the rest."""
+    """Copy image to DNP Hot Folder - utility handles the rest."""
     dest = Path(folder) / Path(image_path).name
     shutil.copy2(image_path, dest)
     log.info(f"Copied to hot folder: {dest}")
