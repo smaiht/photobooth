@@ -14,25 +14,31 @@ log = logging.getLogger(__name__)
 
 WEBDAV_BASE = "https://webdav.yandex.ru"
 UPLOAD_PATH = "/_traffic/photos_to_vps"
-LOGIN = os.environ.get("YADISK_LOGIN", "")
-PASSWORD = os.environ.get("YADISK_PASSWORD", "")
 
 
 async def yadisk_upload(session_id: str, photos: list[str],
                         collage: str | None, video: str | None):
-    if not LOGIN or not PASSWORD:
-        log.warning("YADISK credentials not set, skipping")
+    login = os.environ.get("YADISK_LOGIN", "")
+    password = os.environ.get("YADISK_PASSWORD", "")
+
+    if not login or not password:
+        log.warning(f"Yandex Disk: credentials not set (login={'set' if login else 'EMPTY'}, password={'set' if password else 'EMPTY'})")
         return
+
+    log.info(f"Yandex Disk: packing session {session_id}...")
 
     try:
         zip_path = await asyncio.get_event_loop().run_in_executor(
             None, _make_zip, session_id, photos, collage, video
         )
-        await _upload_webdav(zip_path)
+        size_mb = Path(zip_path).stat().st_size / 1024 / 1024
+        log.info(f"Yandex Disk: archive ready {size_mb:.1f}MB, uploading...")
+
+        await _upload_webdav(zip_path, login, password)
         Path(zip_path).unlink(missing_ok=True)
-        log.info(f"Yandex Disk: uploaded {Path(zip_path).name}")
+        log.info(f"Yandex Disk: uploaded {Path(zip_path).name} ({size_mb:.1f}MB)")
     except Exception as e:
-        log.warning(f"Yandex Disk upload failed: {e}")
+        log.error(f"Yandex Disk: upload failed: {e}")
 
 
 def _make_zip(session_id: str, photos: list[str],
@@ -61,13 +67,13 @@ def _make_zip(session_id: str, photos: list[str],
     return zip_path
 
 
-async def _upload_webdav(file_path: str):
+async def _upload_webdav(file_path: str, login: str, password: str):
     import aiohttp
 
     data = Path(file_path).read_bytes()
     md5 = hashlib.md5(data).hexdigest()
     sha256 = hashlib.sha256(data).hexdigest().upper()
-    auth = base64.b64encode(f"{LOGIN}:{PASSWORD}".encode()).decode()
+    auth = base64.b64encode(f"{login}:{password}".encode()).decode()
     url = f"{WEBDAV_BASE}{UPLOAD_PATH}/{Path(file_path).name}"
 
     async with aiohttp.ClientSession() as session:
