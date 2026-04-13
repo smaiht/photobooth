@@ -131,6 +131,14 @@ def on_camera_connected():
 
 # --- Session flow ---
 async def run_session():
+    try:
+        await _run_session()
+    except Exception:
+        log.exception("Session error")
+        await set_state("idle")
+
+
+async def _run_session():
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
 
     SESSION_COUNT += 1
@@ -212,6 +220,7 @@ async def run_session():
         template_dir = TEMPLATES_DIR / "default"
 
         def _compose():
+            log.info(f"Composing {selected_template} with {len(SESSION_PHOTOS)} photos...")
             result = compose(template_dir, selected_template, SESSION_PHOTOS[:4], CONFIG)
             path = session_dir / f"print_{selected_template}.jpg"
             result.save(str(path), "JPEG", quality=95, dpi=(300, 300))
