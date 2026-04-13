@@ -1,11 +1,9 @@
 """Upload session ZIP to Beeline Cloud via WebDAV."""
 
 import asyncio
-import json
 import logging
 import os
 import zipfile
-from datetime import datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -59,23 +57,12 @@ def _make_zip(session_id: str, photos: list[str],
     session_dir = Path(photos[0]).parent if photos else Path(".")
     zip_path = str(session_dir / f"{session_id}.zip")
 
-    meta = {
-        "session_id": session_id,
-        "timestamp": datetime.now().isoformat(),
-        "photos": [Path(p).name for p in photos],
-        "collage": Path(collage).name if collage else None,
-        "video": Path(video).name if video else None,
-    }
-
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-        zf.writestr("meta.json", json.dumps(meta, ensure_ascii=False))
-        for p in photos:
+        for i, p in enumerate(photos):
             if Path(p).exists():
-                zf.write(p, Path(p).name)
-        if collage and Path(collage).exists():
-            zf.write(collage, Path(collage).name)
+                zf.write(p, f"photo_{i+1}.jpg")
         if video and Path(video).exists():
-            zf.write(video, Path(video).name)
+            zf.write(video, "video.mp4")
 
     return zip_path
 
