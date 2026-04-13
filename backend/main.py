@@ -264,7 +264,9 @@ async def get_config():
 
 @app.post("/api/shutdown")
 async def shutdown():
-    """Full stop. Used by Telegram bot /stop."""
+    """Full stop."""
+    if camera:
+        camera._cleanup()
     os._exit(0)
 
 

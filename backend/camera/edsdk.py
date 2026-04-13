@@ -9,6 +9,7 @@ import ctypes.wintypes
 import threading
 import time
 import logging
+import atexit
 from pathlib import Path
 from queue import Queue, Empty
 
@@ -139,6 +140,7 @@ class Camera:
                     self._register_handlers()
                     self._connected = True
                     log.info("Camera ready")
+                    atexit.register(self._cleanup)
                     if self._connected_cb:
                         self._connected_cb()
                 except RuntimeError:
