@@ -197,11 +197,13 @@ async def _run_session():
 
     # Template selection
     await set_state("template_select")
+    log.info("Waiting for template choice...")
     selected_template = CONFIG["default_template"]
     template_event = asyncio.Event()
     chosen = {"template": selected_template}
 
     def on_template_choice(t):
+        log.info(f"Template chosen: {t}")
         chosen["template"] = t
         template_event.set()
 
@@ -209,18 +211,21 @@ async def _run_session():
     try:
         await asyncio.wait_for(template_event.wait(), timeout=CONFIG["template_select_timeout"])
     except asyncio.TimeoutError:
-        pass
+        log.info(f"Template timeout, using default: {selected_template}")
     selected_template = chosen["template"]
+    log.info(f"Selected template: {selected_template}")
 
     # Compose collage
     await set_state("composing")
+    log.info(f"SESSION_PHOTOS: {SESSION_PHOTOS}")
     output_path = None
     if SESSION_PHOTOS:
         from .config import TEMPLATES_DIR
         template_dir = TEMPLATES_DIR / "default"
+        log.info(f"Template dir: {template_dir}, exists: {template_dir.exists()}")
 
         def _compose():
-            log.info(f"Composing {selected_template} with {len(SESSION_PHOTOS)} photos...")
+            log.info(f"Composing {selected_template}...")
             result = compose(template_dir, selected_template, SESSION_PHOTOS[:4], CONFIG)
             path = session_dir / f"print_{selected_template}.jpg"
             result.save(str(path), "JPEG", quality=95, dpi=(300, 300))
@@ -228,6 +233,8 @@ async def _run_session():
 
         output_path = await asyncio.get_event_loop().run_in_executor(None, _compose)
         log.info(f"Composed: {output_path}")
+    else:
+        log.warning("No photos to compose!")
 
     # Show result screen with QR code
     vps_url = os.environ.get("VPS_URL", "")
