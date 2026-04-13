@@ -77,6 +77,12 @@ async def _upload_webdav(file_path: str, login: str, password: str):
     url = f"{WEBDAV_BASE}{UPLOAD_PATH}/{Path(file_path).name}"
 
     async with aiohttp.ClientSession() as session:
+        # Ensure folder exists
+        async with session.request("MKCOL", f"{WEBDAV_BASE}{UPLOAD_PATH}/", headers={
+            "Authorization": f"Basic {auth}",
+        }) as resp:
+            pass  # 201=created, 405=already exists, both ok
+
         async with session.put(url, data=data, headers={
             "Authorization": f"Basic {auth}",
             "Content-Type": "application/binary",
