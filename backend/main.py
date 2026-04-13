@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
 from .composer import compose
 from .video import VideoRecorder
-from .yadisk import yadisk_upload
+from .cloud import cloud_upload, cloud_init
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -229,7 +229,7 @@ async def run_session():
     session_id = SESSION_ID
     async def _bg_upload():
         video_file = await video_future
-        await yadisk_upload(session_id, photos_copy,
+        await cloud_upload(session_id, photos_copy,
                             str(output_path) if output_path else None,
                             video_file)
     asyncio.create_task(_bg_upload())
@@ -312,3 +312,5 @@ async def startup():
         log.info("Camera started")
     else:
         log.info("Running without camera (not Windows or EDSDK not found)")
+
+    asyncio.create_task(cloud_init())
