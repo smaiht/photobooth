@@ -18,9 +18,8 @@ from fastapi.responses import FileResponse
 
 from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
 from .composer import compose
-from .uploader import Uploader
 from .video import VideoRecorder
-from .bot import start_bot
+from .yadisk import yadisk_upload
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -65,10 +64,6 @@ if sys.platform == "win32":
         log.warning(f"EDSDK not available: {e}")
 
 # --- Services ---
-uploader = Uploader({
-    "tg_bot_token": os.environ.get("TG_BOT_TOKEN", ""),
-    "tg_chat_id": os.environ.get("TG_CHAT_ID", ""),
-})
 video_recorder = VideoRecorder()
 _event_loop = None
 
@@ -234,12 +229,9 @@ async def run_session():
     session_id = SESSION_ID
     async def _bg_upload():
         video_file = await video_future
-        await uploader.upload_session(
-            session_id=session_id,
-            photos=photos_copy,
-            collage=str(output_path) if output_path else None,
-            video=video_file,
-        )
+        await yadisk_upload(session_id, photos_copy,
+                            str(output_path) if output_path else None,
+                            video_file)
     asyncio.create_task(_bg_upload())
 
     await set_state("idle")
@@ -318,26 +310,3 @@ async def startup():
         log.info("Camera started")
     else:
         log.info("Running without camera (not Windows or EDSDK not found)")
-
-    # Periodic retry of failed Telegram uploads
-    async def retry_loop():
-        while True:
-            await asyncio.sleep(30)
-            await uploader.retry_pending()
-
-    asyncio.create_task(retry_loop())
-
-    # Status callback for bot
-    def get_status():
-        return {
-            "state": STATE,
-            "session_count": SESSION_COUNT,
-            "print_enabled": CONFIG.get("print_enabled", False),
-            "tg_enabled": bool(uploader.tg_bot_token and uploader.tg_chat_id),
-            "reset_to_idle": lambda: asyncio.create_task(set_state("idle")),
-        }
-
-    # Start Telegram admin bot
-    token = os.environ.get("TG_BOT_TOKEN", "")
-    admin_id = int(os.environ.get("TG_ADMIN_ID", "0") or "0")
-    asyncio.create_task(start_bot(token, admin_id, get_status))
