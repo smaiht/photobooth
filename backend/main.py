@@ -174,7 +174,7 @@ async def run_session():
         log.info("Live view stopped")
 
         if len(SESSION_PHOTOS) < num_photos:
-            await broadcast({"type": "error", "message": "Ошибка загрузки фото. Попробуйте снова."})
+            await broadcast({"type": "error", "message": "Photo download error. Try again."})
             await asyncio.sleep(3)
             await set_state("idle")
             return
