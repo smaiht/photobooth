@@ -245,13 +245,33 @@ class Camera:
         _check("EdsGetDeviceInfo", self._sdk.EdsGetDeviceInfo(self._camera, ctypes.byref(info)))
         log.info(f"Camera: {info.szDeviceDescription.decode()}")
 
-        # Retry OpenSession - camera may need time after USB connect
+        # Retry OpenSession - full reset cycle if stale session from previous crash
         for attempt in range(5):
             err = self._sdk.EdsOpenSession(self._camera)
             if err == EDS_ERR_OK:
                 log.info("Session opened")
                 return
             log.warning(f"OpenSession attempt {attempt+1}/5 failed: 0x{err:08X}")
+            # Full reset: close stale session, release ref, re-acquire camera
+            try:
+                self._sdk.EdsCloseSession(self._camera)
+            except Exception:
+                pass
+            try:
+                self._sdk.EdsRelease(self._camera)
+            except Exception:
+                pass
+            # Re-init SDK and get fresh camera reference
+            try:
+                self._sdk.EdsTerminateSDK()
+                self._sdk.EdsInitializeSDK()
+                camera_list = EdsBaseRef()
+                self._sdk.EdsGetCameraList(ctypes.byref(camera_list))
+                self._camera = EdsBaseRef()
+                self._sdk.EdsGetChildAtIndex(camera_list, 0, ctypes.byref(self._camera))
+                self._sdk.EdsRelease(camera_list)
+            except Exception:
+                pass
             time.sleep(2)
         raise RuntimeError(f"Failed to open camera session after 5 attempts")
 
