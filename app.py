@@ -88,34 +88,39 @@ def wait_and_load(window):
             time.sleep(0.5)
 
 
-_update_log = []
+_UPDATE_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".update_log")
 
 def auto_update():
     """Git pull + pip install before starting. Restart if code changed."""
+    lines = []
     if getattr(sys, 'frozen', False):
-        _update_log.append("Skipped: frozen exe")
+        lines.append("Skipped: frozen exe")
+        open(_UPDATE_LOG, "w").write("\n".join(lines))
         return
     import subprocess, socket
     try:
         socket.create_connection(("github.com", 443), timeout=5)
-        _update_log.append("Network: OK")
+        lines.append("Network: OK")
     except OSError as e:
-        _update_log.append(f"Network: no connection ({e})")
+        lines.append(f"Network: no connection ({e})")
+        open(_UPDATE_LOG, "w").write("\n".join(lines))
         return
     app_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         r = subprocess.run(["git", "pull"], cwd=app_dir, capture_output=True, text=True, timeout=15)
         out = (r.stdout or "").strip()
         err = (r.stderr or "").strip()
-        _update_log.append(f"git pull: {out} {err}")
+        lines.append(f"git pull: {out} {err}")
         if out and "Already up to date" not in out:
             r2 = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"],
                                 cwd=app_dir, capture_output=True, text=True, timeout=60)
-            _update_log.append(f"pip install: done ({(r2.stderr or '').strip()})")
-            _update_log.append("Restarting with new code...")
+            lines.append(f"pip install: done ({(r2.stderr or '').strip()})")
+            lines.append("Restarting with new code...")
+            open(_UPDATE_LOG, "w").write("\n".join(lines))
             os.execv(sys.executable, [sys.executable] + sys.argv)
     except Exception as e:
-        _update_log.append(f"Error: {e}")
+        lines.append(f"Error: {e}")
+    open(_UPDATE_LOG, "w").write("\n".join(lines))
 
 
 def main():

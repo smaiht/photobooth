@@ -329,9 +329,10 @@ async def startup():
     _event_loop = asyncio.get_event_loop()
 
     # Log auto-update results
-    from app import _update_log
-    for msg in _update_log:
-        log.info(f"[update] {msg}")
+    update_log = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".update_log")
+    if os.path.exists(update_log):
+        for line in open(update_log).read().strip().splitlines():
+            log.info(f"[update] {line}")
 
     if camera:
         camera.set_callbacks(
