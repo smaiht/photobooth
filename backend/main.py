@@ -301,14 +301,18 @@ async def shutdown():
 async def restart():
     """Restart the app — spawn new process, kill old."""
     import subprocess
-    si = None
-    if sys.platform == "win32":
-        si = subprocess.STARTUPINFO()
-        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
-    if camera:
-        camera._cleanup()
-    os._exit(0)
+
+    def _do_restart():
+        si = None
+        if sys.platform == "win32":
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
+        time.sleep(1)  # let new process start
+        os._exit(0)
+
+    threading.Thread(target=_do_restart, daemon=True).start()
+    return {"status": "restarting"}
 
 
 @app.websocket("/ws")
