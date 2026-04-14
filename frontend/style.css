@@ -188,18 +188,18 @@ html, body {
 /* Debug log overlay */
 #debug-log {
     position: fixed;
-    bottom: 0;
+    top: 0;
     left: 0;
     right: 0;
-    max-height: 30vh;
+    bottom: 0;
     overflow-y: auto;
-    background: rgba(0,0,0,0.75);
+    background: rgba(0,0,0,0.5);
     color: #0f0;
     font-family: monospace;
     font-size: 1.2vw;
     white-space: pre-wrap;
-    padding: 1vh 1vw;
-    z-index: 9999;
+    padding: 5vh 1vw 1vh;
+    z-index: 9998;
     pointer-events: none;
 }
 #debug-log[hidden] { display: none; }

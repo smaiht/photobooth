@@ -63,6 +63,10 @@
         <div id="flash-overlay"></div>
         <div id="last-qr" hidden></div>
         <div id="debug-log" hidden></div>
+        <button id="debug-toggle" hidden onclick="const l=document.getElementById('debug-log');l.hidden=!l.hidden"
+            style="position:fixed;top:10px;left:10px;z-index:9999;padding:8px 16px;
+            background:#333;color:#0f0;border:none;border-radius:4px;font-size:14px;cursor:pointer;opacity:0.7">
+            LOGS</button>
         <button id="debug-restart" hidden onclick="this.disabled=true;this.textContent='RESTARTING...';fetch('/api/restart',{method:'POST'})"
             style="position:fixed;top:10px;right:10px;z-index:9999;padding:8px 16px;
             background:#c00;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer">
