@@ -183,7 +183,7 @@ html, body {
     bottom: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    background: rgba(0,0,0,0.5);
+    background: rgba(0,0,0,0.75);
     color: #0f0;
     font-family: monospace;
     font-size: 1.2vw;
