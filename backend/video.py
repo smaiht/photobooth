@@ -7,6 +7,7 @@ Inserts captured photos (resized) at capture moments, frozen for 1.5s.
 import subprocess
 import logging
 import shutil
+import sys
 from pathlib import Path
 from PIL import Image
 import io
