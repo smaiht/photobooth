@@ -437,16 +437,18 @@ class Camera:
                 self._sdk.EdsRelease(stream)
 
     def _do_capture(self):
-        # TakePicture includes AF + capture. Retry if AF fails.
-        for attempt in range(3):
+        for attempt in range(5):
             err = self._sdk.EdsSendCommand(
                 self._camera, kEdsCameraCommand_TakePicture, 0)
             if err == EDS_ERR_OK:
                 log.info("Capture triggered")
                 return
-            log.warning(f"Capture attempt {attempt+1}/3 failed: 0x{err:08X}")
-            time.sleep(0.5)
-        log.error("Capture failed after 3 attempts")
+            log.warning(f"Capture attempt {attempt+1}/5 failed: 0x{err:08X}")
+            # Pump events while waiting — camera may be busy downloading
+            for _ in range(10):
+                self._sdk.EdsGetEvent()
+                time.sleep(0.1)
+        log.error("Capture failed after 5 attempts")
 
     def _download_photo(self, dir_item):
         """Download captured photo from camera to disk."""

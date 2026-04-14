@@ -216,7 +216,10 @@ async def _run_session():
     log.info(f"Selected template: {selected_template}")
 
     # Compose collage
-    await set_state("composing")
+    vps_url = os.environ.get("VPS_URL", "")
+    vps_path = os.environ.get("VPS_SESSION_PATH", "/s")
+    session_url = f"{vps_url}{vps_path}/{SESSION_ID}" if vps_url else ""
+    await set_state("composing", {"session_url": session_url})
     log.info(f"SESSION_PHOTOS: {SESSION_PHOTOS}")
     output_path = None
     if SESSION_PHOTOS:
@@ -236,14 +239,7 @@ async def _run_session():
     else:
         log.warning("No photos to compose!")
 
-    # Show result screen with QR code
-    vps_url = os.environ.get("VPS_URL", "")
-    vps_path = os.environ.get("VPS_SESSION_PATH", "/s")
-    session_url = f"{vps_url}{vps_path}/{SESSION_ID}" if vps_url else ""
-    await set_state("done", {
-        "session_url": session_url,
-        "collage": f"/photos/{SESSION_ID}/{output_path.name}" if output_path else "",
-    })
+    await set_state("done")
 
     # Print in background
     if CONFIG["print_enabled"] and output_path:

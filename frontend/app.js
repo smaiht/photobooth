@@ -148,10 +148,8 @@ function switchScreen(state, data = {}) {
         startTemplateTimer(data.timeout ?? 5);
     }
 
-    // Composing — just show done screen (already mapped above)
-
-    // Done — show QR modal
-    if (state === "done") {
+    // Composing — show QR immediately
+    if (state === "composing") {
         if (data.session_url) {
             showQrModal(data.session_url, "Скачать оригиналы");
         }
