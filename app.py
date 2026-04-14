@@ -38,15 +38,17 @@ DOTS_SVG = (
     '</svg>'
 )
 
-FONT_PATH = str(Path(__file__).parent / "frontend" / "assets" / "fonts" / "Comfortaa-VariableFont_wght.ttf")
+FONT_PATH = Path(__file__).parent / "frontend" / "assets" / "fonts" / "Comfortaa-VariableFont_wght.ttf"
 
-LOADING_HTML = f"""
+def _build_loading_html():
+    import base64
+    font_b64 = base64.b64encode(FONT_PATH.read_bytes()).decode("ascii")
+    return f"""
 <html>
 <head><style>
 @font-face {{
     font-family: 'Comfortaa';
-    src: url('file:///{FONT_PATH}') format('truetype');
-    font-weight: 300 700;
+    src: url('data:font/truetype;base64,{font_b64}') format('truetype');
 }}
 </style></head>
 <body style="margin:0; background:#fff; display:flex; align-items:center;
@@ -167,7 +169,7 @@ def main():
     import webview
     window = webview.create_window(
         title="Photobooth",
-        html=LOADING_HTML,
+        html=_build_loading_html(),
         fullscreen=not dev,
         width=1200,
         height=900,
