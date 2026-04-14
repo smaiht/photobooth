@@ -328,6 +328,11 @@ async def startup():
     global _event_loop
     _event_loop = asyncio.get_event_loop()
 
+    # Log auto-update results
+    from app import _update_log
+    for msg in _update_log:
+        log.info(f"[update] {msg}")
+
     if camera:
         camera.set_callbacks(
             on_evf_frame=on_evf_frame,

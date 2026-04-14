@@ -88,24 +88,34 @@ def wait_and_load(window):
             time.sleep(0.5)
 
 
+_update_log = []
+
 def auto_update():
     """Git pull + pip install before starting. Restart if code changed."""
     if getattr(sys, 'frozen', False):
+        _update_log.append("Skipped: frozen exe")
         return
     import subprocess, socket
     try:
-        socket.create_connection(("github.com", 443), timeout=3)
-    except OSError:
+        socket.create_connection(("github.com", 443), timeout=5)
+        _update_log.append("Network: OK")
+    except OSError as e:
+        _update_log.append(f"Network: no connection ({e})")
         return
     app_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         r = subprocess.run(["git", "pull"], cwd=app_dir, capture_output=True, text=True, timeout=15)
-        if r.stdout and "Already up to date" not in r.stdout:
-            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"],
-                           cwd=app_dir, capture_output=True, timeout=60)
+        out = (r.stdout or "").strip()
+        err = (r.stderr or "").strip()
+        _update_log.append(f"git pull: {out} {err}")
+        if out and "Already up to date" not in out:
+            r2 = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"],
+                                cwd=app_dir, capture_output=True, text=True, timeout=60)
+            _update_log.append(f"pip install: done ({(r2.stderr or '').strip()})")
+            _update_log.append("Restarting with new code...")
             os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception:
-        pass
+    except Exception as e:
+        _update_log.append(f"Error: {e}")
 
 
 def main():
