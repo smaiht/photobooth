@@ -293,16 +293,18 @@ async def get_config():
 async def shutdown():
     """Full stop."""
     if camera:
-        camera._cleanup()
+        await asyncio.get_event_loop().run_in_executor(None, camera.stop)
     os._exit(0)
 
 
 @app.post("/api/restart")
 async def restart():
-    """Restart the app — spawn new process, kill old."""
+    """Restart the app — stop camera, spawn new process, kill old."""
     log.info("Restart requested!")
     if camera:
-        camera._cleanup()
+        log.info("Stopping camera...")
+        await asyncio.get_event_loop().run_in_executor(None, camera.stop)
+        log.info("Camera stopped")
     import subprocess
     si = None
     if sys.platform == "win32":
@@ -311,8 +313,6 @@ async def restart():
     log.info(f"Spawning: {sys.executable} {sys.argv}")
     subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
     await asyncio.sleep(1)
-    log.info("Killing old process...")
-
     os._exit(0)
 
 
