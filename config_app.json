@@ -1,5 +1,6 @@
 {
-    "countdown_seconds": 5,
+    "photo_interval": 5,
+    "countdown_from": 3,
     "num_photos": 4,
     "template_select_timeout": 5,
     "default_template": "strips",

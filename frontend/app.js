@@ -86,7 +86,7 @@ function handleMessage(msg) {
             break;
         case "countdown":
             showCountdown(msg.value);
-            if (msg.value <= 3) beep(440 + (3 - msg.value) * 110, 500);
+            if (msg.value <= config.countdown_from) beep(440 + (config.countdown_from - msg.value) * 110, 500);
             break;
         case "flash":
             beep(880, 500);
@@ -199,7 +199,9 @@ screens.idle.addEventListener("click", () => {
 });
 
 // --- Config ---
+let config = {};
 fetch("/api/config").then(r => r.json()).then(cfg => {
+    config = cfg;
     if (cfg.mirror_live_view) liveView.style.transform = "scaleX(-1)";
 });
 

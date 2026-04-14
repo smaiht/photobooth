@@ -150,7 +150,8 @@ async def _run_session():
     log.info(f"=== Session {SESSION_ID} started ===")
 
     num_photos = CONFIG["num_photos"]
-    countdown_sec = CONFIG["countdown_seconds"]
+    interval = CONFIG["photo_interval"]
+    countdown_from = CONFIG["countdown_from"]
 
     # Start live view + video recording
     if camera:
@@ -162,9 +163,12 @@ async def _run_session():
     # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
         n = photo_idx + 1
-        log.info(f"Countdown {n}/{num_photos} started ({countdown_sec}s)")
+        log.info(f"Photo {n}/{num_photos}: waiting {interval}s (countdown last {countdown_from}s)")
         await set_state("countdown", {"photo_index": photo_idx, "total": num_photos})
-        for sec in range(countdown_sec, 0, -1):
+        silent = interval - countdown_from
+        if silent > 0:
+            await asyncio.sleep(silent)
+        for sec in range(countdown_from, 0, -1):
             await broadcast({"type": "countdown", "value": sec})
             await asyncio.sleep(1)
         log.info(f"Countdown {n}/{num_photos} finished")
