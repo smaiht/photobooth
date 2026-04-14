@@ -23,7 +23,6 @@ logging.basicConfig(
     ],
 )
 
-# test: trigger git pull update
 LOADING_HTML = """
 <html>
 <body style="margin:0;background:#fff;color:#000;display:flex;align-items:center;
