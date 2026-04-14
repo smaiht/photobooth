@@ -212,7 +212,7 @@ async def cloud_poll_commands():
         except Exception as e:
             log.warning(f"Cloud: poll error: {e}")
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
 
 
 def handle_command(cmd: str, data: str | None):
