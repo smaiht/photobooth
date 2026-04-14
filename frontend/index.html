@@ -63,6 +63,10 @@
         <div id="flash-overlay"></div>
         <div id="last-qr" hidden></div>
         <div id="debug-log" hidden></div>
+        <button id="debug-restart" hidden onclick="fetch('/api/restart',{method:'POST'})"
+            style="position:fixed;top:10px;right:10px;z-index:9999;padding:8px 16px;
+            background:#c00;color:#fff;border:none;border-radius:4px;font-size:14px;cursor:pointer">
+            RESTART</button>
     </div>
 
     <script src="/assets/qrcode.min.js"></script>

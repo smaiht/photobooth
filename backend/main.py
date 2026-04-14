@@ -297,6 +297,14 @@ async def shutdown():
     os._exit(0)
 
 
+@app.post("/api/restart")
+async def restart():
+    """Restart the app (re-exec)."""
+    if camera:
+        camera._cleanup()
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()

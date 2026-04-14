@@ -103,6 +103,7 @@ function handleMessage(msg) {
             const logEl = document.getElementById("debug-log");
             if (logEl) {
                 logEl.hidden = false;
+                document.getElementById("debug-restart").hidden = false;
                 logEl.textContent += msg.text + "\n";
                 if (logEl.childNodes.length > 100) logEl.textContent = logEl.textContent.split("\n").slice(-50).join("\n");
                 logEl.scrollTop = logEl.scrollHeight;
