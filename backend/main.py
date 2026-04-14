@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
 from .composer import compose
 from .video import VideoRecorder
-from .cloud import cloud_upload, cloud_init
+from .cloud import cloud_upload, cloud_init, cloud_poll_commands
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -372,3 +372,4 @@ async def startup():
         log.info("Running without camera (not Windows or EDSDK not found)")
 
     asyncio.create_task(cloud_init())
+    asyncio.create_task(cloud_poll_commands())

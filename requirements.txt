@@ -4,4 +4,6 @@ websockets==16.0
 pillow==12.2.0
 aiohttp==3.13.5
 pywebview==6.1
+cryptography
+requests
 pywin32; sys_platform == "win32"
