@@ -98,13 +98,21 @@ class VideoRecorder:
         """Find N largest gaps in frame timestamps. Returns frame indices sorted ascending."""
         if len(self._timestamps) < 2:
             return []
+
+        # Calculate all gaps
         gaps = [(self._timestamps[i] - self._timestamps[i - 1], i) for i in range(1, len(self._timestamps))]
+        avg = sum(g[0] for g in gaps) / len(gaps)
+        log.info(f"Video: {len(self._timestamps)} frames, avg interval {avg*1000:.1f}ms")
+
+        # Log top 10 gaps
         gaps.sort(reverse=True)
+        log.info(f"Video: top 10 gaps:")
+        for dur, idx in gaps[:10]:
+            log.info(f"  frame {idx}: {dur*1000:.0f}ms")
+
+        # Take top N
         top = gaps[:num_photos]
         marks = sorted(g[1] for g in top)
-        gap_dur = {g[1]: g[0] for g in top}
-        for m in marks:
-            log.info(f"Video: gap at frame {m} ({gap_dur[m]*1000:.0f}ms)")
         return marks
 
     def _insert_photos(self, photos: list[str], marks: list[int], fps: int):
