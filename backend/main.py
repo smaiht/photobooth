@@ -329,7 +329,8 @@ async def startup():
     _event_loop = asyncio.get_event_loop()
 
     # Log auto-update results
-    update_log = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".update_log")
+    from .config import RUN_DIR
+    update_log = os.path.join(RUN_DIR, ".update_log")
     if os.path.exists(update_log):
         for line in open(update_log).read().strip().splitlines():
             log.info(f"[update] {line}")

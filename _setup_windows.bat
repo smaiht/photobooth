@@ -14,6 +14,7 @@ if not exist "C:\photobooth\venv\Scripts\pythonw.exe" (
     python -m venv C:\photobooth\venv
     C:\photobooth\venv\Scripts\pip.exe install -q -r C:\photobooth\requirements.txt
 )
+git config --system --add safe.directory C:/photobooth
 echo [OK]
 echo.
 
