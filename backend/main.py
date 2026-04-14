@@ -302,20 +302,15 @@ async def restart():
     """Restart the app — spawn new process, kill old."""
     log.info("Restart requested!")
     import subprocess
-
-    def _do_restart():
-        log.info("Spawning new process...")
-        si = None
-        if sys.platform == "win32":
-            si = subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
-        time.sleep(1)
-        log.info("Killing old process...")
-        os._exit(0)
-
-    threading.Thread(target=_do_restart, daemon=True).start()
-    return {"status": "restarting"}
+    si = None
+    if sys.platform == "win32":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    log.info(f"Spawning: {sys.executable} {sys.argv}")
+    subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
+    await asyncio.sleep(1)
+    log.info("Killing old process...")
+    os._exit(0)
 
 
 @app.websocket("/ws")
