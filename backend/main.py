@@ -299,10 +299,16 @@ async def shutdown():
 
 @app.post("/api/restart")
 async def restart():
-    """Restart the app (re-exec)."""
+    """Restart the app — spawn new process, kill old."""
+    import subprocess
+    si = None
+    if sys.platform == "win32":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
     if camera:
         camera._cleanup()
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+    os._exit(0)
 
 
 @app.websocket("/ws")

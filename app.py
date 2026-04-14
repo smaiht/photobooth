@@ -30,7 +30,7 @@ justify-content:center;height:100vh;font-family:system-ui;font-size:4vw">
 <div style="text-align:center">
 <div style="width:60px;height:60px;border:4px solid #ddd;border-top:4px solid #000;
 border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 30px"></div>
-Загрузка...123
+Загрузка...
 </div>
 <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
 </body>
@@ -115,7 +115,11 @@ def auto_update():
             lines.append(f"pip install: done ({(r2.stderr or '').strip()})")
             lines.append("Restarting with new code...")
             open(_UPDATE_LOG, "w").write("\n".join(lines))
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            # Spawn new process, kill old (Popen + _exit is safer than execv when pywebview is running)
+            subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
+            os._exit(0)
+            # Alternative: os.execv(sys.executable, [sys.executable] + sys.argv)
+            # Works when no GUI window is open, but may fail with pywebview active
     except Exception as e:
         lines.append(f"Error: {e}")
     open(_UPDATE_LOG, "w").write("\n".join(lines))
