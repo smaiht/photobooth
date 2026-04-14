@@ -48,15 +48,10 @@
 
         <!-- DONE: printing status -->
         <div class="screen" id="screen-done" hidden>
-            <svg class="print-icon" viewBox="0 0 64 64" fill="none" stroke="#222" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="16" y="4" width="32" height="16" rx="2"/>
-                <path d="M16 20H8a4 4 0 0 0-4 4v16a4 4 0 0 0 4 4h8m32-24h8a4 4 0 0 1 4 4v16a4 4 0 0 1-4 4h-8"/>
-                <rect x="16" y="36" width="32" height="24" rx="2"/>
-                <line x1="24" y1="46" x2="40" y2="46"/>
-                <line x1="24" y1="52" x2="36" y2="52"/>
-                <circle cx="52" cy="28" r="2" fill="#222" stroke="none"/>
-            </svg>
-            <div class="done-title">ИДЁТ ПЕЧАТЬ</div>
+            <div class="done-row">
+                <img src="/assets/dots.svg" class="dots-anim">
+                <div class="done-title">Идёт печать</div>
+            </div>
         </div>
 
         <!-- QR modal (persists across screens) -->

@@ -153,13 +153,13 @@ function switchScreen(state, data = {}) {
     // Done — show QR modal
     if (state === "done") {
         if (data.session_url) {
-            showQrModal(data.session_url, "Оригиналы фото можно скачать здесь ↗");
+            showQrModal(data.session_url, "Скачать оригиналы");
         }
     }
 
     // Idle — update QR text if visible
     if (state === "idle") {
-        updateQrText("Предыдущие фото здесь ↗");
+        updateQrText("Прошлые фото");
     }
 }
 

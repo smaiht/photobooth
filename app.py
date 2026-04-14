@@ -23,16 +23,28 @@ logging.basicConfig(
     ],
 )
 
-LOADING_HTML = """
+DOTS_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" style="width:6vw;height:6vw">'
+    '<circle fill="#FF2973" stroke="#FF2973" stroke-width="23" r="15" cx="40" cy="65">'
+    '<animate attributeName="cy" calcMode="spline" dur="2" values="65;135;65;" '
+    'keySplines=".5 0 .5 1;.5 0 .5 1" repeatCount="indefinite" begin="-.4"/></circle>'
+    '<circle fill="#FF2973" stroke="#FF2973" stroke-width="23" r="15" cx="100" cy="65">'
+    '<animate attributeName="cy" calcMode="spline" dur="2" values="65;135;65;" '
+    'keySplines=".5 0 .5 1;.5 0 .5 1" repeatCount="indefinite" begin="-.2"/></circle>'
+    '<circle fill="#FF2973" stroke="#FF2973" stroke-width="23" r="15" cx="160" cy="65">'
+    '<animate attributeName="cy" calcMode="spline" dur="2" values="65;135;65;" '
+    'keySplines=".5 0 .5 1;.5 0 .5 1" repeatCount="indefinite" begin="0"/></circle>'
+    '</svg>'
+)
+
+LOADING_HTML = f"""
 <html>
-<body style="margin:0;background:#fff;color:#000;display:flex;align-items:center;
-justify-content:center;height:100vh;font-family:system-ui;font-size:4vw">
-<div style="text-align:center">
-<div style="width:60px;height:60px;border:4px solid #ddd;border-top:4px solid #000;
-border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 30px"></div>
-Загрузка...
-</div>
-<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+<body style="margin:0; background:#fff; display:flex; align-items:center;
+             justify-content:center; height:100vh; font-family:system-ui">
+    <div style="display:flex; align-items:center; gap:2vw">
+        {DOTS_SVG}
+        <span style="font-size:3.5vw; font-weight:600; color:#FF2973">Загрузка</span>
+    </div>
 </body>
 </html>
 """

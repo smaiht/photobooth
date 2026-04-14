@@ -24,7 +24,7 @@ def build_session(session_id: str) -> aiohttp.ClientSession:
 
 
 async def list_notes(s: aiohttp.ClientSession) -> list[dict]:
-    async with s.get(f"{BASE}/notes/notes", timeout=aiohttp.ClientTimeout(total=15)) as r:
+    async with s.get(f"{BASE}/notes/notes", timeout=aiohttp.ClientTimeout(total=10)) as r:
         r.raise_for_status()
         notes = await r.json()
     if isinstance(notes, dict):
@@ -79,7 +79,7 @@ async def clear_note(s: aiohttp.ClientSession, note_id: str):
 
 async def get_db_revision(s: aiohttp.ClientSession) -> int:
     async with s.get(f"{BASE}/data/app/databases/.ext.yanotes@notes",
-                     timeout=aiohttp.ClientTimeout(total=15)) as r:
+                     timeout=aiohttp.ClientTimeout(total=10)) as r:
         r.raise_for_status()
         data = await r.json()
     return data.get("revision", 0)
@@ -88,7 +88,7 @@ async def get_db_revision(s: aiohttp.ClientSession) -> int:
 async def get_deltas(s: aiohttp.ClientSession, base_revision: int) -> dict:
     async with s.get(f"{BASE}/data/app/databases/.ext.yanotes@notes/deltas",
                      params={"base_revision": base_revision, "limit": 100},
-                     timeout=aiohttp.ClientTimeout(total=15)) as r:
+                     timeout=aiohttp.ClientTimeout(total=10)) as r:
         r.raise_for_status()
         return await r.json()
 

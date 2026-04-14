@@ -112,16 +112,24 @@ async def _upload(session_id: str, zip_path: str):
     note_id = _notes[title]
     log.info(f"Cloud: using slot {title}, {len(_free_notes)} free remaining")
 
-    data = Path(zip_path).read_bytes()
-    log.info(f"Cloud: ZIP size: {len(data)/1048576:.1f}MB")
+    # Heavy ops in executor to not block event loop
+    def _prepare():
+        data = Path(zip_path).read_bytes()
+        log.info(f"Cloud: ZIP size: {len(data)/1048576:.1f}MB")
+        payload = _encrypt(data)
+        log.info(f"Cloud: encrypted: {len(payload)/1048576:.1f}MB")
+        snippet = _encrypt_str(session_id)
+        return payload, snippet
 
-    payload = _encrypt(data)
-    log.info(f"Cloud: encrypted: {len(payload)/1048576:.1f}MB")
+    payload, encrypted_snippet = await asyncio.get_event_loop().run_in_executor(None, _prepare)
 
-    encrypted_snippet = _encrypt_str(session_id)
     log.info(f"Cloud: uploading to {title}...")
-    await put_note_content(_session, note_id, payload, snippet=encrypted_snippet)
-    log.info(f"Cloud: uploaded to {title} OK")
+    try:
+        await put_note_content(_session, note_id, payload, snippet=encrypted_snippet)
+        log.info(f"Cloud: uploaded to {title} OK")
+    except Exception as e:
+        _free_notes.add(title)  # return slot on failure
+        raise
 
 
 def _make_zip(session_id: str, photos: list[str], video: str | None) -> str:
