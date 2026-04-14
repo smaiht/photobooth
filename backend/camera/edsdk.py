@@ -437,18 +437,24 @@ class Camera:
                 self._sdk.EdsRelease(stream)
 
     def _do_capture(self):
-        for attempt in range(5):
+        # Use PressShutterButton with NonAF — skip autofocus, use current
+        # focus from continuous AF (servo). Avoids AF failures in low light.
+        for attempt in range(3):
             err = self._sdk.EdsSendCommand(
-                self._camera, kEdsCameraCommand_TakePicture, 0)
+                self._camera, kEdsCameraCommand_PressShutterButton,
+                kEdsCameraCommand_ShutterButton_Completely_NonAF)
             if err == EDS_ERR_OK:
-                log.info("Capture triggered")
+                log.info("Capture triggered (NonAF)")
+                # Release shutter button
+                self._sdk.EdsSendCommand(
+                    self._camera, kEdsCameraCommand_PressShutterButton,
+                    kEdsCameraCommand_ShutterButton_OFF)
                 return
-            log.warning(f"Capture attempt {attempt+1}/5 failed: 0x{err:08X}")
-            # Pump events while waiting — camera may be busy downloading
+            log.warning(f"Capture attempt {attempt+1}/3 failed: 0x{err:08X}")
             for _ in range(10):
                 self._sdk.EdsGetEvent()
                 time.sleep(0.1)
-        log.error("Capture failed after 5 attempts")
+        log.error("Capture failed after 3 attempts")
 
     def _download_photo(self, dir_item):
         """Download captured photo from camera to disk."""
