@@ -27,9 +27,14 @@ logging.basicConfig(
 
 LOADING_HTML = """
 <html>
-<body style="margin:0;background:#fff;color:#000;display:flex;align-items:center;
+<body style="margin:0;background:#000;color:#fff;display:flex;align-items:center;
 justify-content:center;height:100vh;font-family:system-ui;font-size:4vw">
+<div style="text-align:center">
+<div style="width:60px;height:60px;border:4px solid #333;border-top:4px solid #fff;
+border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 30px"></div>
 Загрузка...
+</div>
+<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
 </body>
 </html>
 """
