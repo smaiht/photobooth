@@ -303,6 +303,13 @@ async def websocket_endpoint(ws: WebSocket):
     CLIENTS.append(ws)
     await ws.send_text(json.dumps({"type": "state", "state": STATE}))
 
+    # Show update log on first client connect
+    update_log = getattr(app.state, "update_log_path", None)
+    if update_log and os.path.exists(update_log):
+        for line in open(update_log).read().strip().splitlines():
+            log.info(f"[update] {line}")
+        app.state.update_log_path = None
+
     try:
         while True:
             data = await ws.receive_text()
@@ -328,14 +335,10 @@ async def startup():
     global _event_loop
     _event_loop = asyncio.get_event_loop()
 
-    # Log auto-update results
+    # Log auto-update results (deferred - will show after WS connects)
     from .config import RUN_DIR
     update_log = os.path.join(RUN_DIR, ".update_log")
-    log.info(f"Update log path: {update_log}, exists: {os.path.exists(update_log)}")
-    if os.path.exists(update_log):
-        content = open(update_log).read().strip()
-        log.info(f"[update] {content}")
-    log.info(f"RUN_DIR: {RUN_DIR}")
+    app.state.update_log_path = update_log
 
     if camera:
         camera.set_callbacks(
