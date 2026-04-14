@@ -84,10 +84,14 @@ def wait_and_load(window):
 
 
 def auto_update():
-    """Git pull + pip install before starting. Silent, non-blocking on failure."""
+    """Git pull + pip install before starting. Skip if no network."""
     if getattr(sys, 'frozen', False):
-        return  # skip for exe builds
-    import subprocess
+        return
+    import subprocess, socket
+    try:
+        socket.create_connection(("github.com", 443), timeout=3)
+    except OSError:
+        return
     app_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         subprocess.run(["git", "pull"], cwd=app_dir, capture_output=True, timeout=15)
