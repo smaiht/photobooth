@@ -107,6 +107,7 @@ def on_evf_frame(jpeg_bytes: bytes):
 
 def on_photo_downloaded(file_path: str):
     SESSION_PHOTOS.append(file_path)
+    video_recorder.insert_photo(file_path)
     if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(
             broadcast({"type": "photo_taken", "index": len(SESSION_PHOTOS) - 1}),
@@ -166,12 +167,12 @@ async def _run_session():
         for sec in range(countdown_sec, 0, -1):
             await broadcast({"type": "countdown", "value": sec})
             await asyncio.sleep(1)
-        log.info(f"Countdown {n}/{num_photos} finished, sending capture command")
+        log.info(f"Countdown {n}/{num_photos} finished")
         if camera:
             camera.take_picture()
         await broadcast({"type": "flash"})
 
-    # Wait for all photos to download (live view still running)
+    # Wait for all photos to download
     if camera:
         log.info(f"Waiting for {num_photos} photos to download...")
         for _ in range(300):
@@ -191,7 +192,7 @@ async def _run_session():
     photos_copy = SESSION_PHOTOS[:]
     video_path = session_dir / "session.mp4"
     video_future = asyncio.get_event_loop().run_in_executor(
-        None, video_recorder.stop_and_encode, video_path, photos_copy, 30
+        None, video_recorder.stop_and_encode, video_path, 30
     )
 
     # Template selection
