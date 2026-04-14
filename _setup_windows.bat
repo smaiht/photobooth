@@ -5,13 +5,17 @@ echo   PHOTOBOOTH KIOSK SETUP (run as Admin!)
 echo ============================================
 echo.
 
-set EXE_PATH=C:\photobooth\dist\Photobooth.exe
-if not exist "%EXE_PATH%" (
-    echo [ERROR] %EXE_PATH% not found!
-    echo         Run build.bat first.
-    pause
-    exit /b 1
+set SHELL_PATH=C:\photobooth\venv\Scripts\pythonw.exe C:\photobooth\app.py
+
+:: 0. Ensure venv exists
+echo [0/3] Checking venv...
+if not exist "C:\photobooth\venv\Scripts\pythonw.exe" (
+    echo Creating venv...
+    python -m venv C:\photobooth\venv
+    C:\photobooth\venv\Scripts\pip.exe install -q -r C:\photobooth\requirements.txt
 )
+echo [OK]
+echo.
 
 :: 1. Create kiosk user
 echo [1/3] Creating Photobooth user...
@@ -21,7 +25,7 @@ echo [OK]
 
 :: 2. Set custom shell
 echo [2/3] Setting custom shell...
-powershell -ExecutionPolicy Bypass -File "%~dp0_set_shell.ps1" "%EXE_PATH%"
+powershell -ExecutionPolicy Bypass -File "%~dp0_set_shell.ps1" "%SHELL_PATH%"
 echo.
 
 :: 3. Auto-login
@@ -34,12 +38,8 @@ echo [OK]
 echo.
 
 echo ============================================
-echo   DONE!
-echo   1. Log in as Photobooth user once (if WARN above)
-echo   2. Log back to admin, re-run this script
-echo   3. Reboot to enter kiosk mode
-echo.
+echo   DONE! Reboot to enter kiosk mode.
 echo   Exit kiosk: Ctrl+Alt+Del, switch user
-echo   Undo: run undo_setup.bat as admin
+echo   Undo: run _undo_setup.bat as admin
 echo ============================================
 pause

@@ -1,4 +1,4 @@
-$exePath = $args[0]
+$exePath = $args -join ' '
 $sid = (New-Object System.Security.Principal.NTAccount('Photobooth')).Translate([System.Security.Principal.SecurityIdentifier]).Value
 $hivePath = "C:\Users\Photobooth\NTUSER.DAT"
 $loaded = $false

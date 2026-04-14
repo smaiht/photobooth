@@ -83,7 +83,22 @@ def wait_and_load(window):
             time.sleep(0.5)
 
 
+def auto_update():
+    """Git pull + pip install before starting. Silent, non-blocking on failure."""
+    if getattr(sys, 'frozen', False):
+        return  # skip for exe builds
+    import subprocess
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        subprocess.run(["git", "pull"], cwd=app_dir, capture_output=True, timeout=15)
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"],
+                       cwd=app_dir, capture_output=True, timeout=60)
+    except Exception:
+        pass
+
+
 def main():
+    auto_update()
     dev = "--dev" in sys.argv
     # Load .env (bundled inside exe or next to source)
     if getattr(sys, 'frozen', False):
