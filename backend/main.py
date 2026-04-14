@@ -331,9 +331,11 @@ async def startup():
     # Log auto-update results
     from .config import RUN_DIR
     update_log = os.path.join(RUN_DIR, ".update_log")
+    log.info(f"Update log path: {update_log}, exists: {os.path.exists(update_log)}")
     if os.path.exists(update_log):
-        for line in open(update_log).read().strip().splitlines():
-            log.info(f"[update] {line}")
+        content = open(update_log).read().strip()
+        log.info(f"[update] {content}")
+    log.info(f"RUN_DIR: {RUN_DIR}")
 
     if camera:
         camera.set_callbacks(
