@@ -1,75 +1,65 @@
-"""Yandex Notes transport layer.
+"""Yandex Notes transport layer (async, aiohttp)."""
 
-Uses Yandex Notes API to transfer data via note attributes.
-Data is encrypted with Fernet (AES-128-CBC) using a shared key.
-"""
-
-import base64
 import datetime
-import hashlib
 import json
 import logging
-import requests
+import aiohttp
 
 BASE = "https://cloud-api.yandex.ru/yadisk_web/v1"
 log = logging.getLogger(__name__)
 
-
-def make_fernet_key(password: str) -> bytes:
-    """Derive Fernet key from password string."""
-    return base64.urlsafe_b64encode(hashlib.sha256(password.encode()).digest())
-
-
-def build_session(session_id: str) -> requests.Session:
-    s = requests.Session()
-    s.cookies.set("Session_id", session_id)
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://disk.yandex.ru",
-        "Referer": "https://disk.yandex.ru/",
-        "Accept": "application/json",
-    })
-    return s
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Origin": "https://disk.yandex.ru",
+    "Referer": "https://disk.yandex.ru/",
+    "Accept": "application/json",
+}
 
 
-def list_notes(s: requests.Session) -> list[dict]:
-    """List all active notes (not deleted)."""
-    r = s.get(f"{BASE}/notes/notes", timeout=15)
-    r.raise_for_status()
-    notes = r.json()
+def build_session(session_id: str) -> aiohttp.ClientSession:
+    return aiohttp.ClientSession(
+        headers=HEADERS,
+        cookies={"Session_id": session_id},
+    )
+
+
+async def list_notes(s: aiohttp.ClientSession) -> list[dict]:
+    async with s.get(f"{BASE}/notes/notes", timeout=aiohttp.ClientTimeout(total=15)) as r:
+        r.raise_for_status()
+        notes = await r.json()
     if isinstance(notes, dict):
         notes = notes.get("items", notes.get("notes", []))
     return [n for n in notes if 1 not in n.get("tags", [])]
 
 
-def create_note(s: requests.Session, title: str) -> str:
-    """Create note, return note_id."""
-    r = s.post(f"{BASE}/notes/notes", json={"title": title, "snippet": "", "tags": []}, timeout=15)
-    r.raise_for_status()
-    obj = r.json()
+async def create_note(s: aiohttp.ClientSession, title: str) -> str:
+    async with s.post(f"{BASE}/notes/notes",
+                      json={"title": title, "snippet": "", "tags": []},
+                      timeout=aiohttp.ClientTimeout(total=15)) as r:
+        r.raise_for_status()
+        obj = await r.json()
     if isinstance(obj, list):
         obj = obj[0]
     return obj.get("id") or obj.get("newNoteId") or obj.get("noteId")
 
 
-def get_note_content(s: requests.Session, note_id: str) -> tuple[dict | None, str | None]:
-    """Get note content and revision."""
-    r = s.get(f"{BASE}/notes/notes/{note_id}/content", timeout=60)
-    if r.status_code == 404:
-        return None, None
-    r.raise_for_status()
-    return r.json(), r.headers.get("x-actual-revision")
+async def get_note_content(s: aiohttp.ClientSession, note_id: str) -> tuple[dict | None, str | None]:
+    async with s.get(f"{BASE}/notes/notes/{note_id}/content",
+                     timeout=aiohttp.ClientTimeout(total=120)) as r:
+        if r.status == 404:
+            return None, None
+        r.raise_for_status()
+        return await r.json(), r.headers.get("x-actual-revision")
 
 
-def put_note_content(s: requests.Session, note_id: str, payload: str, snippet: str) -> None:
-    """Write payload string into note attribute."""
+async def put_note_content(s: aiohttp.ClientSession, note_id: str, payload: str, snippet: str):
     content = {"name": "$root", "children": [
         {"name": "paragraph", "children": [
             {"data": ".", "attributes": [["d", payload]]} if payload else {"data": "."}
         ]},
     ]}
     body = {
-        "content": json.dumps(content, ensure_ascii=False, separators=(",", ":")),
+        "content": json.dumps(content, separators=(",", ":")),
         "snippet": snippet,
     }
     headers = {
@@ -77,34 +67,34 @@ def put_note_content(s: requests.Session, note_id: str, payload: str, snippet: s
         "X-Mtime": datetime.datetime.now(datetime.timezone.utc)
             .isoformat(timespec="milliseconds").replace("+00:00", "Z"),
     }
-    r = s.put(f"{BASE}/notes/notes/{note_id}/content_with_meta",
-              headers=headers, data=json.dumps(body, ensure_ascii=False), timeout=120)
-    r.raise_for_status()
+    async with s.put(f"{BASE}/notes/notes/{note_id}/content_with_meta",
+                     headers=headers, data=json.dumps(body),
+                     timeout=aiohttp.ClientTimeout(total=120)) as r:
+        r.raise_for_status()
 
 
-def clear_note(s: requests.Session, note_id: str) -> None:
-    """Clear note content and snippet."""
-    put_note_content(s, note_id, "", "")
+async def clear_note(s: aiohttp.ClientSession, note_id: str):
+    await put_note_content(s, note_id, "", "")
 
 
-def get_db_revision(s: requests.Session) -> int:
-    """Get current database revision."""
-    r = s.get(f"{BASE}/data/app/databases/.ext.yanotes@notes", timeout=15)
-    r.raise_for_status()
-    return r.json().get("revision", 0)
+async def get_db_revision(s: aiohttp.ClientSession) -> int:
+    async with s.get(f"{BASE}/data/app/databases/.ext.yanotes@notes",
+                     timeout=aiohttp.ClientTimeout(total=15)) as r:
+        r.raise_for_status()
+        data = await r.json()
+    return data.get("revision", 0)
 
 
-def get_deltas(s: requests.Session, base_revision: int) -> dict:
-    """Get changes since base_revision."""
-    r = s.get(f"{BASE}/data/app/databases/.ext.yanotes@notes/deltas",
-              params={"base_revision": base_revision, "limit": 100}, timeout=15)
-    r.raise_for_status()
-    return r.json()
+async def get_deltas(s: aiohttp.ClientSession, base_revision: int) -> dict:
+    async with s.get(f"{BASE}/data/app/databases/.ext.yanotes@notes/deltas",
+                     params={"base_revision": base_revision, "limit": 100},
+                     timeout=aiohttp.ClientTimeout(total=15)) as r:
+        r.raise_for_status()
+        return await r.json()
 
 
-def find_or_create_notes(s: requests.Session, titles: list[str]) -> dict[str, str]:
-    """Ensure notes with given titles exist. Returns {title: note_id}."""
-    existing = list_notes(s)
+async def find_or_create_notes(s: aiohttp.ClientSession, titles: list[str]) -> dict[str, str]:
+    existing = await list_notes(s)
     title_to_id = {}
     for n in existing:
         t = n.get("title", "")
@@ -113,7 +103,7 @@ def find_or_create_notes(s: requests.Session, titles: list[str]) -> dict[str, st
 
     for t in titles:
         if t not in title_to_id:
-            note_id = create_note(s, t)
+            note_id = await create_note(s, t)
             log.info(f"Created note '{t}': {note_id}")
             title_to_id[t] = note_id
 
