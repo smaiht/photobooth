@@ -3,14 +3,17 @@ const screens = {
     idle: document.getElementById("screen-idle"),
     shooting: document.getElementById("screen-shooting"),
     template: document.getElementById("screen-template"),
-    printing: document.getElementById("screen-done"),
+    done: document.getElementById("screen-done"),
 };
 
 const liveView = document.getElementById("live-view");
 const countdownNum = document.getElementById("countdown-number");
 const photoCounter = document.getElementById("photo-counter");
 const templateTimer = document.getElementById("template-timer");
-const printOverlay = document.getElementById("print-overlay");
+const processingOverlay = null; // removed
+const qrModal = document.getElementById("qr-modal");
+const qrModalCode = document.getElementById("qr-modal-code");
+const qrModalText = document.getElementById("qr-modal-text");
 
 let ws = null;
 let currentState = "idle";
@@ -24,7 +27,6 @@ function connect() {
 
     ws.onmessage = (e) => {
         if (e.data instanceof Blob) {
-            // Live view frame — just update img, nothing else
             const url = URL.createObjectURL(e.data);
             liveView.onload = () => URL.revokeObjectURL(url);
             liveView.src = url;
@@ -38,9 +40,7 @@ function connect() {
 }
 
 function send(msg) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(msg));
-    }
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
 // --- Sound ---
@@ -59,27 +59,30 @@ function beep(freq, duration) {
     osc.stop(audioCtx.currentTime + duration / 1000);
 }
 
+// --- QR modal ---
+function showQrModal(url, text) {
+    if (!url || typeof qrcode === "undefined") return;
+    const qr = qrcode(0, "M");
+    qr.addData(url);
+    qr.make();
+    qrModalCode.innerHTML = qr.createSvgTag(8);
+    qrModalText.textContent = text;
+    qrModal.hidden = false;
+}
+
+function updateQrText(text) {
+    qrModalText.textContent = text;
+}
+
+function hideQrModal() {
+    qrModal.hidden = true;
+}
+
 // --- Message handler ---
 function handleMessage(msg) {
     switch (msg.type) {
         case "state":
             switchScreen(msg.state, msg);
-            if (msg.state === "done") {
-                if (msg.collage) document.getElementById("done-collage").src = msg.collage;
-                if (msg.session_url && typeof qrcode !== "undefined") {
-                    const qr = qrcode(0, "M");
-                    qr.addData(msg.session_url);
-                    qr.make();
-                    document.getElementById("done-qr").innerHTML = qr.createSvgTag(8);
-                    // Save for idle overlay
-                    const lastQr = document.getElementById("last-qr");
-                    lastQr.innerHTML = qr.createSvgTag(4);
-                    lastQr.hidden = false;
-                }
-            }
-            if (msg.state === "countdown" && msg.photo_index === 0) {
-                document.getElementById("last-qr").hidden = true;
-            }
             break;
         case "countdown":
             showCountdown(msg.value);
@@ -123,9 +126,9 @@ function switchScreen(state, data = {}) {
         countdown: "shooting",
         shooting: "shooting",
         template_select: "template",
-        composing: "printing",
-        printing: "printing",
-        done: "printing",
+        composing: "done",
+        printing: "done",
+        done: "done",
     };
 
     const key = map[state];
@@ -136,16 +139,27 @@ function switchScreen(state, data = {}) {
         photoCounter.textContent = `${idx} / ${data.total ?? 4}`;
     }
 
+    // New session — hide QR
+    if (state === "countdown" && data.photo_index === 0) {
+        hideQrModal();
+    }
+
     if (state === "template_select") {
         startTemplateTimer(data.timeout ?? 5);
     }
 
-    if (state === "printing") {
-        setTimeout(() => { printOverlay.hidden = false; }, 500);
+    // Composing — just show done screen (already mapped above)
+
+    // Done — show QR modal
+    if (state === "done") {
+        if (data.session_url) {
+            showQrModal(data.session_url, "Оригиналы фото можно скачать здесь ↗");
+        }
     }
 
+    // Idle — update QR text if visible
     if (state === "idle") {
-        setTimeout(() => { printOverlay.hidden = true; }, 15000);
+        updateQrText("Предыдущие фото здесь ↗");
     }
 }
 
@@ -186,11 +200,9 @@ screens.idle.addEventListener("click", () => {
     if (currentState === "idle") send({ type: "start_session" });
 });
 
-// --- Load config and apply settings ---
+// --- Config ---
 fetch("/api/config").then(r => r.json()).then(cfg => {
-    if (cfg.mirror_live_view) {
-        liveView.style.transform = "scaleX(-1)";
-    }
+    if (cfg.mirror_live_view) liveView.style.transform = "scaleX(-1)";
 });
 
 connect();

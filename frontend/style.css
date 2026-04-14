@@ -140,50 +140,36 @@ html, body {
 #template-timer { font-size: 2.5vw; opacity: 0.6; }
 
 /* DONE */
-#screen-done { gap: 3vh; }
-.done-title { font-size: 4vw; font-weight: 700; }
-.done-content { display: flex; align-items: center; gap: 5vw; }
-.done-collage { max-height: 50vh; max-width: 40vw; border-radius: 1vw; box-shadow: 0 0 2vw rgba(0,0,0,0.2); }
-#done-qr svg { width: 25vh; height: 25vh; }
-.done-hint { font-size: 2.5vw; opacity: 0.6; }
-
-/* PRINTING */
-#screen-printing { }
-
-.printing-msg {
-    font-size: 4vw;
-    font-weight: 600;
-    animation: pulse 1.5s ease-in-out infinite;
+#screen-done { gap: 4vh; }
+.done-title { font-size: 3.5vw; font-weight: 600; letter-spacing: 0.05em; opacity: 0.8; }
+.print-icon {
+    width: 12vw;
+    height: 12vw;
+    animation: print-pulse 2s ease-in-out infinite;
+}
+@keyframes print-pulse {
+    0%, 100% { opacity: 0.8; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.03); }
 }
 
-/* Print overlay */
-#print-overlay {
+/* QR modal */
+#qr-modal {
     position: fixed;
-    bottom: 3vh;
-    right: 3vw;
-    background: rgba(0,0,0,0.7);
-    padding: 1.5vh 2vw;
-    border-radius: 1vw;
-    font-size: 1.8vw;
-    z-index: 100;
-}
-
-#print-overlay[hidden] { display: none; }
-
-/* Last session QR overlay on idle */
-#last-qr {
-    position: fixed;
-    bottom: 3vh;
-    left: 3vw;
+    bottom: 4vh;
+    right: 4vw;
     background: #fff;
-    padding: 1.5vh;
-    border-radius: 1vw;
-    box-shadow: 0 0 2vw rgba(0,0,0,0.15);
-    z-index: 100;
-    pointer-events: none;
+    padding: 2.5vh 2.5vw;
+    border-radius: 1.5vw;
+    box-shadow: 0 0.5vw 3vw rgba(0,0,0,0.2);
+    z-index: 300;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5vh;
 }
-#last-qr svg { width: 12vh; height: 12vh; }
-#last-qr[hidden] { display: none; }
+#qr-modal[hidden] { display: none; }
+#qr-modal-code svg { width: 24vh; height: 24vh; }
+#qr-modal-text { font-size: 1.8vw; font-weight: 500; opacity: 0.7; text-align: center; }
 
 /* Debug log overlay */
 #debug-log {
@@ -193,6 +179,7 @@ html, body {
     right: 0;
     bottom: 0;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
     background: rgba(0,0,0,0.5);
     color: #0f0;
     font-family: monospace;
@@ -200,6 +187,7 @@ html, body {
     white-space: pre-wrap;
     padding: 5vh 1vw 1vh;
     z-index: 9998;
-    pointer-events: none;
+    display: flex;
+    flex-direction: column-reverse;
 }
 #debug-log[hidden] { display: none; }

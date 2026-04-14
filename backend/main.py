@@ -259,8 +259,8 @@ async def _run_session():
                             video_file)
     asyncio.create_task(_bg_upload())
 
-    # Show QR screen for 12 seconds
-    await asyncio.sleep(5)
+    # Show QR screen for 11 seconds
+    await asyncio.sleep(11)
     await set_state("idle")
 
 
