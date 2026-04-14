@@ -122,7 +122,6 @@ def auto_update():
 
 
 def main():
-    auto_update()
     dev = "--dev" in sys.argv
     # Load .env
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -138,10 +137,7 @@ def main():
     # Kill leftover process on our port
     kill_port()
 
-    # Start backend
-    threading.Thread(target=start_server, daemon=True).start()
-
-    # Show loading screen immediately, then switch to app
+    # Show loading screen immediately
     import webview
     window = webview.create_window(
         title="Photobooth",
@@ -158,6 +154,14 @@ def main():
         window.evaluate_js("document.addEventListener('contextmenu', e => e.preventDefault())")
 
     window.events.loaded += on_loaded
+
+    def update_then_start():
+        # Auto-update while Loading is shown
+        auto_update()
+        # Start backend
+        start_server()
+
+    threading.Thread(target=update_then_start, daemon=True).start()
 
     # Wait for server in background, then load app
     threading.Thread(target=wait_and_load, args=(window,), daemon=True).start()
