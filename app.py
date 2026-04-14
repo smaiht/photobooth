@@ -14,8 +14,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Log to file so we can debug when console is hidden
 _log_dir = os.path.dirname(os.path.abspath(__file__))
-if getattr(sys, 'frozen', False):
-    _log_dir = os.path.dirname(sys.executable)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -27,12 +25,12 @@ logging.basicConfig(
 
 LOADING_HTML = """
 <html>
-<body style="margin:0;background:#000;color:#fff;display:flex;align-items:center;
+<body style="margin:0;background:#fff;color:#000;display:flex;align-items:center;
 justify-content:center;height:100vh;font-family:system-ui;font-size:4vw">
 <div style="text-align:center">
-<div style="width:60px;height:60px;border:4px solid #333;border-top:4px solid #fff;
+<div style="width:60px;height:60px;border:4px solid #333;border-top:4px solid #000;
 border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 30px"></div>
-Загрузка!
+Загрузка...
 </div>
 <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
 </body>
@@ -93,10 +91,6 @@ _UPDATE_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".update_
 def auto_update():
     """Git pull + pip install before starting. Restart if code changed."""
     lines = []
-    if getattr(sys, 'frozen', False):
-        lines.append("Skipped: frozen exe")
-        open(_UPDATE_LOG, "w").write("\n".join(lines))
-        return
     import subprocess, socket
     si = None
     if sys.platform == "win32":
@@ -130,11 +124,8 @@ def auto_update():
 def main():
     auto_update()
     dev = "--dev" in sys.argv
-    # Load .env (bundled inside exe or next to source)
-    if getattr(sys, 'frozen', False):
-        env_path = os.path.join(sys._MEIPASS, ".env")
-    else:
-        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    # Load .env
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(env_path):
         with open(env_path) as f:
             for line in f:

@@ -279,12 +279,12 @@ class Camera:
         # Load camera config
         import json
         from ..config import BUNDLE_DIR
-        config_path = BUNDLE_DIR / "camera_config.json"
+        config_path = BUNDLE_DIR / "config_camera.json"
         if config_path.exists():
             cfg = json.loads(config_path.read_text())
         else:
             cfg = {}
-            log.warning("camera_config.json not found, using defaults")
+            log.warning("config_camera.json not found, using defaults")
 
         # Save photos to host PC
         self._set_prop_u32(kEdsPropID_SaveTo, kEdsSaveTo_Host)
@@ -354,7 +354,7 @@ class Camera:
         if cfg.get("lock_mode_dial", True):
             self._sdk.EdsSendCommand(self._camera, kEdsCameraCommand_SetModeDialDisable, 1)
 
-        log.info("Camera configured from camera_config.json")
+        log.info("Camera configured from config_camera.json")
 
     def _set_prop_u32(self, prop_id: int, value: int):
         val = EdsUInt32(value)

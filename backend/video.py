@@ -7,17 +7,13 @@ Inserts captured photos (resized) at capture moments, frozen for 1.5s.
 import subprocess
 import logging
 import shutil
-import sys
 from pathlib import Path
 from PIL import Image
 import io
 
 log = logging.getLogger(__name__)
 
-if getattr(sys, 'frozen', False):
-    _BIN_DIR = Path(sys._MEIPASS) / "bin"
-else:
-    _BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
+_BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
 _FFMPEG = str(_BIN_DIR / "ffmpeg.exe") if (_BIN_DIR / "ffmpeg.exe").exists() else "ffmpeg"
 
 FREEZE_SECONDS = 1.5

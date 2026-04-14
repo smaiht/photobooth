@@ -221,12 +221,12 @@ async def _run_session():
     output_path = None
     if SESSION_PHOTOS:
         from .config import TEMPLATES_DIR
-        template_dir = TEMPLATES_DIR / "default"
-        log.info(f"Template dir: {template_dir}, exists: {template_dir.exists()}")
+        template_dir = TEMPLATES_DIR / CONFIG.get("template_pack", "default")
+        tpl_config = json.loads((template_dir / "config.json").read_text())
 
         def _compose():
             log.info(f"Composing {selected_template}...")
-            result = compose(template_dir, selected_template, SESSION_PHOTOS[:4], CONFIG)
+            result = compose(template_dir, selected_template, SESSION_PHOTOS[:4], tpl_config)
             path = session_dir / f"print_{selected_template}.jpg"
             result.save(str(path), "JPEG", quality=95, dpi=(300, 300))
             return path
@@ -336,8 +336,8 @@ async def startup():
     _event_loop = asyncio.get_event_loop()
 
     # Log auto-update results (deferred - will show after WS connects)
-    from .config import RUN_DIR
-    update_log = os.path.join(RUN_DIR, ".update_log")
+    from .config import ROOT_DIR
+    update_log = os.path.join(ROOT_DIR, ".update_log")
     app.state.update_log_path = update_log
 
     if camera:
