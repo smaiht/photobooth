@@ -1,3 +1,10 @@
+@font-face {
+    font-family: 'Comfortaa';
+    src: url('/assets/fonts/Comfortaa-VariableFont_wght.ttf') format('truetype');
+    font-weight: 300 700;
+    font-display: swap;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -9,7 +16,7 @@ html, body {
     height: 100%;
     overflow: hidden;
     background: #fff;
-    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-family: 'Comfortaa', sans-serif;
     color: #000;
     cursor: none;
     user-select: none;
@@ -149,23 +156,23 @@ html, body {
 #qr-modal {
     position: fixed;
     bottom: 3vh;
-    left: 3vw;
-    width: 22vh;
-    height: 22vh;
+    left: 3vh;
+    width: 30vh;
+    height: 30vh;
     background: #fff;
-    padding: 1.5vh;
-    border-radius: 1.5vw;
+    padding: 1vh;
+    border-radius: 3vh;
     box-shadow: 0 0.5vw 3vw rgba(0,0,0,0.2);
     z-index: 300;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.8vh;
+    gap: 0.4vh;
 }
 #qr-modal[hidden] { display: none; }
-#qr-modal-code svg { width: 15vh; height: 15vh; }
-#qr-modal-text { font-size: 1.2vh; font-weight: 500; opacity: 0.5; text-align: center; line-height: 1.3; }
+#qr-modal-code svg { width: 20vh; height: 20vh; }
+#qr-modal-text { font-size: 1.7vh; font-weight: 400; opacity: 0.75; text-align: center; line-height: 1.3; }
 
 /* Debug log overlay */
 #debug-log {

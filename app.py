@@ -9,6 +9,7 @@ import os
 import threading
 import time
 import logging
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -37,10 +38,19 @@ DOTS_SVG = (
     '</svg>'
 )
 
+FONT_PATH = str(Path(__file__).parent / "frontend" / "assets" / "fonts" / "Comfortaa-VariableFont_wght.ttf")
+
 LOADING_HTML = f"""
 <html>
+<head><style>
+@font-face {{
+    font-family: 'Comfortaa';
+    src: url('file:///{FONT_PATH}') format('truetype');
+    font-weight: 300 700;
+}}
+</style></head>
 <body style="margin:0; background:#fff; display:flex; align-items:center;
-             justify-content:center; height:100vh; font-family:system-ui">
+             justify-content:center; height:100vh; font-family:'Comfortaa',sans-serif">
     <div style="display:flex; align-items:center; gap:2vw">
         {DOTS_SVG}
         <span style="font-size:3.5vw; font-weight:600; color:#FF2973">Загрузка</span>
