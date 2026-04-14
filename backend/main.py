@@ -170,7 +170,6 @@ async def _run_session():
         if camera:
             camera.take_picture()
         await broadcast({"type": "flash"})
-        video_recorder.mark_capture()
 
     # Wait for all photos to download (live view still running)
     if camera:

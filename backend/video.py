@@ -1,13 +1,14 @@
 """Record session video from live view JPEG frames.
 
 Saves frames during session, stitches into mp4 via ffmpeg after session ends.
-Inserts captured photos (resized) at capture moments, frozen for 1.5s.
+Finds capture gaps by timestamps and inserts photos there.
 """
 
 import subprocess
 import logging
 import shutil
 import sys
+import time
 from pathlib import Path
 from PIL import Image
 import io
@@ -25,14 +26,14 @@ class VideoRecorder:
         self._frames_dir: Path | None = None
         self._frame_count = 0
         self._recording = False
-        self._capture_marks: list[int] = []
+        self._timestamps: list[float] = []
         self._frame_size: tuple[int, int] | None = None
 
     def start(self, session_dir: Path):
         self._frames_dir = session_dir / "_frames"
         self._frames_dir.mkdir(exist_ok=True)
         self._frame_count = 0
-        self._capture_marks = []
+        self._timestamps = []
         self._frame_size = None
         self._recording = True
         log.info(f"Video recording started: {self._frames_dir}")
@@ -40,6 +41,7 @@ class VideoRecorder:
     def add_frame(self, jpeg_bytes: bytes):
         if not self._recording or not self._frames_dir:
             return
+        self._timestamps.append(time.monotonic())
         frame_path = self._frames_dir / f"frame_{self._frame_count:05d}.jpg"
         frame_path.write_bytes(jpeg_bytes)
         if not self._frame_size:
@@ -47,19 +49,16 @@ class VideoRecorder:
             self._frame_size = img.size
         self._frame_count += 1
 
-    def mark_capture(self):
-        """Mark current frame position as where a photo was taken."""
-        self._capture_marks.append(self._frame_count)
-
     def stop_and_encode(self, output_path: Path, photos: list[str] = None, fps: int = 30) -> str | None:
         self._recording = False
 
         if not self._frames_dir or self._frame_count == 0:
             return None
 
-        # Insert real photos at capture marks
-        if photos and self._capture_marks and self._frame_size:
-            self._insert_photos(photos, fps)
+        if photos and self._frame_size:
+            marks = self._find_gaps(len(photos))
+            if marks:
+                self._insert_photos(photos, marks, fps)
 
         log.info(f"Encoding {self._frame_count} frames to video...")
 
@@ -95,39 +94,43 @@ class VideoRecorder:
             if self._frames_dir and self._frames_dir.exists():
                 shutil.rmtree(self._frames_dir, ignore_errors=True)
 
-    def _insert_photos(self, photos: list[str], fps: int):
-        """Insert captured photos into frame sequence at marked positions.
-        
-        Renumbers all frames to make room, then inserts resized photos
-        frozen for FREEZE_SECONDS.
-        """
+    def _find_gaps(self, num_photos: int) -> list[int]:
+        """Find N largest gaps in frame timestamps. Returns frame indices sorted ascending."""
+        if len(self._timestamps) < 2:
+            return []
+        gaps = [(self._timestamps[i] - self._timestamps[i - 1], i) for i in range(1, len(self._timestamps))]
+        gaps.sort(reverse=True)
+        top = gaps[:num_photos]
+        marks = sorted(g[1] for g in top)
+        gap_dur = {g[1]: g[0] for g in top}
+        for m in marks:
+            log.info(f"Video: gap at frame {m} ({gap_dur[m]*1000:.0f}ms)")
+        return marks
+
+    def _insert_photos(self, photos: list[str], marks: list[int], fps: int):
+        """Insert photos at gap positions."""
         freeze_frames = int(FREEZE_SECONDS * fps)
         w, h = self._frame_size
 
-        # Work backwards so frame numbers don't shift
-        for mark, photo_path in sorted(zip(self._capture_marks, photos), reverse=True):
+        for mark, photo_path in sorted(zip(marks, photos), reverse=True):
             if not Path(photo_path).exists():
                 continue
 
-            # Resize photo to live view frame size
             img = Image.open(photo_path)
             img = img.resize((w, h), Image.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=85)
             photo_bytes = buf.getvalue()
 
-            # Shift existing frames after this mark to make room
             for i in range(self._frame_count - 1, mark - 1, -1):
                 src = self._frames_dir / f"frame_{i:05d}.jpg"
                 dst = self._frames_dir / f"frame_{i + freeze_frames:05d}.jpg"
                 if src.exists():
                     src.rename(dst)
 
-            # Insert frozen photo frames
             for i in range(freeze_frames):
-                frame_path = self._frames_dir / f"frame_{mark + i:05d}.jpg"
-                frame_path.write_bytes(photo_bytes)
+                (self._frames_dir / f"frame_{mark + i:05d}.jpg").write_bytes(photo_bytes)
 
             self._frame_count += freeze_frames
 
-        log.info(f"Inserted {len(photos)} photos into video ({freeze_frames} frames each)")
+        log.info(f"Inserted {len(photos)} photos ({freeze_frames} frames each)")
