@@ -301,6 +301,8 @@ async def shutdown():
 async def restart():
     """Restart the app — spawn new process, kill old."""
     log.info("Restart requested!")
+    if camera:
+        camera._cleanup()
     import subprocess
     si = None
     if sys.platform == "win32":
@@ -310,6 +312,7 @@ async def restart():
     subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
     await asyncio.sleep(1)
     log.info("Killing old process...")
+
     os._exit(0)
 
 
