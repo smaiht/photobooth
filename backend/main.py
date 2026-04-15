@@ -96,9 +96,7 @@ def on_photo_downloaded(file_path: str):
 def on_camera_error(error: str):
     log.warning(f"Camera error: {error}")
     if STATE == "idle" and _event_loop and _event_loop.is_running():
-        asyncio.run_coroutine_threadsafe(
-            broadcast({"type": "state", "state": "no_camera"}),
-            _event_loop)
+        asyncio.run_coroutine_threadsafe(set_state("no_camera"), _event_loop)
 
 
 def on_camera_connected():
@@ -345,7 +343,7 @@ async def websocket_endpoint(ws: WebSocket):
                 if camera and camera._connected:
                     asyncio.create_task(run_session())
                 else:
-                    await broadcast({"type": "state", "state": "no_camera"})
+                    await set_state("no_camera")
 
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)

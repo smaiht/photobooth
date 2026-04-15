@@ -233,6 +233,8 @@ def handle_command(cmd: str, data: str | None):
         log.info(f"Cloud: config update: {data}")
     elif cmd == "send_logs":
         asyncio.create_task(_send_logs())
+    elif cmd == "clear_logs":
+        asyncio.create_task(_clear_logs())
     elif cmd == "ping":
         log.info("Cloud: pong")
     else:
@@ -263,3 +265,22 @@ async def _send_logs():
         log.info(f"Cloud: logs sent via {title}")
     except Exception as e:
         log.warning(f"Cloud: send_logs failed: {e}")
+
+
+async def _clear_logs():
+    """Clear photobooth.log and notify via upload slot."""
+    from .yanotes import put_note_content
+    try:
+        from .config import ROOT_DIR
+        log_path = os.path.join(ROOT_DIR, "photobooth.log")
+        open(log_path, "w").close()
+        log.info("Cloud: logs cleared")
+
+        if not _free_notes:
+            return
+        title = _free_notes.pop()
+        note_id = _notes[title]
+        snippet = _encrypt_str("clear_logs")
+        await put_note_content(_session, note_id, "", snippet=snippet)
+    except Exception as e:
+        log.warning(f"Cloud: clear_logs failed: {e}")
