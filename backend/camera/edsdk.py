@@ -147,12 +147,11 @@ class Camera:
 
             evf_active = False
             while self._running:
-                # Poll EDSDK events
                 self._sdk.EdsGetEvent()
 
-                # Process commands from main thread
                 try:
                     cmd = self._cmd_queue.get_nowait()
+                    log.info(f"CMD: {cmd[0]}")
                     if cmd[0] == "capture":
                         try:
                             self._do_capture()
@@ -364,6 +363,7 @@ class Camera:
 
     def _register_handlers(self):
         def on_object_event(event, ref, context):
+            log.info(f"ObjectEvent: 0x{event:08X}")
             if event == kEdsObjectEvent_DirItemRequestTransfer:
                 try:
                     self._download_photo(ref)
@@ -372,8 +372,8 @@ class Camera:
             return 0
 
         def on_state_event(event, data, context):
+            log.info(f"StateEvent: 0x{event:08X} data={data}")
             if event == kEdsStateEvent_WillSoonShutDown:
-                # Keep camera awake
                 self._sdk.EdsSendCommand(
                     self._camera, kEdsCameraCommand_ExtendShutDownTimer, 0)
             return 0
@@ -437,32 +437,32 @@ class Camera:
                 self._sdk.EdsRelease(stream)
 
     def _do_capture(self):
-        # Use PressShutterButton with NonAF — skip autofocus, use current
-        # focus from continuous AF (servo). Avoids AF failures in low light.
+        log.info("Capture: sending ShutterButton_Completely_NonAF")
         for attempt in range(3):
             err = self._sdk.EdsSendCommand(
                 self._camera, kEdsCameraCommand_PressShutterButton,
                 kEdsCameraCommand_ShutterButton_Completely_NonAF)
             if err == EDS_ERR_OK:
-                log.info("Capture triggered (NonAF)")
-                # Release shutter button
-                self._sdk.EdsSendCommand(
-                    self._camera, kEdsCameraCommand_PressShutterButton,
-                    kEdsCameraCommand_ShutterButton_OFF)
-                return
-            log.warning(f"Capture attempt {attempt+1}/3 failed: 0x{err:08X}")
+                log.info("Capture: shutter OK")
+                break
+            log.warning(f"Capture: attempt {attempt+1}/3 err=0x{err:08X}")
             for _ in range(10):
                 self._sdk.EdsGetEvent()
                 time.sleep(0.1)
-        log.error("Capture failed after 3 attempts")
+        else:
+            log.error("Capture: FAILED after 3 attempts")
+        log.info("Capture: sending ShutterButton_OFF")
+        self._sdk.EdsSendCommand(
+            self._camera, kEdsCameraCommand_PressShutterButton,
+            kEdsCameraCommand_ShutterButton_OFF)
 
     def _download_photo(self, dir_item):
-        """Download captured photo from camera to disk."""
         info = EdsDirectoryItemInfo()
         _check("GetDirItemInfo", self._sdk.EdsGetDirectoryItemInfo(dir_item, ctypes.byref(info)))
 
         file_name = info.szFileName.decode()
         file_path = self._download_dir / file_name
+        log.info(f"Photo download: {file_name} ({info.size} bytes)")
 
         stream = EdsBaseRef()
         _check("CreateFileStream", self._sdk.EdsCreateFileStream(

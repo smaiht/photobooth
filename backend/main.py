@@ -106,6 +106,7 @@ def on_evf_frame(jpeg_bytes: bytes):
 
 
 def on_photo_downloaded(file_path: str):
+    log.info(f"Photo downloaded: {file_path} (total: {len(SESSION_PHOTOS)+1})")
     SESSION_PHOTOS.append(file_path)
     video_recorder.set_photo_path(file_path)
     if _event_loop and _event_loop.is_running():
@@ -163,7 +164,7 @@ async def _run_session():
     # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
         n = photo_idx + 1
-        log.info(f"Photo {n}/{num_photos}: waiting {interval}s (countdown last {countdown_from}s)")
+        log.info(f"Photo {n}/{num_photos}: countdown {countdown_from}s")
         await set_state("countdown", {"photo_index": photo_idx, "total": num_photos})
         silent = interval - countdown_from
         if silent > 0:
@@ -171,7 +172,7 @@ async def _run_session():
         for sec in range(countdown_from, 0, -1):
             await broadcast({"type": "countdown", "value": sec})
             await asyncio.sleep(1)
-        log.info(f"Countdown {n}/{num_photos} finished")
+        log.info(f"Photo {n}/{num_photos}: take_picture + mark_photo")
         if camera:
             camera.take_picture()
             video_recorder.mark_photo()
