@@ -106,8 +106,9 @@ def on_evf_frame(jpeg_bytes: bytes):
 
 
 def on_photo_downloaded(file_path: str):
-    log.info(f"Photo downloaded: {file_path} (total: {len(SESSION_PHOTOS)+1})")
     SESSION_PHOTOS.append(file_path)
+    tag = f"[P{len(SESSION_PHOTOS)}]"
+    log.info(f"{tag} downloaded: {file_path}")
     video_recorder.set_photo_path(file_path)
     if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(
@@ -163,8 +164,8 @@ async def _run_session():
 
     # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
-        n = photo_idx + 1
-        log.info(f"Photo {n}/{num_photos}: countdown {countdown_from}s")
+        tag = f"[P{photo_idx+1}]"
+        log.info(f"{tag} waiting {interval}s")
         await set_state("countdown", {"photo_index": photo_idx, "total": num_photos})
         silent = interval - countdown_from
         if silent > 0:
@@ -172,9 +173,9 @@ async def _run_session():
         for sec in range(countdown_from, 0, -1):
             await broadcast({"type": "countdown", "value": sec})
             await asyncio.sleep(1)
-        log.info(f"Photo {n}/{num_photos}: take_picture + mark_photo")
+        log.info(f"{tag} take_picture + mark_photo")
         if camera:
-            camera.take_picture()
+            camera.take_picture(tag)
             video_recorder.mark_photo()
         await broadcast({"type": "flash"})
 
@@ -288,6 +289,13 @@ async def script():
 @app.get("/api/config")
 async def get_config():
     return CONFIG
+
+
+@app.get("/api/state")
+async def get_state(frontend: str = ""):
+    if frontend and frontend != STATE:
+        log.warning(f"State desync: frontend={frontend} backend={STATE}")
+    return {"state": STATE}
 
 
 @app.post("/api/shutdown")

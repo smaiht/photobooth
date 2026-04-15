@@ -39,6 +39,16 @@ function connect() {
     ws.onerror = () => ws.close();
 }
 
+// State sync — catch missed WS messages
+setInterval(() => {
+    fetch(`/api/state?frontend=${currentState}`).then(r => r.json()).then(s => {
+        if (s.state !== currentState) {
+            console.warn(`State desync: frontend=${currentState} backend=${s.state}, fixing`);
+            switchScreen(s.state);
+        }
+    }).catch(() => {});
+}, 1000);
+
 function send(msg) {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }

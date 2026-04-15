@@ -59,7 +59,7 @@ class VideoRecorder:
         idx = self._placeholders[self._photo_idx]
         self._items[idx] = photo_path
         self._photo_idx += 1
-        log.info(f"Video: placeholder {idx} → {photo_path}")
+        log.info(f"Video: placeholder {idx} -> {photo_path}")
 
     def stop_and_encode(self, fps: int = 30) -> str | None:
         self._recording = False

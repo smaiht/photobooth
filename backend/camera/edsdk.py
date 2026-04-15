@@ -80,6 +80,7 @@ class Camera:
         self._camera = EdsBaseRef()
         self._running = False
         self._connected = False
+        self._photo_tag = ""
         self._thread: threading.Thread | None = None
         self._cmd_queue: Queue = Queue()
         self._evf_frame_cb = None  # callback(jpeg_bytes)
@@ -113,9 +114,9 @@ class Camera:
         if self._thread:
             self._thread.join(timeout=5)
 
-    def take_picture(self):
+    def take_picture(self, tag: str = ""):
         """Queue a capture command."""
-        self._cmd_queue.put(("capture",))
+        self._cmd_queue.put(("capture", tag))
 
     def start_live_view(self):
         self._cmd_queue.put(("start_evf",))
@@ -156,6 +157,7 @@ class Camera:
                     cmd = self._cmd_queue.get_nowait()
                     log.info(f"CMD: {cmd[0]}")
                     if cmd[0] == "capture":
+                        self._photo_tag = cmd[1] if len(cmd) > 1 else ""
                         try:
                             self._do_capture()
                         except Exception:
@@ -442,21 +444,22 @@ class Camera:
                 self._sdk.EdsRelease(stream)
 
     def _do_capture(self):
-        log.info("Capture: sending ShutterButton_Completely_NonAF")
+        t = self._photo_tag
+        log.info(f"{t} Capture: sending ShutterButton_Completely_NonAF")
         for attempt in range(3):
             err = self._sdk.EdsSendCommand(
                 self._camera, kEdsCameraCommand_PressShutterButton,
                 kEdsCameraCommand_ShutterButton_Completely_NonAF)
             if err == EDS_ERR_OK:
-                log.info("Capture: shutter OK")
+                log.info(f"{t} Capture: shutter OK")
                 break
-            log.warning(f"Capture: attempt {attempt+1}/3 err=0x{err:08X}")
+            log.warning(f"{t} Capture: attempt {attempt+1}/3 err=0x{err:08X}")
             for _ in range(10):
                 self._sdk.EdsGetEvent()
                 time.sleep(0.1)
         else:
-            log.error("Capture: FAILED after 3 attempts")
-        log.info("Capture: sending ShutterButton_OFF")
+            log.error(f"{t} Capture: FAILED after 3 attempts")
+        log.info(f"{t} Capture: sending ShutterButton_OFF")
         self._sdk.EdsSendCommand(
             self._camera, kEdsCameraCommand_PressShutterButton,
             kEdsCameraCommand_ShutterButton_OFF)
@@ -467,7 +470,8 @@ class Camera:
 
         file_name = info.szFileName.decode()
         file_path = self._download_dir / file_name
-        log.info(f"Photo download: {file_name} ({info.size} bytes)")
+        t = self._photo_tag
+        log.info(f"{t} Photo download: {file_name} ({info.size} bytes)")
 
         stream = EdsBaseRef()
         _check("CreateFileStream", self._sdk.EdsCreateFileStream(
@@ -477,7 +481,7 @@ class Camera:
         try:
             _check("EdsDownload", self._sdk.EdsDownload(dir_item, info.size, stream))
             _check("EdsDownloadComplete", self._sdk.EdsDownloadComplete(dir_item))
-            log.info(f"Photo saved: {file_path}")
+            log.info(f"{t} Photo saved: {file_path}")
             if self._photo_cb:
                 self._photo_cb(str(file_path))
         finally:
