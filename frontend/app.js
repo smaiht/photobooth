@@ -20,22 +20,20 @@ let currentState = "idle";
 let templateTimeout = null;
 
 // --- WebSocket ---
+let wsReconnectTimer = null;
 function connect() {
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(`${proto}//${location.host}/ws`);
-    ws.binaryType = "blob";
 
     ws.onmessage = (e) => {
-        if (e.data instanceof Blob) {
-            const url = URL.createObjectURL(e.data);
-            liveView.onload = () => URL.revokeObjectURL(url);
-            liveView.src = url;
-            return;
-        }
         handleMessage(JSON.parse(e.data));
     };
 
-    ws.onclose = () => setTimeout(connect, 1000);
+    ws.onclose = () => {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = setTimeout(connect, 1000);
+    };
     ws.onerror = () => ws.close();
 }
 
@@ -111,16 +109,6 @@ function handleMessage(msg) {
             errDiv.textContent = msg.message;
             document.body.appendChild(errDiv);
             setTimeout(() => errDiv.remove(), 3000);
-            break;
-        case "log":
-            const logEl = document.getElementById("debug-log");
-            if (logEl) {
-                document.getElementById("debug-toggle").hidden = false;
-                document.getElementById("debug-restart").hidden = false;
-                logEl.textContent += msg.text + "\n";
-                if (logEl.childNodes.length > 100) logEl.textContent = logEl.textContent.split("\n").slice(-50).join("\n");
-                logEl.scrollTop = logEl.scrollHeight;
-            }
             break;
     }
 }
@@ -213,6 +201,7 @@ let config = {};
 fetch("/api/config").then(r => r.json()).then(cfg => {
     config = cfg;
     if (cfg.mirror_live_view) liveView.style.transform = "scaleX(-1)";
+    if (cfg.show_restart_button) document.getElementById("debug-restart").hidden = false;
 });
 
 connect();

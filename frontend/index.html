@@ -21,7 +21,7 @@
 
         <!-- SHOOTING: live view + countdown + flash -->
         <div class="screen" id="screen-shooting" hidden>
-            <img id="live-view" alt="">
+            <img id="live-view" src="/live" alt="">
             <div id="countdown-number"></div>
             <div id="photo-counter"></div>
         </div>
@@ -61,11 +61,6 @@
         </div>
 
         <div id="flash-overlay"></div>
-        <div id="debug-log" hidden></div>
-        <button id="debug-toggle" hidden onclick="const l=document.getElementById('debug-log');l.hidden=!l.hidden"
-            style="position:fixed;top:10px;left:10px;z-index:9999;padding:30px;
-            background:#333;color:#0f0;border:none;border-radius:10px;font-size:20px">
-            LOGS</button>
         <button id="debug-restart" hidden onclick="fetch('/api/restart',{method:'POST'})"
             style="position:fixed;top:10px;right:10px;z-index:9999;padding:30px;
             background:#c00;color:#fff;border:none;border-radius:10px;font-size:20px">

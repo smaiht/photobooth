@@ -15,14 +15,13 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
 from .composer import compose
 from .video import VideoRecorder
 from .cloud import cloud_upload, cloud_init, cloud_poll_commands
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -33,25 +32,7 @@ SESSION_ID = ""
 SESSION_PHOTOS: list[str] = []
 SESSION_COUNT = 0
 CONFIG = load_event_config()
-DEBUG_OVERLAY = CONFIG.get("debug_overlay", False)
 
-
-# --- WebSocket log handler ---
-class WSLogHandler(logging.Handler):
-    def emit(self, record):
-        if not DEBUG_OVERLAY or not _event_loop:
-            return
-        try:
-            msg = self.format(record)
-            asyncio.run_coroutine_threadsafe(
-                broadcast({"type": "log", "text": msg}), _event_loop
-            )
-        except Exception:
-            pass
-
-_ws_log = WSLogHandler()
-_ws_log.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
-logging.getLogger().addHandler(_ws_log)
 CLIENTS: list[WebSocket] = []
 
 # --- Camera (Windows only) ---
@@ -67,6 +48,7 @@ if sys.platform == "win32":
 # --- Services ---
 video_recorder = VideoRecorder()
 _event_loop = None
+_latest_frame: bytes | None = None
 
 
 # --- WebSocket broadcast ---
@@ -76,15 +58,10 @@ async def broadcast(msg: dict):
         try:
             await ws.send_text(data)
         except Exception:
-            CLIENTS.remove(ws)
-
-
-async def broadcast_binary(data: bytes):
-    for ws in list(CLIENTS):
-        try:
-            await ws.send_bytes(data)
-        except Exception:
-            CLIENTS.remove(ws)
+            try:
+                CLIENTS.remove(ws)
+            except ValueError:
+                pass
 
 
 async def set_state(new_state: str, extra: dict | None = None):
@@ -99,10 +76,10 @@ async def set_state(new_state: str, extra: dict | None = None):
 
 # --- Callbacks from EDSDK thread ---
 def on_evf_frame(jpeg_bytes: bytes):
-    """Called from EDSDK thread - forward to clients + record video."""
+    """Called from EDSDK thread - store latest frame, record video."""
+    global _latest_frame
     video_recorder.add_frame(jpeg_bytes)
-    if _event_loop and _event_loop.is_running():
-        asyncio.run_coroutine_threadsafe(broadcast_binary(jpeg_bytes), _event_loop)
+    _latest_frame = jpeg_bytes
 
 
 def on_photo_downloaded(file_path: str):
@@ -261,9 +238,29 @@ async def _run_session():
                             video_file)
     asyncio.create_task(_bg_upload())
 
-    # Show QR screen for 11 seconds
-    await asyncio.sleep(11)
+    # Show QR screen for 8 seconds
+    await asyncio.sleep(8)
     await set_state("idle")
+
+
+# --- MJPEG live view stream ---
+async def _mjpeg_generator():
+    while True:
+        frame = _latest_frame
+        if frame:
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Content-Length: " + str(len(frame)).encode() + b"\r\n"
+                b"\r\n" + frame + b"\r\n"
+            )
+        await asyncio.sleep(0.033)
+
+
+@app.get("/live")
+async def live_view():
+    return StreamingResponse(_mjpeg_generator(),
+                             media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 # --- Routes ---
@@ -328,7 +325,8 @@ async def restart():
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
-    CLIENTS.append(ws)
+    if ws not in CLIENTS:
+        CLIENTS.append(ws)
     await ws.send_text(json.dumps({"type": "state", "state": STATE}))
 
     # Show update log on first client connect
@@ -355,7 +353,10 @@ async def websocket_endpoint(ws: WebSocket):
                     cb(msg.get("template", "strips"))
 
     except WebSocketDisconnect:
-        CLIENTS.remove(ws)
+        try:
+            CLIENTS.remove(ws)
+        except ValueError:
+            pass
 
 
 @app.on_event("startup")
