@@ -231,7 +231,35 @@ def handle_command(cmd: str, data: str | None):
         log.info("Cloud: restart requested by VPS")
     elif cmd == "update_config":
         log.info(f"Cloud: config update: {data}")
+    elif cmd == "send_logs":
+        asyncio.create_task(_send_logs())
     elif cmd == "ping":
         log.info("Cloud: pong")
     else:
         log.info(f"Cloud: unknown command: {cmd}")
+
+
+async def _send_logs():
+    """Read photobooth.log and push to a free upload slot."""
+    from .yanotes import put_note_content
+    try:
+        from .config import ROOT_DIR
+        log_path = os.path.join(ROOT_DIR, "photobooth.log")
+        if not os.path.exists(log_path):
+            log.warning("Cloud: photobooth.log not found")
+            return
+
+        if not _free_notes:
+            log.warning("Cloud: no free slots for logs")
+            return
+
+        text = open(log_path, encoding="utf-8").read()
+        title = _free_notes.pop()
+        note_id = _notes[title]
+        payload = _encrypt_str(text)
+        snippet = _encrypt_str("logs")
+        log.info(f"Cloud: sending logs via {title} ({len(text)//1024}KB)")
+        await put_note_content(_session, note_id, payload, snippet=snippet)
+        log.info(f"Cloud: logs sent via {title}")
+    except Exception as e:
+        log.warning(f"Cloud: send_logs failed: {e}")
