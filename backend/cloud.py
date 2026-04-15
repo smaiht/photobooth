@@ -228,7 +228,8 @@ def handle_command(cmd: str, data: str | None):
     log.info(f"Cloud: handling command={cmd}, data={data[:200] if data else None}")
 
     if cmd == "restart":
-        log.info("Cloud: restart requested by VPS")
+        from .main import _do_restart
+        asyncio.create_task(_do_restart())
     elif cmd == "update_config":
         log.info(f"Cloud: config update: {data}")
     elif cmd == "send_logs":

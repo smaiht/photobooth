@@ -301,9 +301,7 @@ async def shutdown():
     os._exit(0)
 
 
-@app.post("/api/restart")
-async def restart():
-    """Restart the app — stop camera, spawn new process, kill old."""
+async def _do_restart():
     log.info("Restart requested!")
     if camera:
         log.info("Stopping camera...")
@@ -318,6 +316,11 @@ async def restart():
     subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
     await asyncio.sleep(1)
     os._exit(0)
+
+
+@app.post("/api/restart")
+async def restart():
+    await _do_restart()
 
 
 @app.websocket("/ws")

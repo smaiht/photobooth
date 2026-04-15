@@ -201,7 +201,6 @@ let config = {};
 fetch("/api/config").then(r => r.json()).then(cfg => {
     config = cfg;
     if (cfg.mirror_live_view) liveView.style.transform = "scaleX(-1)";
-    if (cfg.show_restart_button) document.getElementById("debug-restart").hidden = false;
 });
 
 connect();
