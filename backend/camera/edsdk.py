@@ -147,7 +147,10 @@ class Camera:
 
             evf_active = False
             while self._running:
-                self._sdk.EdsGetEvent()
+                try:
+                    self._sdk.EdsGetEvent()
+                except Exception:
+                    log.exception("EdsGetEvent failed")
 
                 try:
                     cmd = self._cmd_queue.get_nowait()
@@ -155,8 +158,8 @@ class Camera:
                     if cmd[0] == "capture":
                         try:
                             self._do_capture()
-                        except EDSDKError as e:
-                            log.warning(f"Capture failed: {e}")
+                        except Exception:
+                            log.exception("Capture exception")
                     elif cmd[0] == "start_evf":
                         self._do_start_evf()
                         evf_active = True
@@ -166,13 +169,15 @@ class Camera:
                 except Empty:
                     pass
 
-                # Download live view frame if active
                 if evf_active and self._evf_frame_cb:
-                    frame = self._download_evf_frame()
-                    if frame:
-                        self._evf_frame_cb(frame)
+                    try:
+                        frame = self._download_evf_frame()
+                        if frame:
+                            self._evf_frame_cb(frame)
+                    except Exception:
+                        log.exception("EVF frame failed")
 
-                time.sleep(0.03)  # ~30fps
+                time.sleep(0.03)
 
         except Exception as e:
             log.exception("EDSDK thread error")
