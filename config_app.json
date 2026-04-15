@@ -6,6 +6,7 @@
     "default_template": "strips",
     "template_pack": "default",
     "mirror_live_view": true,
+    "show_qr": false,
     "print_enabled": false,
     "printer_name": "",
     "hot_folder": ""

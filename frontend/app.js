@@ -69,7 +69,7 @@ function beep(freq, duration) {
 
 // --- QR modal ---
 function showQrModal(url, text) {
-    if (!url || typeof qrcode === "undefined") return;
+    if (!config.show_qr || !url || typeof qrcode === "undefined") return;
     const qr = qrcode(0, "M");
     qr.addData(url);
     qr.make();
