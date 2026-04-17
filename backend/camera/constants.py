@@ -27,6 +27,7 @@ kEdsPropID_EnableProperty = 0x01000000
 kEdsPropID_ContinuousAfMode = 0x01000433
 kEdsPropID_AFEyeDetect = 0x01000455
 kEdsPropID_ShutterType = 0x01000461
+kEdsPropID_AFTrackingObject = 0x01000468
 kEdsPropID_Evf_ViewType = 0x01000513
 
 # --- Save To ---
@@ -45,6 +46,10 @@ kEdsCameraCommand_ExtendShutDownTimer = 0x00000001
 kEdsCameraCommand_PressShutterButton = 0x00000004
 kEdsCameraCommand_DoEvfAf = 0x00000102
 kEdsCameraCommand_SetModeDialDisable = 0x00000113
+
+# --- EVF AF command status ---
+kEdsCameraCommand_EvfAf_OFF = 0
+kEdsCameraCommand_EvfAf_ON = 1
 
 # --- Camera Status Commands ---
 kEdsCameraStatusCommand_UILock = 0x00000000
@@ -104,6 +109,16 @@ AE_MODE_MAP = {
     "manual": 0x03,
 }
 
+# --- AF Mode ---
+AF_MODE_MAP = {
+    "one_shot": 0,
+    "oneshot": 0,
+    "servo": 1,
+    "ai_servo": 1,
+    "ai_focus": 2,
+    "manual": 3,
+}
+
 # --- White Balance ---
 WHITE_BALANCE_MAP = {
     "auto": 0,
@@ -139,6 +154,15 @@ EVF_AF_MODE_MAP = {
     "single_point": 0x10,    # NoTracking_1Point
     "expand_cross": 0x05,    # LiveSingleExpandCross
     "expand_around": 0x06,   # LiveSingleExpandAround
+}
+
+# --- AF tracking object / subject to detect ---
+AF_TRACKING_OBJECT_MAP = {
+    "none": 0,
+    "people": 1,
+    "animals": 2,
+    "vehicles": 3,
+    "auto": 4,
 }
 
 # --- EVF View Type / exposure simulation ---

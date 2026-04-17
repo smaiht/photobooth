@@ -81,6 +81,7 @@ class Camera:
         self._running = False
         self._connected = False
         self._photo_tag = ""
+        self._cfg = {}
         self._thread: threading.Thread | None = None
         self._cmd_queue: Queue = Queue()
         self._evf_frame_cb = None  # callback(jpeg_bytes)
@@ -283,8 +284,11 @@ class Camera:
     def _enable_limited_properties(self):
         """Enable EOS R limited properties that Canon requires before OpenSession."""
         for prop_id, key in [
+            (kEdsPropID_ContinuousAfMode, 0x32F87FF6),
+            (kEdsPropID_AFEyeDetect, 0x7C89405C),
             (kEdsPropID_Evf_ViewType, 0x7CBD2BB7),
             (kEdsPropID_ShutterType, 0x4C157D57),
+            (kEdsPropID_AFTrackingObject, 0x0C78510D),
         ]:
             val = EdsUInt32(prop_id)
             err = self._sdk.EdsSetPropertyData(
@@ -303,6 +307,7 @@ class Camera:
         else:
             cfg = {}
             log.warning("config_camera.json not found, using defaults")
+        self._cfg = cfg
 
         # Save photos to host PC
         self._set_prop_u32(kEdsPropID_SaveTo, kEdsSaveTo_Host)
@@ -357,9 +362,19 @@ class Camera:
         # Drive mode
         self._set_prop_u32(kEdsPropID_DriveMode, kEdsDriveMode_Single)
 
+        # AF operation mode
+        af_mode = AF_MODE_MAP.get(cfg.get("af_mode", "servo"))
+        if af_mode is not None:
+            self._set_prop_u32(kEdsPropID_AFMode, af_mode)
+
         # EVF AF mode (face tracking, zone, etc.)
         af_mode = EVF_AF_MODE_MAP.get(cfg.get("evf_af_mode", "face_tracking"), 0x02)
         self._set_prop_u32(kEdsPropID_Evf_AFMode, af_mode)
+
+        # Subject detection
+        subject = AF_TRACKING_OBJECT_MAP.get(cfg.get("subject_tracking", "people"))
+        if subject is not None:
+            self._set_prop_u32(kEdsPropID_AFTrackingObject, subject)
 
         # Live view exposure simulation. "disable" keeps preview usable in dark flash setups.
         evf_view_type = EVF_VIEW_TYPE_MAP.get(cfg.get("evf_view_type", "disable"))
@@ -469,11 +484,30 @@ class Camera:
 
     def _do_capture(self):
         t = self._photo_tag
-        log.info(f"{t} Capture: sending ShutterButton_Completely_NonAF")
+        focus_before = bool(self._cfg.get("focus_before_capture", False))
+        focus_delay = float(self._cfg.get("focus_delay", 0.4))
+
+        if focus_before:
+            log.info(f"{t} Capture: half-press AF for {focus_delay:.1f}s")
+            err = self._sdk.EdsSendCommand(
+                self._camera, kEdsCameraCommand_PressShutterButton,
+                kEdsCameraCommand_ShutterButton_Halfway)
+            if err != EDS_ERR_OK:
+                log.warning(f"{t} Capture: half-press err=0x{err:08X}")
+            end = time.monotonic() + focus_delay
+            while time.monotonic() < end:
+                self._sdk.EdsGetEvent()
+                time.sleep(0.05)
+            shutter_button = kEdsCameraCommand_ShutterButton_Completely
+            log.info(f"{t} Capture: sending ShutterButton_Completely")
+        else:
+            shutter_button = kEdsCameraCommand_ShutterButton_Completely_NonAF
+            log.info(f"{t} Capture: sending ShutterButton_Completely_NonAF")
+
         for attempt in range(3):
             err = self._sdk.EdsSendCommand(
                 self._camera, kEdsCameraCommand_PressShutterButton,
-                kEdsCameraCommand_ShutterButton_Completely_NonAF)
+                shutter_button)
             if err == EDS_ERR_OK:
                 log.info(f"{t} Capture: shutter OK")
                 break

@@ -47,15 +47,27 @@
     ],
     "_evf_af_mode_comment": "AF area mode during live view. face_tracking = detect and track faces/eyes.",
 
+    "af_mode": "servo",
+    "_af_mode_options": ["one_shot", "servo", "ai_focus", "manual"],
+    "_af_mode_comment": "servo tracks people while live view is running. Lens switch must be AF.",
+
+    "subject_tracking": "people",
+    "_subject_tracking_options": ["none", "people", "animals", "vehicles", "auto"],
+
     "evf_view_type": "disable",
     "_evf_view_type_options": ["during_dof_preview", "enable", "disable", "exposure_plus_dof"],
     "_evf_view_type_comment": "Live view exposure simulation. disable keeps preview bright in a dark booth when flash is the main light.",
 
     "continuous_af": true,
-    "_continuous_af_comment": "true = Servo AF (continuous focus during live view, instant capture). false = One-Shot AF (focus only when capturing).",
+    "_continuous_af_comment": "Preview AF. Helps camera keep focusing during live view, but final capture behavior is controlled by focus_before_capture.",
 
     "eye_detection_af": true,
     "_eye_detection_af_comment": "true = detect and focus on eyes. Canon R8 has excellent eye AF.",
+
+    "focus_before_capture": false,
+    "_focus_before_capture_comment": "false = instant capture using continuous live-view AF focus. true = half-press AF before each shot for diagnostics; slower but safer.",
+    "focus_delay": 0.4,
+    "_focus_delay_comment": "Seconds to hold half-press AF before taking each photo.",
 
     "drive_mode": "single",
     "_drive_mode_options": ["single"],
