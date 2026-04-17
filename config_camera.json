@@ -19,10 +19,10 @@
     "av": "5.6",
     "_av_comment": "Aperture. Examples: 1.8, 2.8, 4.0, 5.6, 8.0, 11, 16. Set ae_mode to manual or av.",
 
-    "tv": "1/125",
+    "tv": "1/500",
     "_tv_comment": "Shutter speed. Examples: 1/60, 1/125, 1/250, 1/500. Set ae_mode to manual or tv.",
 
-    "iso": "auto",
+    "iso": 200,
     "_iso_options": [100, 200, 400, 800, 1600, 3200, 6400, "auto"],
 
     "white_balance": "auto",
