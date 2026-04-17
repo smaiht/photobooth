@@ -19,10 +19,10 @@
     "av": "5.6",
     "_av_comment": "Aperture. Examples: 1.8, 2.8, 4.0, 5.6, 8.0, 11, 16. Set ae_mode to manual or av.",
 
-    "tv": "1/60",
+    "tv": "1/125",
     "_tv_comment": "Shutter speed. Examples: 1/60, 1/125, 1/250, 1/500. Set ae_mode to manual or tv.",
 
-    "iso": 200,
+    "iso": 100,
     "_iso_options": [100, 200, 400, 800, 1600, 3200, 6400, "auto"],
 
     "white_balance": "auto",
@@ -64,7 +64,7 @@
     "eye_detection_af": true,
     "_eye_detection_af_comment": "true = detect and focus on eyes. Canon R8 has excellent eye AF.",
 
-    "focus_before_capture": false,
+    "focus_before_capture": true,
     "_focus_before_capture_comment": "false = instant capture using continuous live-view AF focus. true = half-press AF before each shot for diagnostics; slower but safer.",
     "focus_delay": 0.4,
     "_focus_delay_comment": "Seconds to hold half-press AF before taking each photo.",

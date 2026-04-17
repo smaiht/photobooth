@@ -398,6 +398,7 @@ class Camera:
             self._sdk.EdsSendCommand(self._camera, kEdsCameraCommand_SetModeDialDisable, 1)
 
         log.info("Camera configured from config_camera.json")
+        self._log_applied_config()
 
     def _set_prop_u32(self, prop_id: int, value: int):
         val = EdsUInt32(value)
@@ -406,6 +407,41 @@ class Camera:
         if err != EDS_ERR_OK:
             log.warning(f"SetProp(0x{prop_id:04X})=0x{value:X} failed: 0x{err:08X} (skipping)")
         return err
+
+    def _get_prop_u32(self, prop_id: int) -> int | None:
+        val = EdsUInt32()
+        err = self._sdk.EdsGetPropertyData(
+            self._camera, prop_id, 0, ctypes.sizeof(val), ctypes.byref(val))
+        if err != EDS_ERR_OK:
+            log.warning(f"GetProp(0x{prop_id:04X}) failed: 0x{err:08X}")
+            return None
+        return val.value
+
+    @staticmethod
+    def _name_from_map(mapping: dict, value: int) -> str:
+        for name, mapped in mapping.items():
+            if mapped == value:
+                return str(name)
+        return f"0x{value:X}"
+
+    def _log_applied_config(self):
+        """Read back important camera values so config/apply issues are visible in logs."""
+        checks = [
+            ("Tv", kEdsPropID_Tv, TV_MAP),
+            ("Av", kEdsPropID_Av, AV_MAP),
+            ("ISO", kEdsPropID_ISOSpeed, ISO_MAP),
+            ("AFMode", kEdsPropID_AFMode, AF_MODE_MAP),
+            ("EvfAFMode", kEdsPropID_Evf_AFMode, EVF_AF_MODE_MAP),
+            ("Subject", kEdsPropID_AFTrackingObject, AF_TRACKING_OBJECT_MAP),
+            ("EvfViewType", kEdsPropID_Evf_ViewType, EVF_VIEW_TYPE_MAP),
+            ("ShutterType", kEdsPropID_ShutterType, SHUTTER_TYPE_MAP),
+        ]
+        applied = []
+        for label, prop_id, mapping in checks:
+            value = self._get_prop_u32(prop_id)
+            if value is not None:
+                applied.append(f"{label}={self._name_from_map(mapping, value)}")
+        log.info("Camera applied config: " + ", ".join(applied))
 
     def _register_handlers(self):
         def on_object_event(event, ref, context):

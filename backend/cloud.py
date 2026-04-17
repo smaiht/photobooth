@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import zipfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -18,6 +19,13 @@ CMD_NOTE = "vps2pb"
 _session = None  # aiohttp.ClientSession
 _notes = {}  # {title: note_id}
 _free_notes = set()  # titles of free notes
+_command_handlers: list[Callable[[str, str | None], Awaitable[bool]]] = []
+
+
+def register_command_handler(handler: Callable[[str, str | None], Awaitable[bool]]):
+    """Register an app-level command handler without importing backend.main here."""
+    if handler not in _command_handlers:
+        _command_handlers.append(handler)
 
 
 def _fernet():
@@ -213,7 +221,7 @@ async def cloud_poll_commands():
 
                             await clear_note(_session, note_id)
                             log.info(f"Cloud: command note cleared")
-                            handle_command(cmd_name, data)
+                            await handle_command(cmd_name, data)
                         except Exception as e:
                             log.warning(f"Cloud: command error: {e}")
 
@@ -223,23 +231,32 @@ async def cloud_poll_commands():
         await asyncio.sleep(1)
 
 
-def handle_command(cmd: str, data: str | None):
+async def handle_command(cmd: str, data: str | None):
     """Handle a command from VPS."""
     log.info(f"Cloud: handling command={cmd}, data={data[:200] if data else None}")
 
-    if cmd == "restart":
-        from .main import _do_restart
-        asyncio.create_task(_do_restart())
-    elif cmd == "update_config":
-        log.info(f"Cloud: config update: {data}")
-    elif cmd == "send_logs":
+    # Transport-owned commands stay here because they only touch Yandex Notes/log upload.
+    # App/session commands are delegated to handlers registered by main.py to avoid a
+    # cloud.py -> main.py import cycle. TODO: replace this split with a small command
+    # router module/table so every command is declared in one obvious place.
+    if cmd == "send_logs":
         asyncio.create_task(_send_logs())
-    elif cmd == "clear_logs":
+        return
+    if cmd == "clear_logs":
         asyncio.create_task(_clear_logs())
-    elif cmd == "ping":
+        return
+    if cmd == "ping":
         log.info("Cloud: pong")
-    else:
-        log.info(f"Cloud: unknown command: {cmd}")
+        return
+
+    for handler in list(_command_handlers):
+        try:
+            if await handler(cmd, data):
+                return
+        except Exception as e:
+            log.warning(f"Cloud: command handler failed: {e}")
+
+    log.info(f"Cloud: unknown command: {cmd}")
 
 
 async def _send_logs():

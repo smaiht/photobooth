@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
 from .composer import compose
 from .video import VideoRecorder
-from .cloud import cloud_upload, cloud_init, cloud_poll_commands
+from .cloud import cloud_upload, cloud_init, cloud_poll_commands, register_command_handler
 
 log = logging.getLogger(__name__)
 
@@ -318,6 +318,34 @@ async def _do_restart():
     os._exit(0)
 
 
+async def handle_cloud_command(cmd: str, data: str | None) -> bool:
+    """Handle app-level commands delivered by the cloud transport."""
+    # App-owned commands stay here because they need STATE, camera, restart, or
+    # run_session(). Transport-only commands remain in cloud.py. TODO: move both
+    # sides to one command router/registry once the command list grows.
+    if cmd == "restart":
+        asyncio.create_task(_do_restart())
+        return True
+
+    if cmd in ("run", "start_session"):
+        if STATE != "idle":
+            log.info(f"Cloud: run skipped, state={STATE}")
+            return True
+        if camera and camera._connected:
+            log.info("Cloud: starting session from remote command")
+            asyncio.create_task(run_session())
+        else:
+            log.info("Cloud: run requested but camera is not connected")
+            await set_state("no_camera")
+        return True
+
+    if cmd == "update_config":
+        log.info(f"Cloud: config update: {data}")
+        return True
+
+    return False
+
+
 @app.post("/api/restart")
 async def restart():
     await _do_restart()
@@ -369,6 +397,7 @@ async def startup():
     from .config import ROOT_DIR
     update_log = os.path.join(ROOT_DIR, ".update_log")
     app.state.update_log_path = update_log
+    register_command_handler(handle_cloud_command)
 
     if camera:
         camera.set_callbacks(
