@@ -18,7 +18,7 @@
     "tv": "1/125",
     "_tv_comment": "Shutter speed. Examples: 1/60, 1/125, 1/250, 1/500. Set ae_mode to manual or tv.",
 
-    "iso": "auto",
+    "iso": 100,
     "_iso_options": [100, 200, 400, 800, 1600, 3200, 6400, "auto"],
 
     "white_balance": "auto",
