@@ -23,8 +23,11 @@ kEdsPropID_ExposureCompensation = 0x00000407
 kEdsPropID_Evf_OutputDevice = 0x00000500
 kEdsPropID_Evf_Mode = 0x00000501
 kEdsPropID_Evf_AFMode = 0x0000050E
+kEdsPropID_EnableProperty = 0x01000000
 kEdsPropID_ContinuousAfMode = 0x01000433
 kEdsPropID_AFEyeDetect = 0x01000455
+kEdsPropID_ShutterType = 0x01000461
+kEdsPropID_Evf_ViewType = 0x01000513
 
 # --- Save To ---
 kEdsSaveTo_Camera = 1
@@ -136,6 +139,29 @@ EVF_AF_MODE_MAP = {
     "single_point": 0x10,    # NoTracking_1Point
     "expand_cross": 0x05,    # LiveSingleExpandCross
     "expand_around": 0x06,   # LiveSingleExpandAround
+}
+
+# --- EVF View Type / exposure simulation ---
+# Canon EDSDK 13.20.10: kEdsPropID_Evf_ViewType.
+# "disable" keeps live view bright for framing when flash is the main light.
+EVF_VIEW_TYPE_MAP = {
+    "during_dof_preview": 0x00000000,
+    "enable": 0x00000001,
+    "enabled": 0x00000001,
+    "disable": 0x00000003,
+    "disabled": 0x00000003,
+    "exposure_dof": 0x00000004,
+    "exposure_plus_dof": 0x00000004,
+}
+
+# --- Shutter Type ---
+# Canon EDSDK 13.20.10: kEdsPropID_ShutterType.
+SHUTTER_TYPE_MAP = {
+    "electronic_first_curtain": 0x00000000,
+    "elec_first_curtain": 0x00000000,
+    "efc": 0x00000000,
+    "mechanical": 0x00000002,
+    "electronic": 0x00000003,
 }
 
 # --- Color Space ---

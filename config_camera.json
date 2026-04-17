@@ -12,6 +12,10 @@
     "ae_mode": "manual",
     "_ae_mode_options": ["program", "tv", "av", "manual"],
 
+    "shutter_type": "electronic_first_curtain",
+    "_shutter_type_options": ["electronic_first_curtain", "mechanical", "electronic"],
+    "_shutter_type_comment": "For flash on EOS R8 use electronic_first_curtain. Do not use electronic/silent shutter with flash.",
+
     "av": "5.6",
     "_av_comment": "Aperture. Examples: 1.8, 2.8, 4.0, 5.6, 8.0, 11, 16. Set ae_mode to manual or av.",
 
@@ -42,6 +46,10 @@
         "spot", "single_point", "expand_cross", "expand_around"
     ],
     "_evf_af_mode_comment": "AF area mode during live view. face_tracking = detect and track faces/eyes.",
+
+    "evf_view_type": "disable",
+    "_evf_view_type_options": ["during_dof_preview", "enable", "disable", "exposure_plus_dof"],
+    "_evf_view_type_comment": "Live view exposure simulation. disable keeps preview bright in a dark booth when flash is the main light.",
 
     "continuous_af": true,
     "_continuous_af_comment": "true = Servo AF (continuous focus during live view, instant capture). false = One-Shot AF (focus only when capturing).",

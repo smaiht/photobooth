@@ -251,6 +251,7 @@ class Camera:
 
         # Retry OpenSession - full reset cycle if stale session from previous crash
         for attempt in range(5):
+            self._enable_limited_properties()
             err = self._sdk.EdsOpenSession(self._camera)
             if err == EDS_ERR_OK:
                 log.info("Session opened")
@@ -279,6 +280,19 @@ class Camera:
             time.sleep(2)
         raise RuntimeError(f"Failed to open camera session after 5 attempts")
 
+    def _enable_limited_properties(self):
+        """Enable EOS R limited properties that Canon requires before OpenSession."""
+        for prop_id, key in [
+            (kEdsPropID_Evf_ViewType, 0x7CBD2BB7),
+            (kEdsPropID_ShutterType, 0x4C157D57),
+        ]:
+            val = EdsUInt32(prop_id)
+            err = self._sdk.EdsSetPropertyData(
+                self._camera, kEdsPropID_EnableProperty, key,
+                ctypes.sizeof(val), ctypes.byref(val))
+            if err != EDS_ERR_OK:
+                log.warning(f"EnableProp(0x{prop_id:08X}) failed: 0x{err:08X} (skipping)")
+
     def _configure_for_photobooth(self):
         # Load camera config
         import json
@@ -294,6 +308,11 @@ class Camera:
         self._set_prop_u32(kEdsPropID_SaveTo, kEdsSaveTo_Host)
         capacity = EdsCapacity(numberOfFreeClusters=0x7FFFFFFF, bytesPerSector=0x1000, reset=1)
         _check("EdsSetCapacity", self._sdk.EdsSetCapacity(self._camera, capacity))
+
+        # Shutter type - required for flash sync on EOS R8. Avoid electronic/silent shutter.
+        shutter_type = SHUTTER_TYPE_MAP.get(cfg.get("shutter_type", "electronic_first_curtain"))
+        if shutter_type is not None:
+            self._set_prop_u32(kEdsPropID_ShutterType, shutter_type)
 
         # Image quality
         q = IMAGE_QUALITY_MAP.get(cfg.get("image_quality", "jpeg_large_fine"), EdsImageQuality_LJF)
@@ -341,6 +360,11 @@ class Camera:
         # EVF AF mode (face tracking, zone, etc.)
         af_mode = EVF_AF_MODE_MAP.get(cfg.get("evf_af_mode", "face_tracking"), 0x02)
         self._set_prop_u32(kEdsPropID_Evf_AFMode, af_mode)
+
+        # Live view exposure simulation. "disable" keeps preview usable in dark flash setups.
+        evf_view_type = EVF_VIEW_TYPE_MAP.get(cfg.get("evf_view_type", "disable"))
+        if evf_view_type is not None:
+            self._set_prop_u32(kEdsPropID_Evf_ViewType, evf_view_type)
 
         # Continuous AF (Servo) - keeps focus during live view, instant capture
         if cfg.get("continuous_af", True):
