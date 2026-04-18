@@ -110,6 +110,14 @@ def on_camera_connected():
             _event_loop)
 
 
+def _countdown_timing() -> tuple[float, int, int]:
+    pre_countdown_delay = max(0.0, float(CONFIG["pre_countdown_delay"]))
+    countdown_seconds = max(0, int(CONFIG["countdown_seconds"]))
+    countdown_sound_seconds = int(CONFIG["countdown_sound_seconds"])
+    countdown_sound_seconds = max(0, min(countdown_sound_seconds, countdown_seconds))
+    return pre_countdown_delay, countdown_seconds, countdown_sound_seconds
+
+
 # --- Session flow ---
 async def run_session():
     global _latest_frame, _live_view_active
@@ -136,8 +144,7 @@ async def _run_session():
     log.info(f"=== Session {SESSION_ID} started ===")
 
     num_photos = CONFIG["num_photos"]
-    interval = CONFIG["photo_interval"]
-    countdown_from = CONFIG["countdown_from"]
+    pre_countdown_delay, countdown_seconds, countdown_sound_seconds = _countdown_timing()
 
     # Drop the previous session frame before the frontend reconnects to /live.
     _latest_frame = None
@@ -153,13 +160,25 @@ async def _run_session():
     # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
         tag = f"[P{photo_idx+1}]"
-        log.info(f"{tag} waiting {interval}s")
-        await set_state("countdown", {"photo_index": photo_idx, "total": num_photos})
-        silent = interval - countdown_from
-        if silent > 0:
-            await asyncio.sleep(silent)
-        for sec in range(countdown_from, 0, -1):
-            await broadcast({"type": "countdown", "value": sec})
+        log.info(
+            f"{tag} pre_countdown={pre_countdown_delay}s, "
+            f"countdown={countdown_seconds}s, sound={countdown_sound_seconds}s")
+        await set_state("countdown", {
+            "photo_index": photo_idx,
+            "total": num_photos,
+            "countdown_seconds": countdown_seconds,
+            "countdown_sound_seconds": countdown_sound_seconds,
+        })
+        if pre_countdown_delay > 0:
+            await asyncio.sleep(pre_countdown_delay)
+        for sec in range(countdown_seconds, 0, -1):
+            beep = sec <= countdown_sound_seconds
+            await broadcast({
+                "type": "countdown",
+                "value": sec,
+                "beep": beep,
+                "beep_index": countdown_sound_seconds - sec if beep else 0,
+            })
             await asyncio.sleep(1)
         log.info(f"{tag} take_picture + mark_photo")
         if camera:
@@ -251,8 +270,8 @@ async def _run_session():
                             video_file)
     asyncio.create_task(_bg_upload())
 
-    # Show QR screen for 8 seconds
-    await asyncio.sleep(8)
+    # Show done/QR screen before allowing the next session
+    await asyncio.sleep(max(0, float(CONFIG.get("done_screen_seconds", 8))))
     await set_state("idle")
 
 

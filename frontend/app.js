@@ -96,7 +96,7 @@ function handleMessage(msg) {
             break;
         case "countdown":
             showCountdown(msg.value);
-            if (msg.value <= config.countdown_from) beep(440 + (config.countdown_from - msg.value) * 110, 500);
+            if (msg.beep) beep(440 + (msg.beep_index ?? 0) * 110, 500);
             break;
         case "flash":
             beep(880, 500);
