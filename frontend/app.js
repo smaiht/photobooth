@@ -140,7 +140,7 @@ function switchScreen(state, data = {}) {
             sessionStarting = false;
             tapPrompt.classList.remove("exiting");
             _doSwitch(state, data);
-        }, warmup);
+        }, warmup+200);
         return;
     }
 

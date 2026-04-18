@@ -61,7 +61,7 @@ html, body {
 
 @keyframes pulse {
     0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.75; transform: scale(1.25); }
+    50% { opacity: 0.75; transform: scale(1.15); }
 }
 
 @keyframes tap-exit {
