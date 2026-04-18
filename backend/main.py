@@ -315,7 +315,7 @@ async def _run_session():
 # --- MJPEG live view stream ---
 async def _mjpeg_generator():
     while True:
-        frame = _latest_frame if _live_view_active else _BLANK_JPEG
+        frame = _latest_frame if (_live_view_active and _latest_frame) else _BLANK_JPEG
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n"
