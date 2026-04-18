@@ -122,13 +122,16 @@ function setLiveView(active) {
     if (active) {
         liveView.style.visibility = "hidden";
         liveView.src = `/live?t=${Date.now()}`;
+        console.log("LV: activated, visibility=hidden, connecting to /live");
     } else {
         liveView.src = blankLiveView;
         liveView.style.visibility = "hidden";
+        console.log("LV: deactivated");
     }
 }
 
 liveView.addEventListener("load", () => {
+    console.log("LV: load event, liveViewStarted=" + liveViewStarted + ", src=" + liveView.src.substring(0, 50));
     if (liveViewStarted) liveView.style.visibility = "visible";
 });
 
