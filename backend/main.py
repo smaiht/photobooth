@@ -50,6 +50,7 @@ video_recorder = VideoRecorder()
 _event_loop = None
 _latest_frame: bytes | None = None
 _live_view_active = False
+_evf_accept_after: float = 0.0
 
 
 def _clear_live_view():
@@ -85,7 +86,7 @@ async def set_state(new_state: str, extra: dict | None = None):
 def on_evf_frame(jpeg_bytes: bytes):
     """Called from EDSDK thread - store latest frame, record video."""
     global _latest_frame
-    if not _live_view_active:
+    if not _live_view_active or time.monotonic() < _evf_accept_after:
         return
     _latest_frame = jpeg_bytes
     video_recorder.add_frame(jpeg_bytes)
@@ -139,7 +140,7 @@ async def run_session():
 
 async def _run_session():
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
-    global _live_view_active
+    global _live_view_active, _evf_accept_after
 
     if not camera or not camera.is_connected:
         await set_state("no_camera")
@@ -162,6 +163,7 @@ async def _run_session():
     if camera and camera.is_connected:
         camera.set_download_dir(session_dir)
         camera.start_live_view()
+        _evf_accept_after = time.monotonic() + float(CONFIG.get("live_view_warmup", 0.3))
         _live_view_active = True
         log.info("Live view started")
 
