@@ -119,8 +119,18 @@ function handleMessage(msg) {
 function setLiveView(active) {
     if (active === liveViewStarted) return;
     liveViewStarted = active;
-    liveView.src = active ? `/live?t=${Date.now()}` : blankLiveView;
+    if (active) {
+        liveView.style.visibility = "hidden";
+        liveView.src = `/live?t=${Date.now()}`;
+    } else {
+        liveView.src = blankLiveView;
+        liveView.style.visibility = "hidden";
+    }
 }
+
+liveView.addEventListener("load", () => {
+    if (liveViewStarted) liveView.style.visibility = "visible";
+});
 
 function switchScreen(state, data = {}) {
     currentState = state;
