@@ -19,7 +19,7 @@
     "av": "8.0",
     "_av_comment": "Aperture. f/8 is the stable photobooth start point: more people stay in focus, flash power controls brightness.",
 
-    "tv": "1/1000",
+    "tv": "1/60",
     "_tv_comment": "Shutter speed. 1/160 is a safe flash sync start for EOS R8 + MS300V. Avoid 1/250+ with this non-HSS studio flash.",
 
     "iso": 400,
