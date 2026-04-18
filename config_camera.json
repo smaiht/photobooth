@@ -12,7 +12,7 @@
     "ae_mode": "manual",
     "_ae_mode_options": ["program", "tv", "av", "manual"],
 
-    "shutter_type": "mechanical",
+    "shutter_type": "electronic_first_curtain",
     "_shutter_type_options": ["electronic_first_curtain", "mechanical", "electronic"],
     "_shutter_type_comment": "For flash on EOS R8 use electronic_first_curtain. Do not use electronic/silent shutter with flash.",
 
