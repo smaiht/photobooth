@@ -115,6 +115,9 @@ function handleMessage(msg) {
 }
 
 // --- Screen management ---
+const tapPrompt = document.querySelector(".tap-prompt");
+let sessionStarting = false;
+
 function setLiveView(active) {
     if (active === liveViewStarted) return;
     liveViewStarted = active;
@@ -126,6 +129,25 @@ function setLiveView(active) {
 }
 
 function switchScreen(state, data = {}) {
+    // First countdown of a new session — delay screen switch, animate tap prompt
+    if (state === "countdown" && data.photo_index === 0 && !sessionStarting) {
+        sessionStarting = true;
+        setLiveView(true); // connect to /live in background while animating
+        hideQrModal();
+        tapPrompt.classList.add("exiting");
+        const warmup = (config.live_view_warmup || 0.3) * 1000;
+        setTimeout(() => {
+            sessionStarting = false;
+            tapPrompt.classList.remove("exiting");
+            _doSwitch(state, data);
+        }, warmup);
+        return;
+    }
+
+    _doSwitch(state, data);
+}
+
+function _doSwitch(state, data) {
     currentState = state;
     Object.values(screens).forEach((s) => (s.hidden = true));
 
@@ -214,6 +236,7 @@ let config = {};
 fetch("/api/config").then(r => r.json()).then(cfg => {
     config = cfg;
     if (cfg.mirror_live_view) liveView.style.transform = "scaleX(-1)";
+    document.documentElement.style.setProperty("--warmup", (cfg.live_view_warmup || 0.3) + "s");
 });
 
 connect();
