@@ -51,17 +51,6 @@ _event_loop = None
 _latest_frame: bytes | None = None
 _live_view_active = False
 
-# Black 1x1 JPEG — MJPEG stream sends this when live view is off,
-# so the browser never retains a stale frame from the previous session.
-def _make_blank_jpeg() -> bytes:
-    from PIL import Image
-    import io
-    buf = io.BytesIO()
-    Image.new("RGB", (1, 1), (0, 0, 0)).save(buf, "JPEG")
-    return buf.getvalue()
-
-_BLANK_JPEG = _make_blank_jpeg()
-
 
 def _clear_live_view():
     global _latest_frame, _live_view_active
@@ -315,13 +304,14 @@ async def _run_session():
 # --- MJPEG live view stream ---
 async def _mjpeg_generator():
     while True:
-        frame = _latest_frame if (_live_view_active and _latest_frame) else _BLANK_JPEG
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n"
-            b"Content-Length: " + str(len(frame)).encode() + b"\r\n"
-            b"\r\n" + frame + b"\r\n"
-        )
+        frame = _latest_frame if _live_view_active else None
+        if frame:
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Content-Length: " + str(len(frame)).encode() + b"\r\n"
+                b"\r\n" + frame + b"\r\n"
+            )
         await asyncio.sleep(0.033)
 
 
