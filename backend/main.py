@@ -53,11 +53,9 @@ _live_view_active = False
 
 
 def _clear_live_view():
-    global _latest_frame, _live_view_active, _evf_frame_count
-    log.info(f"_clear_live_view() frame_count={_evf_frame_count}")
+    global _latest_frame, _live_view_active
     _live_view_active = False
     _latest_frame = None
-    _evf_frame_count = 0
 
 
 # --- WebSocket broadcast ---
@@ -84,16 +82,11 @@ async def set_state(new_state: str, extra: dict | None = None):
 
 
 # --- Callbacks from EDSDK thread ---
-_evf_frame_count = 0
-
 def on_evf_frame(jpeg_bytes: bytes):
     """Called from EDSDK thread - store latest frame, record video."""
-    global _latest_frame, _evf_frame_count
+    global _latest_frame
     if not _live_view_active:
         return
-    _evf_frame_count += 1
-    h = hash(jpeg_bytes) & 0xFFFF
-    log.info(f"EVF frame #{_evf_frame_count} len={len(jpeg_bytes)} hash={h:04x}")
     _latest_frame = jpeg_bytes
     video_recorder.add_frame(jpeg_bytes)
 
@@ -310,14 +303,9 @@ async def _run_session():
 
 # --- MJPEG live view stream ---
 async def _mjpeg_generator():
-    sent = 0
     while True:
         frame = _latest_frame if _live_view_active else None
         if frame:
-            sent += 1
-            if sent <= 3:
-                h = hash(frame) & 0xFFFF
-                log.info(f"MJPEG yield #{sent} len={len(frame)} hash={h:04x}")
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n"

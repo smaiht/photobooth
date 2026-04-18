@@ -6,7 +6,7 @@ const screens = {
     done: document.getElementById("screen-done"),
 };
 
-let liveView = document.getElementById("live-view");
+const liveView = document.getElementById("live-view");
 const countdownNum = document.getElementById("countdown-number");
 const photoCounter = document.getElementById("photo-counter");
 const templateTimer = document.getElementById("template-timer");
@@ -14,7 +14,6 @@ const processingOverlay = null; // removed
 const qrModal = document.getElementById("qr-modal");
 const qrModalCode = document.getElementById("qr-modal-code");
 const qrModalText = document.getElementById("qr-modal-text");
-const blankLiveView = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 let ws = null;
 let currentState = "idle";
@@ -116,21 +115,20 @@ function handleMessage(msg) {
 }
 
 // --- Screen management ---
+let liveViewTimer = null;
+
 function setLiveView(active) {
     if (active === liveViewStarted) return;
     liveViewStarted = active;
+    clearTimeout(liveViewTimer);
+    liveView.style.visibility = "hidden";
     if (active) {
-        // Replace the <img> element entirely so no stale pixel buffer exists
-        const fresh = document.createElement("img");
-        fresh.id = "live-view";
-        fresh.alt = "";
-        fresh.style.cssText = liveView.style.cssText;
-        if (config.mirror_live_view) fresh.style.transform = "scaleX(-1)";
-        liveView.replaceWith(fresh);
-        liveView = fresh;
-        liveView.src = `/live?t=${Date.now()}`;
+        liveView.src = "/live";
+        liveViewTimer = setTimeout(() => {
+            if (liveViewStarted) liveView.style.visibility = "visible";
+        }, (config.live_view_warmup || 0.3) * 1000);
     } else {
-        liveView.src = blankLiveView;
+        liveView.removeAttribute("src");
     }
 }
 
