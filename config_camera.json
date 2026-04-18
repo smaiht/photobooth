@@ -64,7 +64,7 @@
     "eye_detection_af": true,
     "_eye_detection_af_comment": "true = detect and focus on eyes. Canon R8 has excellent eye AF.",
 
-    "focus_before_capture": true,
+    "focus_before_capture": false,
     "_focus_before_capture_comment": "false = instant capture using continuous live-view AF focus. true = half-press AF before each shot for diagnostics; slower but safer.",
     "focus_delay": 0.4,
     "_focus_delay_comment": "Seconds to hold half-press AF before taking each photo.",
