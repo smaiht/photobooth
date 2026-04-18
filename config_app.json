@@ -1,6 +1,6 @@
 {
     "num_photos": 4,
-    "pre_countdown_delay": 1,
+    "pre_countdown_delay": 2,
     "_pre_countdown_delay_comment": "Silent live-view seconds before every visible countdown.",
     "countdown_seconds": 3,
     "_countdown_seconds_comment": "Visible countdown before capture. 3 means show 3, 2, 1.",
