@@ -116,18 +116,21 @@ function handleMessage(msg) {
 
 // --- Screen management ---
 let liveViewTimer = null;
+const tapPrompt = document.querySelector(".tap-prompt");
 
 function setLiveView(active) {
     if (active === liveViewStarted) return;
     liveViewStarted = active;
     clearTimeout(liveViewTimer);
-    liveView.style.visibility = "hidden";
     if (active) {
+        liveView.style.opacity = "0";
+        liveView.style.visibility = "visible";
         liveView.src = "/live";
         liveViewTimer = setTimeout(() => {
-            if (liveViewStarted) liveView.style.visibility = "visible";
+            if (liveViewStarted) liveView.style.opacity = "1";
         }, (config.live_view_warmup || 0.3) * 1000);
     } else {
+        liveView.style.opacity = "0";
         liveView.removeAttribute("src");
     }
 }
@@ -174,6 +177,7 @@ function switchScreen(state, data = {}) {
 
     // Idle — update QR text if visible
     if (state === "idle") {
+        tapPrompt.classList.remove("exiting");
         updateQrText("Прошлые фото");
     }
 }
@@ -212,7 +216,9 @@ document.querySelectorAll(".template-btn").forEach((btn) => {
 
 // --- Start session ---
 screens.idle.addEventListener("click", () => {
-    if (currentState === "idle") send({ type: "start_session" });
+    if (currentState !== "idle") return;
+    tapPrompt.classList.add("exiting");
+    send({ type: "start_session" });
 });
 
 // --- Config ---

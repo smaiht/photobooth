@@ -12,7 +12,7 @@
     "default_template": "strips",
     "template_pack": "default",
     "mirror_live_view": true,
-    "live_view_warmup": 0.3,
+    "live_view_warmup": 0.5,
     "_live_view_warmup_comment": "Seconds to wait after EVF start before showing live view. Camera flushes stale buffered frames during this time.",
     "show_qr": false,
     "print_enabled": false,
