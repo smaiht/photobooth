@@ -97,8 +97,11 @@ def on_photo_downloaded(file_path: str):
 
 
 def on_camera_error(error: str):
+    global _latest_frame, _live_view_active
     log.warning(f"Camera error: {error}")
-    if STATE == "idle" and _event_loop and _event_loop.is_running():
+    _live_view_active = False
+    _latest_frame = None
+    if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(set_state("no_camera"), _event_loop)
 
 
@@ -136,6 +139,10 @@ async def _run_session():
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
     global _latest_frame, _live_view_active
 
+    if not camera or not camera.is_connected:
+        await set_state("no_camera")
+        return
+
     SESSION_COUNT += 1
     SESSION_ID = uuid.uuid4().hex[:8] + hex(int(time.time() * 1000000))[2:]
     SESSION_PHOTOS = []
@@ -151,7 +158,7 @@ async def _run_session():
     _live_view_active = False
 
     video_recorder.start(session_dir)
-    if camera:
+    if camera and camera.is_connected:
         camera.set_download_dir(session_dir)
         camera.start_live_view()
         _live_view_active = True
@@ -159,6 +166,12 @@ async def _run_session():
 
     # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
+        if not camera.is_connected:
+            _live_view_active = False
+            _latest_frame = None
+            await set_state("no_camera")
+            return
+
         tag = f"[P{photo_idx+1}]"
         log.info(
             f"{tag} pre_countdown={pre_countdown_delay}s, "
@@ -171,7 +184,18 @@ async def _run_session():
         })
         if pre_countdown_delay > 0:
             await asyncio.sleep(pre_countdown_delay)
+        if not camera.is_connected:
+            _live_view_active = False
+            _latest_frame = None
+            await set_state("no_camera")
+            return
+
         for sec in range(countdown_seconds, 0, -1):
+            if not camera.is_connected:
+                _live_view_active = False
+                _latest_frame = None
+                await set_state("no_camera")
+                return
             beep = sec <= countdown_sound_seconds
             await broadcast({
                 "type": "countdown",
@@ -180,14 +204,20 @@ async def _run_session():
                 "beep_index": countdown_sound_seconds - sec if beep else 0,
             })
             await asyncio.sleep(1)
+
+        if not camera.is_connected:
+            _live_view_active = False
+            _latest_frame = None
+            await set_state("no_camera")
+            return
+
         log.info(f"{tag} take_picture + mark_photo")
-        if camera:
-            camera.take_picture(tag)
-            video_recorder.mark_photo()
+        camera.take_picture(tag)
+        video_recorder.mark_photo()
         await broadcast({"type": "flash"})
 
     # Wait for all photos to download
-    if camera:
+    if camera and camera.is_connected:
         log.info(f"Waiting for {num_photos} photos to download...")
         for _ in range(300):
             if len(SESSION_PHOTOS) >= num_photos:
@@ -369,7 +399,7 @@ async def handle_cloud_command(cmd: str, data: str | None) -> bool:
         if STATE != "idle":
             log.info(f"Cloud: run skipped, state={STATE}")
             return True
-        if camera and camera._connected:
+        if camera and camera.is_connected:
             log.info("Cloud: starting session from remote command")
             asyncio.create_task(run_session())
         else:
@@ -409,7 +439,7 @@ async def websocket_endpoint(ws: WebSocket):
             msg = json.loads(data)
 
             if msg["type"] == "start_session" and STATE == "idle":
-                if camera and camera._connected:
+                if camera and camera.is_connected:
                     asyncio.create_task(run_session())
                 else:
                     await set_state("no_camera")

@@ -63,7 +63,7 @@ PROPERTY_EVENT_HANDLER = ctypes.WINFUNCTYPE(EdsError, ctypes.c_uint32, ctypes.c_
 class EDSDKError(Exception):
     def __init__(self, func_name: str, code: int):
         self.code = code
-        super().__init__(f"EDSDK {func_name} failed: 0x{code:08X}")
+        super().__init__(f"EDSDK {func_name} failed: 0x{code:08X} {edsdk_error_name(code)}")
 
 
 def _check(func_name: str, err: int):
@@ -114,6 +114,10 @@ class Camera:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
+
+    @property
+    def is_connected(self) -> bool:
+        return bool(self._connected and self._running and self._thread and self._thread.is_alive())
 
     def take_picture(self, tag: str = ""):
         """Queue a capture command."""
@@ -183,10 +187,12 @@ class Camera:
                 time.sleep(0.03)
 
         except Exception as e:
+            self._connected = False
             log.exception("EDSDK thread error")
             if self._error_cb:
                 self._error_cb(str(e))
         finally:
+            self._connected = False
             self._cleanup()
 
     def _setup_sdk_functions(self):
@@ -458,6 +464,14 @@ class Camera:
             if event == kEdsStateEvent_WillSoonShutDown:
                 self._sdk.EdsSendCommand(
                     self._camera, kEdsCameraCommand_ExtendShutDownTimer, 0)
+            elif event == kEdsStateEvent_CaptureError:
+                log.warning(f"CaptureError: 0x{data:08X} {edsdk_error_name(data)}")
+            elif event == kEdsStateEvent_Shutdown:
+                self._connected = False
+                self._running = False
+                log.warning("Camera shutdown/disconnected")
+                if self._error_cb:
+                    self._error_cb("Camera shutdown/disconnected")
             return 0
 
         self._obj_handler_ref = OBJECT_EVENT_HANDLER(on_object_event)
@@ -529,7 +543,7 @@ class Camera:
                 self._camera, kEdsCameraCommand_PressShutterButton,
                 kEdsCameraCommand_ShutterButton_Halfway)
             if err != EDS_ERR_OK:
-                log.warning(f"{t} Capture: half-press err=0x{err:08X}")
+                log.warning(f"{t} Capture: half-press err=0x{err:08X} {edsdk_error_name(err)}")
             end = time.monotonic() + focus_delay
             while time.monotonic() < end:
                 self._sdk.EdsGetEvent()
@@ -547,7 +561,9 @@ class Camera:
             if err == EDS_ERR_OK:
                 log.info(f"{t} Capture: shutter OK")
                 break
-            log.warning(f"{t} Capture: attempt {attempt+1}/3 err=0x{err:08X}")
+            log.warning(
+                f"{t} Capture: attempt {attempt+1}/3 "
+                f"err=0x{err:08X} {edsdk_error_name(err)}")
             for _ in range(10):
                 self._sdk.EdsGetEvent()
                 time.sleep(0.1)
