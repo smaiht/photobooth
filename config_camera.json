@@ -22,7 +22,7 @@
     "tv": "1/125",
     "_tv_comment": "Shutter speed. Examples: 1/60, 1/125, 1/250, 1/500. Set ae_mode to manual or tv.",
 
-    "iso": 200,
+    "iso": 400,
     "_iso_options": [100, 200, 400, 800, 1600, 3200, 6400, "auto"],
 
     "white_balance": "auto",
@@ -54,9 +54,9 @@
     "subject_tracking": "people",
     "_subject_tracking_options": ["none", "people", "animals", "vehicles", "auto"],
 
-    "evf_view_type": "disable",
+    "evf_view_type": "enable",
     "_evf_view_type_options": ["during_dof_preview", "enable", "disable", "exposure_plus_dof"],
-    "_evf_view_type_comment": "Live view exposure simulation. disable keeps preview bright in a dark booth when flash is the main light.",
+    "_evf_view_type_comment": "Live view exposure simulation. enable shows ambient exposure closer to the real shot; disable keeps preview artificially bright for framing with flash.",
 
     "continuous_af": true,
     "_continuous_af_comment": "Preview AF. Helps camera keep focusing during live view, but final capture behavior is controlled by focus_before_capture.",
