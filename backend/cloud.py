@@ -286,13 +286,29 @@ async def _send_logs():
 
 
 async def _clear_logs():
-    """Clear photobooth.log and notify via upload slot."""
+    """Drop old rotated logs and move current photobooth.log to photobooth.log.1."""
     from .yanotes import put_note_content
     try:
         from .config import ROOT_DIR
-        log_path = os.path.join(ROOT_DIR, "photobooth.log")
-        open(log_path, "w").close()
-        log.info("Cloud: logs cleared")
+        from logging.handlers import RotatingFileHandler
+
+        log_path = Path(ROOT_DIR) / "photobooth.log"
+        for rotated in Path(ROOT_DIR).glob("photobooth.log.*"):
+            if rotated.is_file():
+                rotated.unlink(missing_ok=True)
+
+        if log_path.exists() and log_path.stat().st_size > 0:
+            for handler in logging.getLogger().handlers:
+                if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename) == log_path:
+                    handler.doRollover()
+                    break
+            else:
+                log_path.replace(log_path.with_name("photobooth.log.1"))
+                log_path.write_text("", encoding="utf-8")
+        else:
+            log_path.write_text("", encoding="utf-8")
+
+        log.info("Cloud: logs rotated and current log cleared")
 
         if not _free_notes:
             return
