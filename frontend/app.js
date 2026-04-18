@@ -135,7 +135,7 @@ function switchScreen(state, data = {}) {
         setLiveView(true); // connect to /live in background while animating
         hideQrModal();
         tapPrompt.classList.add("exiting");
-        const warmup = (config.live_view_warmup || 0.3) * 1000;
+        const warmup = config.live_view_warmup * 1000;
         setTimeout(() => {
             sessionStarting = false;
             tapPrompt.classList.remove("exiting");
