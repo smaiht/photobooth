@@ -17,7 +17,7 @@
     "_shutter_type_comment": "For flash on EOS R8 use electronic_first_curtain. Do not use electronic/silent shutter with flash.",
 
     "av": "5.6",
-    "_av_comment": "Aperture. f/8 is the stable photobooth start point: more people stay in focus, flash power controls brightness.",
+    "_av_comment": "Aperture. f/5.6 is easier for focus and needs less flash power. Try f/8 later if groups are not fully in focus.",
 
     "tv": "1/160",
     "_tv_comment": "Shutter speed. 1/160 is a safe flash sync start for EOS R8 + MS300V. Avoid 1/250+ with this non-HSS studio flash.",
@@ -54,9 +54,9 @@
     "subject_tracking": "people",
     "_subject_tracking_options": ["none", "people", "animals", "vehicles", "auto"],
 
-    "evf_view_type": "enable",
+    "evf_view_type": "disable",
     "_evf_view_type_options": ["during_dof_preview", "enable", "disable", "exposure_plus_dof"],
-    "_evf_view_type_comment": "Live view exposure simulation. disable keeps preview bright for framing with flash; final photo exposure still uses ISO/Tv/Av + MS300V.",
+    "_evf_view_type_comment": "Live view exposure simulation. disable keeps preview bright for framing/focus with flash; final photo still uses fixed ISO/Tv/Av + MS300V.",
 
     "continuous_af": true,
     "_continuous_af_comment": "Preview AF. Helps camera keep focusing during live view, but final capture behavior is controlled by focus_before_capture.",
