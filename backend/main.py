@@ -51,6 +51,23 @@ _event_loop = None
 _latest_frame: bytes | None = None
 _live_view_active = False
 
+# Black 1x1 JPEG — MJPEG stream sends this when live view is off,
+# so the browser never retains a stale frame from the previous session.
+def _make_blank_jpeg() -> bytes:
+    from PIL import Image
+    import io
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1), (0, 0, 0)).save(buf, "JPEG")
+    return buf.getvalue()
+
+_BLANK_JPEG = _make_blank_jpeg()
+
+
+def _clear_live_view():
+    global _latest_frame, _live_view_active
+    _live_view_active = False
+    _latest_frame = None
+
 
 # --- WebSocket broadcast ---
 async def broadcast(msg: dict):
@@ -97,10 +114,8 @@ def on_photo_downloaded(file_path: str):
 
 
 def on_camera_error(error: str):
-    global _latest_frame, _live_view_active
     log.warning(f"Camera error: {error}")
-    _live_view_active = False
-    _latest_frame = None
+    _clear_live_view()
     if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(set_state("no_camera"), _event_loop)
 
@@ -123,13 +138,11 @@ def _countdown_timing() -> tuple[float, int, int]:
 
 # --- Session flow ---
 async def run_session():
-    global _latest_frame, _live_view_active
     try:
         await _run_session()
     except Exception:
         log.exception("Session error")
-        _live_view_active = False
-        _latest_frame = None
+        _clear_live_view()
         if camera:
             camera.stop_live_view()
         await set_state("idle")
@@ -137,7 +150,7 @@ async def run_session():
 
 async def _run_session():
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
-    global _latest_frame, _live_view_active
+    global _live_view_active
 
     if not camera or not camera.is_connected:
         await set_state("no_camera")
@@ -154,8 +167,7 @@ async def _run_session():
     pre_countdown_delay, countdown_seconds, countdown_sound_seconds = _countdown_timing()
 
     # Drop the previous session frame before the frontend reconnects to /live.
-    _latest_frame = None
-    _live_view_active = False
+    _clear_live_view()
 
     video_recorder.start(session_dir)
     if camera and camera.is_connected:
@@ -167,8 +179,7 @@ async def _run_session():
     # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
         if not camera.is_connected:
-            _live_view_active = False
-            _latest_frame = None
+            _clear_live_view()
             await set_state("no_camera")
             return
 
@@ -185,15 +196,13 @@ async def _run_session():
         if pre_countdown_delay > 0:
             await asyncio.sleep(pre_countdown_delay)
         if not camera.is_connected:
-            _live_view_active = False
-            _latest_frame = None
+            _clear_live_view()
             await set_state("no_camera")
             return
 
         for sec in range(countdown_seconds, 0, -1):
             if not camera.is_connected:
-                _live_view_active = False
-                _latest_frame = None
+                _clear_live_view()
                 await set_state("no_camera")
                 return
             beep = sec <= countdown_sound_seconds
@@ -206,8 +215,7 @@ async def _run_session():
             await asyncio.sleep(1)
 
         if not camera.is_connected:
-            _live_view_active = False
-            _latest_frame = None
+            _clear_live_view()
             await set_state("no_camera")
             return
 
@@ -223,8 +231,7 @@ async def _run_session():
             if len(SESSION_PHOTOS) >= num_photos:
                 break
             await asyncio.sleep(0.1)
-        _live_view_active = False
-        _latest_frame = None
+        _clear_live_view()
         camera.stop_live_view()
         log.info("Live view stopped")
 
@@ -308,14 +315,13 @@ async def _run_session():
 # --- MJPEG live view stream ---
 async def _mjpeg_generator():
     while True:
-        frame = _latest_frame if _live_view_active else None
-        if frame:
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n"
-                b"Content-Length: " + str(len(frame)).encode() + b"\r\n"
-                b"\r\n" + frame + b"\r\n"
-            )
+        frame = _latest_frame if _live_view_active else _BLANK_JPEG
+        yield (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n"
+            b"Content-Length: " + str(len(frame)).encode() + b"\r\n"
+            b"\r\n" + frame + b"\r\n"
+        )
         await asyncio.sleep(0.033)
 
 
