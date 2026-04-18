@@ -63,12 +63,21 @@ class VideoRecorder:
 
     def stop_and_encode(self, fps: int = 30) -> str | None:
         self._recording = False
-        if not self._items or not self._frame_size:
+        items = self._items
+        frame_size = self._frame_size
+        session_dir = self._session_dir
+
+        self._items = []
+        self._frame_size = None
+        self._session_dir = None
+        self._placeholders = []
+
+        if not items or not frame_size or not session_dir:
             return None
 
-        output_path = self._session_dir / "session.mp4"
+        output_path = session_dir / "session.mp4"
         freeze_frames = int(FREEZE_SECONDS * fps)
-        w, h = self._frame_size
+        w, h = frame_size
 
         cmd = [
             _FFMPEG, "-y", "-loglevel", "warning",
@@ -83,7 +92,7 @@ class VideoRecorder:
 
         try:
             proc = subprocess.Popen(cmd, **popen_kw)
-            for item in self._items:
+            for item in items:
                 if item is None:
                     continue
                 if isinstance(item, str):
@@ -96,7 +105,6 @@ class VideoRecorder:
 
             proc.stdin.close()
             _, stderr = proc.communicate(timeout=120)
-            self._items = []
 
             if proc.returncode != 0:
                 log.error(f"ffmpeg error: {stderr.decode()}")
@@ -111,8 +119,6 @@ class VideoRecorder:
         except Exception as e:
             log.error(f"Video encoding failed: {e}")
             return None
-        finally:
-            self._items = []
 
     @staticmethod
     def _photo_to_jpeg(photo_path: str, w: int, h: int) -> bytes | None:

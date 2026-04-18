@@ -14,10 +14,12 @@ const processingOverlay = null; // removed
 const qrModal = document.getElementById("qr-modal");
 const qrModalCode = document.getElementById("qr-modal-code");
 const qrModalText = document.getElementById("qr-modal-text");
+const blankLiveView = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 let ws = null;
 let currentState = "idle";
 let templateTimeout = null;
+let liveViewStarted = false;
 
 // --- WebSocket ---
 let wsReconnectTimer = null;
@@ -114,6 +116,12 @@ function handleMessage(msg) {
 }
 
 // --- Screen management ---
+function setLiveView(active) {
+    if (active === liveViewStarted) return;
+    liveViewStarted = active;
+    liveView.src = active ? `/live?t=${Date.now()}` : blankLiveView;
+}
+
 function switchScreen(state, data = {}) {
     currentState = state;
     Object.values(screens).forEach((s) => (s.hidden = true));
@@ -131,6 +139,7 @@ function switchScreen(state, data = {}) {
 
     const key = map[state];
     if (key && screens[key]) screens[key].hidden = false;
+    setLiveView(key === "shooting");
 
     if (state === "countdown" || state === "shooting") {
         const idx = (data.photo_index ?? 0) + 1;

@@ -49,6 +49,7 @@ if sys.platform == "win32":
 video_recorder = VideoRecorder()
 _event_loop = None
 _latest_frame: bytes | None = None
+_live_view_active = False
 
 
 # --- WebSocket broadcast ---
@@ -78,8 +79,10 @@ async def set_state(new_state: str, extra: dict | None = None):
 def on_evf_frame(jpeg_bytes: bytes):
     """Called from EDSDK thread - store latest frame, record video."""
     global _latest_frame
-    video_recorder.add_frame(jpeg_bytes)
+    if not _live_view_active:
+        return
     _latest_frame = jpeg_bytes
+    video_recorder.add_frame(jpeg_bytes)
 
 
 def on_photo_downloaded(file_path: str):
@@ -109,15 +112,21 @@ def on_camera_connected():
 
 # --- Session flow ---
 async def run_session():
+    global _latest_frame, _live_view_active
     try:
         await _run_session()
     except Exception:
         log.exception("Session error")
+        _live_view_active = False
+        _latest_frame = None
+        if camera:
+            camera.stop_live_view()
         await set_state("idle")
 
 
 async def _run_session():
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
+    global _latest_frame, _live_view_active
 
     SESSION_COUNT += 1
     SESSION_ID = uuid.uuid4().hex[:8] + hex(int(time.time() * 1000000))[2:]
@@ -130,12 +139,16 @@ async def _run_session():
     interval = CONFIG["photo_interval"]
     countdown_from = CONFIG["countdown_from"]
 
-    # Start live view + video recording
+    # Drop the previous session frame before the frontend reconnects to /live.
+    _latest_frame = None
+    _live_view_active = False
+
+    video_recorder.start(session_dir)
     if camera:
         camera.set_download_dir(session_dir)
         camera.start_live_view()
+        _live_view_active = True
         log.info("Live view started")
-    video_recorder.start(session_dir)
 
     # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
@@ -161,6 +174,8 @@ async def _run_session():
             if len(SESSION_PHOTOS) >= num_photos:
                 break
             await asyncio.sleep(0.1)
+        _live_view_active = False
+        _latest_frame = None
         camera.stop_live_view()
         log.info("Live view stopped")
 
@@ -244,7 +259,7 @@ async def _run_session():
 # --- MJPEG live view stream ---
 async def _mjpeg_generator():
     while True:
-        frame = _latest_frame
+        frame = _latest_frame if _live_view_active else None
         if frame:
             yield (
                 b"--frame\r\n"
@@ -258,7 +273,11 @@ async def _mjpeg_generator():
 @app.get("/live")
 async def live_view():
     return StreamingResponse(_mjpeg_generator(),
-                             media_type="multipart/x-mixed-replace; boundary=frame")
+                             media_type="multipart/x-mixed-replace; boundary=frame",
+                             headers={
+                                 "Cache-Control": "no-store, no-cache, must-revalidate",
+                                 "Pragma": "no-cache",
+                             })
 
 
 # --- Routes ---
