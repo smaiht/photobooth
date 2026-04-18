@@ -1,5 +1,5 @@
 {
-    "num_photos": 4,
+    "num_photos": 1,
     "pre_countdown_delay": 1,
     "_pre_countdown_delay_comment": "Silent live-view seconds before every visible countdown.",
     "countdown_seconds": 1,

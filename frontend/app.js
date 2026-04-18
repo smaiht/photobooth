@@ -6,7 +6,7 @@ const screens = {
     done: document.getElementById("screen-done"),
 };
 
-const liveView = document.getElementById("live-view");
+let liveView = document.getElementById("live-view");
 const countdownNum = document.getElementById("countdown-number");
 const photoCounter = document.getElementById("photo-counter");
 const templateTimer = document.getElementById("template-timer");
@@ -120,20 +120,19 @@ function setLiveView(active) {
     if (active === liveViewStarted) return;
     liveViewStarted = active;
     if (active) {
-        liveView.style.visibility = "hidden";
+        // Replace the <img> element entirely so no stale pixel buffer exists
+        const fresh = document.createElement("img");
+        fresh.id = "live-view";
+        fresh.alt = "";
+        fresh.style.cssText = liveView.style.cssText;
+        if (config.mirror_live_view) fresh.style.transform = "scaleX(-1)";
+        liveView.replaceWith(fresh);
+        liveView = fresh;
         liveView.src = `/live?t=${Date.now()}`;
-        console.log("LV: activated, visibility=hidden, connecting to /live");
     } else {
         liveView.src = blankLiveView;
-        liveView.style.visibility = "hidden";
-        console.log("LV: deactivated");
     }
 }
-
-liveView.addEventListener("load", () => {
-    console.log("LV: load event, liveViewStarted=" + liveViewStarted + ", src=" + liveView.src.substring(0, 50));
-    if (liveViewStarted) liveView.style.visibility = "visible";
-});
 
 function switchScreen(state, data = {}) {
     currentState = state;
