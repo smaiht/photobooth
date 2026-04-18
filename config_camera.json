@@ -16,7 +16,7 @@
     "_shutter_type_options": ["electronic_first_curtain", "mechanical", "electronic"],
     "_shutter_type_comment": "For flash on EOS R8 use electronic_first_curtain. Do not use electronic/silent shutter with flash.",
 
-    "av": "8.0",
+    "av": "5.6",
     "_av_comment": "Aperture. f/8 is the stable photobooth start point: more people stay in focus, flash power controls brightness.",
 
     "tv": "1/125",
