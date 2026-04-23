@@ -50,7 +50,10 @@ jobs:
           path: photobooth-win.zip
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: latest
+          name: Latest Build
+          body: "Auto-built from main branch"
+          prerelease: true
           files: photobooth-win.zip
