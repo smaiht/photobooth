@@ -45,11 +45,14 @@ async def create_note(s: aiohttp.ClientSession, title: str) -> str:
 
 async def get_note_content(s: aiohttp.ClientSession, note_id: str) -> tuple[dict | None, str | None]:
     async with s.get(f"{BASE}/notes/notes/{note_id}/content",
-                     timeout=aiohttp.ClientTimeout(total=120)) as r:
+                     timeout=aiohttp.ClientTimeout(total=600)) as r:
         if r.status == 404:
             return None, None
         r.raise_for_status()
-        return await r.json(), r.headers.get("x-actual-revision")
+        raw = await r.read()
+        logging.getLogger(__name__).info(f"get_note_content: {len(raw)} bytes")
+        import json
+        return json.loads(raw), r.headers.get("x-actual-revision")
 
 
 async def put_note_content(s: aiohttp.ClientSession, note_id: str, payload: str, snippet: str):

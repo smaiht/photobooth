@@ -161,6 +161,7 @@ def _update_from_notes():
             # Download content
             log.info(f"Notes update: new version {remote_hash}, downloading...")
             content, _ = await get_note_content(s, note_id)
+            log.info(f"Notes update: content type={type(content).__name__}, len={len(str(content)[:200])}")
             if isinstance(content, list):
                 content = content[0]
             payload = None
