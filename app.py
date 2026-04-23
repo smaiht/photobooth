@@ -47,7 +47,7 @@ def _build_loading_html():
              justify-content:center; height:100vh; font-family:'Comfortaa',sans-serif">
     <div style="display:flex; align-items:center; gap:2vw">
         {DOTS_SVG}
-        <span style="font-size:3.5vw; font-weight:600; color:#FF2973">Загрузка</span>
+        <span style="font-size:3.5vw; font-weight:600; color:#FF2973">Загрузка1</span>
     </div>
 </body>
 </html>
