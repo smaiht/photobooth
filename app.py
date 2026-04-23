@@ -106,18 +106,17 @@ import logging
 log = logging.getLogger("update")
 
 _HASH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".update_hash")
-_SKIP_EXTRACT = {"python/python.exe", "python/pythonw.exe", "python/python3.dll"}
 
 
 def _should_skip(name: str) -> bool:
-    """Skip running exe/dll files that Windows locks."""
+    """Skip files that Windows locks while Python is running."""
     n = name.replace("\\", "/")
-    if n in _SKIP_EXTRACT:
+    if n.endswith("/"):
         return True
-    # python/python3XX.dll, python/vcruntime*.dll
-    if n.startswith("python/") and n.endswith(".dll"):
+    # Skip all exe/dll/pyd in python/ — they're locked by running process
+    if n.startswith("python/") and n.rsplit(".", 1)[-1] in ("exe", "dll", "pyd"):
         return True
-    return n.endswith("/")
+    return False
 
 
 def _update_from_notes():
