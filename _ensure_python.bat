@@ -12,6 +12,7 @@ powershell -Command "$f = Get-ChildItem python -Filter 'python*._pth'; $c = Get-
 echo Installing pip...
 powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile get-pip.py"
 python\python.exe get-pip.py --no-warn-script-location
+python\python.exe -m pip install setuptools --no-warn-script-location
 del get-pip.py
 
 :install_deps
