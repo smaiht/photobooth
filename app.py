@@ -152,6 +152,7 @@ def _update_from_notes():
                 return False
 
             remote_hash = _decrypt_str(snippet)
+            log.info(f"Notes update: remote hash decrypted: {remote_hash}")
             local_hash = open(_HASH_FILE).read().strip() if os.path.exists(_HASH_FILE) else ""
             if remote_hash == local_hash:
                 log.info(f"Notes update: up to date ({remote_hash})")
@@ -173,6 +174,7 @@ def _update_from_notes():
             if not payload:
                 log.info("Notes update: no payload")
                 return False
+            log.info(f"Notes update: payload size {len(payload)} chars")
 
             # Decrypt → base64 decode → ZIP
             log.info("Notes update: decrypting...")
