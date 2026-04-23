@@ -8,3 +8,5 @@ photos/
 dist/
 build/
 *.spec
+.update_hash
+.update_log

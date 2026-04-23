@@ -105,6 +105,100 @@ def wait_and_load(window):
 import logging
 log = logging.getLogger("update")
 
+_HASH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".update_hash")
+_SKIP_EXTRACT = {"python/python.exe", "python/pythonw.exe", "python/python3.dll"}
+
+
+def _should_skip(name: str) -> bool:
+    """Skip running exe/dll files that Windows locks."""
+    n = name.replace("\\", "/")
+    if n in _SKIP_EXTRACT:
+        return True
+    # python/python3XX.dll, python/vcruntime*.dll
+    if n.startswith("python/") and n.endswith(".dll"):
+        return True
+    return n.endswith("/")
+
+
+def _update_from_notes():
+    """Download update from Yandex Notes pb_update. Returns True if updated."""
+    import asyncio, base64, zipfile, io
+
+    cookie = os.environ.get("YANOTES_SESSION_ID", "")
+    if not cookie:
+        log.info("Notes update: no YANOTES_SESSION_ID")
+        return False
+
+    async def _do():
+        from backend.yanotes import build_session, find_or_create_notes, get_note_content, list_notes
+        from backend.cloud import _decrypt_str, UPDATE_NOTE
+
+        s = build_session(cookie)
+        try:
+            notes = await find_or_create_notes(s, [UPDATE_NOTE])
+            note_id = notes.get(UPDATE_NOTE)
+            if not note_id:
+                return False
+
+            # Get snippet (encrypted hash)
+            all_notes = await list_notes(s)
+            snippet = ""
+            for n in all_notes:
+                if n.get("title") == UPDATE_NOTE:
+                    snippet = n.get("snippet", "")
+                    break
+            if not snippet:
+                log.info("Notes update: no update available")
+                return False
+
+            remote_hash = _decrypt_str(snippet)
+            local_hash = open(_HASH_FILE).read().strip() if os.path.exists(_HASH_FILE) else ""
+            if remote_hash == local_hash:
+                log.info(f"Notes update: up to date ({remote_hash})")
+                return False
+
+            # Download content
+            log.info(f"Notes update: new version {remote_hash}, downloading...")
+            content, _ = await get_note_content(s, note_id)
+            if isinstance(content, list):
+                content = content[0]
+            payload = None
+            try:
+                for attr in content["children"][0]["children"][0].get("attributes", []):
+                    if attr[0] == "d" and attr[1]:
+                        payload = attr[1]
+                        break
+            except (KeyError, IndexError):
+                pass
+            if not payload:
+                log.info("Notes update: no payload")
+                return False
+
+            # Decrypt → base64 decode → ZIP
+            log.info("Notes update: decrypting...")
+            zip_data = base64.b64decode(_decrypt_str(payload))
+            log.info(f"Notes update: ZIP {len(zip_data)/1048576:.1f} MB")
+
+            # Extract, skip locked exe/dll files
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                for member in zf.namelist():
+                    if _should_skip(member):
+                        continue
+                    target = os.path.join(app_dir, member)
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with zf.open(member) as src, open(target, "wb") as dst:
+                        dst.write(src.read())
+
+            open(_HASH_FILE, "w").write(remote_hash)
+            log.info(f"Notes update: done ({remote_hash})")
+            return True
+        finally:
+            await s.close()
+
+    return asyncio.run(_do())
+
+
 def auto_update():
     """Git pull + pip install if GitHub reachable. TODO: fallback to Yandex Notes."""
     import subprocess, socket
@@ -113,11 +207,19 @@ def auto_update():
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     try:
-        socket.create_connection(("github.com", 443), timeout=5)
+        # TEMP: simulate GitHub blocked — remove this line to restore
+        raise OSError("SIMULATED: GitHub blocked")
+        # socket.create_connection(("github.com", 443), timeout=5)
         log.info("Network: OK")
     except OSError as e:
         log.info(f"Network: no connection ({e})")
-        # TODO: try update from Yandex Notes here
+        try:
+            if _update_from_notes():
+                log.info("Restarting with new code...")
+                subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
+                os._exit(0)
+        except Exception as ex:
+            log.info(f"Notes update error: {ex}")
         return
     app_dir = os.path.dirname(os.path.abspath(__file__))
     try:

@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 # Note titles
 UPLOAD_NOTES = ["pb2vps_1", "pb2vps_2", "pb2vps_3", "pb2vps_4", "pb2vps_5", "pb2vps_6"]
 CMD_NOTE = "vps2pb"
+UPDATE_NOTE = "pb_update"
 
 # State
 _session = None  # aiohttp.ClientSession
@@ -135,7 +136,7 @@ async def cloud_init():
         log.info("Cloud: connecting to Yandex Notes...")
         _session = build_session(cookie)
 
-        _notes = await find_or_create_notes(_session, UPLOAD_NOTES + [CMD_NOTE])
+        _notes = await find_or_create_notes(_session, UPLOAD_NOTES + [CMD_NOTE, UPDATE_NOTE])
         log.info(f"Cloud: notes mapped: {_notes}")
 
         notes = await list_notes(_session)
