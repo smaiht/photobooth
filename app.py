@@ -45,10 +45,20 @@ def _build_loading_html():
 </style></head>
 <body style="margin:0; background:#fff; display:flex; align-items:center;
              justify-content:center; height:100vh; font-family:'Comfortaa',sans-serif">
-    <div style="display:flex; align-items:center; gap:2vw">
-        {DOTS_SVG}
-        <span style="font-size:3.5vw; font-weight:600; color:#FF2973">Загрузка1</span>
+    <div style="display:flex; flex-direction:column; align-items:center; gap:2vw">
+        <div style="display:flex; align-items:center; gap:2vw">
+            {DOTS_SVG}
+            <span id="status" style="font-size:3.5vw; font-weight:600; color:#FF2973">Загрузка</span>
+        </div>
+        <div id="log" style="font-size:1.2vw; color:#999; text-align:center; line-height:1.8"></div>
     </div>
+    <script>
+    function setStatus(text) {{ document.getElementById('status').textContent = text; }}
+    function addLog(text) {{
+        var el = document.getElementById('log');
+        el.innerHTML += text + '<br>';
+    }}
+    </script>
 </body>
 </html>
 """
@@ -105,6 +115,19 @@ def wait_and_load(window):
 import logging
 log = logging.getLogger("update")
 
+_window = None
+
+def _ui(js):
+    """Execute JS on loading screen (safe to call before window is ready)."""
+    try:
+        if _window:
+            _window.evaluate_js(js)
+    except Exception:
+        pass
+
+def _ui_log(text):
+    _ui(f"addLog('{text}')")
+
 _HASH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".update_hash")
 
 
@@ -148,6 +171,7 @@ def _update_from_notes():
                     break
             if not snippet:
                 log.info("Notes update: no update available")
+                _ui_log("Нет обновлений")
                 return False
 
             remote_hash = _decrypt_str(snippet)
@@ -155,10 +179,14 @@ def _update_from_notes():
             local_hash = open(_HASH_FILE).read().strip() if os.path.exists(_HASH_FILE) else ""
             if remote_hash == local_hash:
                 log.info(f"Notes update: up to date ({remote_hash})")
+                _ui_log(f"Версия актуальна ({remote_hash})")
                 return False
 
             # Download content
             log.info(f"Notes update: new version {remote_hash}, downloading...")
+            _ui(f"setStatus('Обновление')")
+            _ui_log(f"Новая версия: {remote_hash}")
+            _ui_log("Скачивание из заметки...")
             content, _ = await get_note_content(s, note_id)
             log.info(f"Notes update: content type={type(content).__name__}, len={len(str(content)[:200])}")
             if isinstance(content, list):
@@ -175,13 +203,17 @@ def _update_from_notes():
                 log.info("Notes update: no payload")
                 return False
             log.info(f"Notes update: payload size {len(payload)} chars")
+            _ui_log(f"Получено {len(payload)/1048576:.0f} МБ")
 
             # Decrypt → base64 decode → ZIP
             log.info("Notes update: decrypting...")
+            _ui_log("Расшифровка...")
             zip_data = base64.b64decode(_decrypt_str(payload))
             log.info(f"Notes update: ZIP {len(zip_data)/1048576:.1f} MB")
+            _ui_log(f"ZIP: {len(zip_data)/1048576:.0f} МБ")
 
             # Extract, skip locked exe/dll files
+            _ui_log("Распаковка...")
             app_dir = os.path.dirname(os.path.abspath(__file__))
             with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
                 for member in zf.namelist():
@@ -194,6 +226,7 @@ def _update_from_notes():
 
             open(_HASH_FILE, "w").write(remote_hash)
             log.info(f"Notes update: done ({remote_hash})")
+            _ui_log("Обновление установлено!")
             return True
         finally:
             await s.close()
@@ -211,36 +244,43 @@ def auto_update():
     try:
         # TEMP: simulate GitHub blocked — remove this line to restore
         raise OSError("SIMULATED: GitHub blocked")
+        
         # socket.create_connection(("github.com", 443), timeout=5)
         log.info("Network: OK")
     except OSError as e:
         log.info(f"Network: no connection ({e})")
+        _ui_log("GitHub недоступен")
+        _ui_log("Проверяю обновления через заметки...")
         try:
             if _update_from_notes():
                 log.info("Restarting with new code...")
+                _ui_log("Перезапуск...")
                 subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
                 os._exit(0)
         except Exception as ex:
             log.info(f"Notes update error: {ex}")
+            _ui_log(f"Ошибка: {ex}")
         return
+    _ui_log("GitHub доступен")
     app_dir = os.path.dirname(os.path.abspath(__file__))
     try:
+        _ui_log("git pull...")
         r = subprocess.run(["git", "pull"], cwd=app_dir, capture_output=True, text=True, timeout=15, startupinfo=si)
         out = (r.stdout or "").strip()
         err = (r.stderr or "").strip()
         log.info(f"git pull: {out} {err}")
+        _ui_log(out or err or "Без изменений")
         if out and "Already up to date" not in out:
+            _ui_log("pip install...")
             r2 = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"],
                                 cwd=app_dir, capture_output=True, text=True, timeout=60, startupinfo=si)
             log.info(f"pip install: done ({(r2.stderr or '').strip()})")
-            log.info("Restarting with new code...")
-            # Spawn new process, kill old (Popen + _exit is safer than execv when pywebview is running)
+            _ui_log("Перезапуск...")
             subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
             os._exit(0)
-            # Alternative: os.execv(sys.executable, [sys.executable] + sys.argv)
-            # Works when no GUI window is open, but may fail with pywebview active
     except Exception as e:
         log.info(f"Error: {e}")
+        _ui_log(f"Ошибка: {e}")
 
 
 def main():
@@ -276,10 +316,13 @@ def main():
         window.evaluate_js("document.addEventListener('contextmenu', e => e.preventDefault())")
 
     window.events.loaded += on_loaded
+    global _window
+    _window = window
 
     def update_then_start():
         # Auto-update while Loading is shown
         auto_update()
+        _ui_log("Запуск сервера...")
         # Start backend
         start_server()
 
