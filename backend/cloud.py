@@ -1,8 +1,14 @@
-"""Upload session ZIP to VPS via Yandex Notes transport."""
+"""Upload session ZIP to VPS via Yandex Notes transport.
+
+Persistent upload queue: if upload fails (no slots, network error), the ZIP
+is kept on disk and added to a JSON queue file.  A background task retries
+queued uploads whenever a slot becomes free.
+"""
 
 import asyncio
 import base64
 import hashlib
+import json as _json
 import logging
 import os
 import zipfile
@@ -21,11 +27,72 @@ _notes = {}  # {title: note_id}
 _free_notes = set()  # titles of free notes
 _command_handlers: list[Callable[[str, str | None], Awaitable[bool]]] = []
 
+# Persistent upload queue
+_upload_queue: list[dict] = []  # [{session_id, zip_path}]
+_QUEUE_FILE: Path | None = None
+_processing_queue = False
+
 
 def register_command_handler(handler: Callable[[str, str | None], Awaitable[bool]]):
     """Register an app-level command handler without importing backend.main here."""
     if handler not in _command_handlers:
         _command_handlers.append(handler)
+
+
+# --- Persistent upload queue ---
+
+def _queue_file() -> Path:
+    global _QUEUE_FILE
+    if not _QUEUE_FILE:
+        from .config import ROOT_DIR
+        _QUEUE_FILE = Path(ROOT_DIR) / "upload_queue.json"
+    return _QUEUE_FILE
+
+
+def _queue_save():
+    """Atomic write queue to disk."""
+    try:
+        path = _queue_file()
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(_json.dumps(_upload_queue, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as e:
+        log.warning(f"Cloud: queue save failed: {e}")
+
+
+def _queue_load():
+    """Load queue from disk on startup. Also scan for orphaned ZIPs."""
+    global _upload_queue
+    path = _queue_file()
+    if path.exists():
+        try:
+            _upload_queue = _json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            log.warning(f"Cloud: failed to load queue: {e}")
+            _upload_queue = []
+
+    # Scan for orphaned ZIPs (crash during upload before queue_add)
+    from .config import PHOTOS_DIR
+    queued_paths = {e["zip_path"] for e in _upload_queue}
+    for zip_file in Path(PHOTOS_DIR).rglob("*.zip"):
+        zp = str(zip_file)
+        if zp not in queued_paths:
+            sid = zip_file.stem
+            _upload_queue.append({"session_id": sid, "zip_path": zp})
+            log.info(f"Cloud: found orphaned ZIP: {sid}")
+
+    # Remove entries whose ZIP no longer exists
+    _upload_queue = [e for e in _upload_queue if Path(e["zip_path"]).exists()]
+    _queue_save()
+    if _upload_queue:
+        log.info(f"Cloud: {len(_upload_queue)} uploads pending")
+
+
+def _queue_add(session_id: str, zip_path: str):
+    """Add a failed upload to the queue."""
+    _upload_queue.append({"session_id": session_id, "zip_path": zip_path})
+    _queue_save()
+    log.info(f"Cloud: queued {session_id} ({len(_upload_queue)} in queue)")
 
 
 def _fernet():
@@ -57,6 +124,8 @@ async def cloud_init():
     global _session, _notes, _free_notes
     from .yanotes import build_session, find_or_create_notes, list_notes
 
+    _queue_load()
+
     cookie = os.environ.get("YANOTES_SESSION_ID", "")
     if not cookie:
         log.warning("Cloud: YANOTES_SESSION_ID not set")
@@ -83,6 +152,8 @@ async def cloud_init():
 
         log.info(f"Cloud: free slots: {len(_free_notes)}/{len(UPLOAD_NOTES)}")
         log.info("Cloud: initialized OK")
+        if _upload_queue and _free_notes:
+            asyncio.create_task(_process_queue())
     except Exception as e:
         log.error(f"Cloud: init failed: {e}")
 
@@ -91,11 +162,12 @@ async def cloud_init():
 
 async def cloud_upload(session_id: str, photos: list[str],
                        collage: str | None, video: str | None):
-    """Pack and upload session."""
+    """Pack and upload session. On failure, queue for retry."""
     if not _session:
         log.warning("Cloud: not initialized, skipping upload")
         return
 
+    zip_path = None
     try:
         log.info(f"Cloud: packing session {session_id}...")
         zip_path = await asyncio.get_event_loop().run_in_executor(
@@ -103,24 +175,29 @@ async def cloud_upload(session_id: str, photos: list[str],
         size_mb = Path(zip_path).stat().st_size / 1048576
         log.info(f"Cloud: packed {size_mb:.1f}MB ({len(photos)} photos)")
 
-        await _upload(session_id, zip_path)
-        Path(zip_path).unlink(missing_ok=True)
+        ok = await _upload(session_id, zip_path)
+        if ok:
+            Path(zip_path).unlink(missing_ok=True)
+        else:
+            _queue_add(session_id, zip_path)
     except Exception as e:
         log.error(f"Cloud: upload failed: {e}")
+        if zip_path and Path(zip_path).exists():
+            _queue_add(session_id, zip_path)
 
 
-async def _upload(session_id: str, zip_path: str):
+async def _upload(session_id: str, zip_path: str) -> bool:
+    """Try to upload a ZIP with retries. Returns True on success."""
     from .yanotes import put_note_content
 
     if not _free_notes:
-        log.warning(f"Cloud: no free slots! All {len(UPLOAD_NOTES)} occupied")
-        return
+        log.warning(f"Cloud: no free slots ({len(UPLOAD_NOTES)} occupied)")
+        return False
 
     title = _free_notes.pop()
     note_id = _notes[title]
     log.info(f"Cloud: using slot {title}, {len(_free_notes)} free remaining")
 
-    # Heavy ops in executor to not block event loop
     def _prepare():
         data = Path(zip_path).read_bytes()
         log.info(f"Cloud: ZIP size: {len(data)/1048576:.1f}MB")
@@ -129,15 +206,57 @@ async def _upload(session_id: str, zip_path: str):
         snippet = _encrypt_str(session_id)
         return payload, snippet
 
-    payload, encrypted_snippet = await asyncio.get_event_loop().run_in_executor(None, _prepare)
-
-    log.info(f"Cloud: uploading to {title}...")
     try:
-        await put_note_content(_session, note_id, payload, snippet=encrypted_snippet)
-        log.info(f"Cloud: uploaded to {title} OK")
+        payload, encrypted_snippet = await asyncio.get_event_loop().run_in_executor(None, _prepare)
     except Exception as e:
-        _free_notes.add(title)  # return slot on failure
-        raise
+        _free_notes.add(title)
+        log.error(f"Cloud: prepare failed: {e}")
+        return False
+
+    for attempt in range(5):
+        try:
+            log.info(f"Cloud: uploading to {title} (attempt {attempt + 1}/5)...")
+            await put_note_content(_session, note_id, payload, snippet=encrypted_snippet)
+            log.info(f"Cloud: uploaded to {title} OK")
+            return True
+        except Exception as e:
+            log.warning(f"Cloud: upload attempt {attempt + 1} failed: {e}")
+            if attempt < 4:
+                await asyncio.sleep(5 * (attempt + 1))  # 5, 10, 15, 20s
+
+    _free_notes.add(title)
+    log.error(f"Cloud: all 5 attempts failed for {session_id}")
+    return False
+
+
+async def _process_queue():
+    """Try to upload queued sessions. Called when a slot becomes free."""
+    global _processing_queue
+    if _processing_queue:
+        return
+    _processing_queue = True
+    try:
+        while _upload_queue and _free_notes and _session:
+            entry = _upload_queue[0]
+            zip_path = entry["zip_path"]
+            session_id = entry["session_id"]
+
+            if not Path(zip_path).exists():
+                _upload_queue.pop(0)
+                _queue_save()
+                continue
+
+            log.info(f"Cloud: retrying queued {session_id}...")
+            ok = await _upload(session_id, zip_path)
+            if ok:
+                Path(zip_path).unlink(missing_ok=True)
+                _upload_queue.pop(0)
+                _queue_save()
+                log.info(f"Cloud: queued {session_id} uploaded OK ({len(_upload_queue)} remaining)")
+            else:
+                break
+    finally:
+        _processing_queue = False  # no slots or network error, stop retrying
 
 
 def _make_zip(session_id: str, photos: list[str], video: str | None) -> str:
@@ -194,6 +313,8 @@ async def cloud_poll_commands():
                             if title not in _free_notes:
                                 _free_notes.add(title)
                                 log.info(f"Cloud: slot FREED: {title} ({len(_free_notes)} free)")
+                                if _upload_queue:
+                                    asyncio.create_task(_process_queue())
                         else:
                             _free_notes.discard(title)
 
@@ -227,6 +348,10 @@ async def cloud_poll_commands():
 
         except Exception as e:
             log.warning(f"Cloud: poll error: {e}")
+
+        # Retry queued uploads if slots available (handles network-back scenario)
+        if _upload_queue and _free_notes and not _processing_queue:
+            asyncio.create_task(_process_queue())
 
         await asyncio.sleep(1)
 

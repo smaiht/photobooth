@@ -102,11 +102,11 @@ def wait_and_load(window):
             time.sleep(0.5)
 
 
-_UPDATE_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".update_log")
+import logging
+log = logging.getLogger("update")
 
 def auto_update():
-    """Git pull + pip install before starting. Restart if code changed."""
-    lines = []
+    """Git pull + pip install if GitHub reachable. TODO: fallback to Yandex Notes."""
     import subprocess, socket
     si = None
     if sys.platform == "win32":
@@ -114,31 +114,29 @@ def auto_update():
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     try:
         socket.create_connection(("github.com", 443), timeout=5)
-        lines.append("Network: OK")
+        log.info("Network: OK")
     except OSError as e:
-        lines.append(f"Network: no connection ({e})")
-        open(_UPDATE_LOG, "w").write("\n".join(lines))
+        log.info(f"Network: no connection ({e})")
+        # TODO: try update from Yandex Notes here
         return
     app_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         r = subprocess.run(["git", "pull"], cwd=app_dir, capture_output=True, text=True, timeout=15, startupinfo=si)
         out = (r.stdout or "").strip()
         err = (r.stderr or "").strip()
-        lines.append(f"git pull: {out} {err}")
+        log.info(f"git pull: {out} {err}")
         if out and "Already up to date" not in out:
             r2 = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"],
                                 cwd=app_dir, capture_output=True, text=True, timeout=60, startupinfo=si)
-            lines.append(f"pip install: done ({(r2.stderr or '').strip()})")
-            lines.append("Restarting with new code...")
-            open(_UPDATE_LOG, "w").write("\n".join(lines))
+            log.info(f"pip install: done ({(r2.stderr or '').strip()})")
+            log.info("Restarting with new code...")
             # Spawn new process, kill old (Popen + _exit is safer than execv when pywebview is running)
             subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
             os._exit(0)
             # Alternative: os.execv(sys.executable, [sys.executable] + sys.argv)
             # Works when no GUI window is open, but may fail with pywebview active
     except Exception as e:
-        lines.append(f"Error: {e}")
-    open(_UPDATE_LOG, "w").write("\n".join(lines))
+        log.info(f"Error: {e}")
 
 
 def main():

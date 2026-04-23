@@ -5,16 +5,16 @@ echo   PHOTOBOOTH KIOSK SETUP (run as Admin!)
 echo ============================================
 echo.
 
-set SHELL_PATH=C:\photobooth\venv\Scripts\pythonw.exe C:\photobooth\app.py
+set SHELL_PATH=C:\photobooth\python\pythonw.exe C:\photobooth\app.py
 
-:: 0. Ensure venv exists
-echo [0/3] Checking venv...
-if not exist "C:\photobooth\venv\Scripts\pythonw.exe" (
-    echo Creating venv...
-    python -m venv C:\photobooth\venv
-    C:\photobooth\venv\Scripts\pip.exe install -q -r C:\photobooth\requirements.txt
+:: 0. Ensure embedded Python
+echo [0/3] Setting up Python...
+call "%~dp0_ensure_python.bat"
+if not exist "C:\photobooth\python\pythonw.exe" (
+    echo ERROR: Python setup failed.
+    pause
+    exit /b 1
 )
-git config --system --add safe.directory C:/photobooth
 echo [OK]
 echo.
 
