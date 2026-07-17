@@ -21,6 +21,7 @@ from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
 from .composer import compose
 from .video import VideoRecorder
 from .cloud import cloud_upload, cloud_init, cloud_poll_commands, register_command_handler
+from . import yadisk_cloud
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ STATE = "idle"
 SESSION_ID = ""
 SESSION_PHOTOS: list[str] = []
 SESSION_COUNT = 0
+SESSION_TOTAL_FILES = 0  # set on session start: num_photos + video + composite
 CONFIG = load_event_config()
 
 CLIENTS: list[WebSocket] = []
@@ -94,12 +96,20 @@ def on_evf_frame(jpeg_bytes: bytes):
 
 def on_photo_downloaded(file_path: str):
     SESSION_PHOTOS.append(file_path)
-    tag = f"[P{len(SESSION_PHOTOS)}]"
+    idx = len(SESSION_PHOTOS)
+    tag = f"[P{idx}]"
     log.info(f"{tag} downloaded: {file_path}")
     video_recorder.set_photo_path(file_path)
     if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(
-            broadcast({"type": "photo_taken", "index": len(SESSION_PHOTOS) - 1}),
+            broadcast({"type": "photo_taken", "index": idx - 1}),
+            _event_loop)
+        # Upload to Yandex.Disk in background (non-blocking)
+        sid = SESSION_ID[:6]
+        ext = Path(file_path).suffix or ".jpg"
+        remote = yadisk_cloud.make_remote_name(sid, idx, SESSION_TOTAL_FILES, ext)
+        asyncio.run_coroutine_threadsafe(
+            yadisk_cloud.upload_file(file_path, remote),
             _event_loop)
 
 
@@ -139,7 +149,7 @@ async def run_session():
 
 
 async def _run_session():
-    global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
+    global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT, SESSION_TOTAL_FILES
     global _live_view_active, _evf_accept_after
 
     if not camera or not camera.is_connected:
@@ -154,6 +164,7 @@ async def _run_session():
     log.info(f"=== Session {SESSION_ID} started ===")
 
     num_photos = CONFIG["num_photos"]
+    SESSION_TOTAL_FILES = num_photos + 1  # photos + video
     pre_countdown_delay, countdown_seconds, countdown_sound_seconds = _countdown_timing()
 
     # Drop the previous session frame before the frontend reconnects to /live.
@@ -291,11 +302,20 @@ async def _run_session():
 
     # Upload in background
     session_id = SESSION_ID
+    total = SESSION_TOTAL_FILES
+    video_idx = num_photos + 1
     async def _bg_upload():
         video_file = await video_future
-        await cloud_upload(session_id, photos_copy,
-                            str(output_path) if output_path else None,
-                            video_file)
+        sid = session_id[:6]
+        # Video — last file in the session
+        if video_file:
+            ext = Path(video_file).suffix or ".mp4"
+            remote = yadisk_cloud.make_remote_name(sid, video_idx, total, ext)
+            await yadisk_cloud.upload_file(video_file, remote)
+        # Legacy Yandex.Notes ZIP transport — disabled in favor of Yandex.Disk
+        # await cloud_upload(session_id, photos_copy,
+        #                     str(output_path) if output_path else None,
+        #                     video_file)
     asyncio.create_task(_bg_upload())
 
     # Show done/QR screen before allowing the next session
@@ -477,5 +497,9 @@ async def startup():
     else:
         log.info("Running without camera (not Windows or EDSDK not found)")
 
+    # Yandex.Notes — still used for remote commands (run/restart) and update delivery (pb_update).
+    # Photo/video uploads moved to Yandex.Disk below.
     asyncio.create_task(cloud_init())
     asyncio.create_task(cloud_poll_commands())
+    asyncio.create_task(yadisk_cloud.yadisk_init())
+    asyncio.create_task(yadisk_cloud.yadisk_poll_queue())
