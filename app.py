@@ -139,148 +139,97 @@ def _should_skip(name: str) -> bool:
     # Skip all exe/dll/pyd in python/ — they're locked by running process
     if n.startswith("python/") and n.rsplit(".", 1)[-1] in ("exe", "dll", "pyd"):
         return True
+    top = n.split("/", 1)[0]
+    # Event configuration and runtime state belong to this installation, not
+    # to a release artifact built on CI.
+    if top in {
+        ".env", ".ENV", "config_app.json", "config_camera.json", "photos",
+        "yadisk_queue.json", "upload_queue.json", "photobooth.log",
+    } or top.startswith("photobooth.log."):
+        return True
     return False
 
 
-def _update_from_notes():
-    """Download update from Yandex Notes pb_update. Returns True if updated."""
-    import asyncio, base64, zipfile, io
+def _extract_update(zip_path: str, app_dir: str) -> None:
+    import zipfile
 
-    cookie = os.environ.get("YANOTES_SESSION_ID", "")
-    if not cookie:
-        log.info("Notes update: no YANOTES_SESSION_ID")
+    root = os.path.realpath(app_dir)
+    with zipfile.ZipFile(zip_path) as zf:
+        bad_member = zf.testzip()
+        if bad_member:
+            raise ValueError(f"ZIP CRC failed: {bad_member}")
+        for info in zf.infolist():
+            member = info.filename.replace("\\", "/")
+            if _should_skip(member):
+                continue
+            target = os.path.realpath(os.path.join(app_dir, member))
+            if os.path.commonpath((root, target)) != root:
+                raise ValueError(f"ZIP path escapes application directory: {member}")
+            if info.is_dir():
+                os.makedirs(target, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with zf.open(info) as src, open(target, "wb") as dst:
+                dst.write(src.read())
+
+
+def _update_from_disk() -> bool:
+    """Download and install the latest VPS-published Disk artifact."""
+    import json
+    from backend.yadisk_updates import download_artifact, read_status
+
+    config_path = Path(__file__).resolve().parent / "config_app.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    folder = config.get("yadisk_updates_folder", "photobooth_system/updates")
+    status = read_status(folder)
+    if not status:
+        log.info("Disk update: status.json not available")
+        _ui_log("На Диске нет обновлений")
         return False
 
-    async def _do():
-        from backend.yanotes import build_session, find_or_create_notes, get_note_content, list_notes
-        from backend.cloud import _decrypt_str, UPDATE_NOTE
+    version = status.get("version")
+    kind = status.get("kind", "full")
+    if not isinstance(version, str) or len(version) != 16 or kind not in ("full", "small"):
+        raise ValueError("invalid update status")
+    local_hash = Path(_HASH_FILE).read_text(encoding="utf-8").strip() \
+        if os.path.exists(_HASH_FILE) else ""
+    if version == local_hash:
+        log.info(f"Disk update: already current ({version}, {kind})")
+        _ui_log(f"Версия актуальна ({version})")
+        return False
 
-        s = build_session(cookie)
-        try:
-            notes = await find_or_create_notes(s, [UPDATE_NOTE])
-            note_id = notes.get(UPDATE_NOTE)
-            if not note_id:
-                return False
-
-            # Get snippet (encrypted hash)
-            all_notes = await list_notes(s)
-            snippet = ""
-            for n in all_notes:
-                if n.get("title") == UPDATE_NOTE:
-                    snippet = n.get("snippet", "")
-                    break
-            if not snippet:
-                log.info("Notes update: no update available")
-                _ui_log("Нет обновлений")
-                return False
-
-            remote_hash = _decrypt_str(snippet)
-            log.info(f"Notes update: remote hash decrypted: {remote_hash}")
-            local_hash = open(_HASH_FILE).read().strip() if os.path.exists(_HASH_FILE) else ""
-            if remote_hash == local_hash:
-                log.info(f"Notes update: up to date ({remote_hash})")
-                _ui_log(f"Версия актуальна ({remote_hash})")
-                return False
-
-            # Download content
-            log.info(f"Notes update: new version {remote_hash}, downloading...")
-            _ui(f"setStatus('Обновление')")
-            _ui_log(f"Новая версия: {remote_hash}")
-            _ui_log("Скачивание из заметки...")
-            content, _ = await get_note_content(s, note_id)
-            log.info(f"Notes update: content type={type(content).__name__}, len={len(str(content)[:200])}")
-            if isinstance(content, list):
-                content = content[0]
-            payload = None
-            try:
-                for attr in content["children"][0]["children"][0].get("attributes", []):
-                    if attr[0] == "d" and attr[1]:
-                        payload = attr[1]
-                        break
-            except (KeyError, IndexError):
-                pass
-            if not payload:
-                log.info("Notes update: no payload")
-                return False
-            log.info(f"Notes update: payload size {len(payload)} chars")
-            _ui_log(f"Получено {len(payload)/1048576:.0f} МБ")
-
-            # Decrypt → base64 decode → ZIP
-            log.info("Notes update: decrypting...")
-            _ui_log("Расшифровка...")
-            zip_data = base64.b64decode(_decrypt_str(payload))
-            log.info(f"Notes update: ZIP {len(zip_data)/1048576:.1f} MB")
-            _ui_log(f"ZIP: {len(zip_data)/1048576:.0f} МБ")
-
-            # Extract, skip locked exe/dll files
-            _ui_log("Распаковка...")
-            app_dir = os.path.dirname(os.path.abspath(__file__))
-            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-                for member in zf.namelist():
-                    if _should_skip(member):
-                        continue
-                    target = os.path.join(app_dir, member)
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    with zf.open(member) as src, open(target, "wb") as dst:
-                        dst.write(src.read())
-
-            open(_HASH_FILE, "w").write(remote_hash)
-            log.info(f"Notes update: done ({remote_hash})")
-            _ui_log("Обновление установлено!")
-            return True
-        finally:
-            await s.close()
-
-    return asyncio.run(_do())
-
-
+    _ui(f"setStatus('Обновление')")
+    _ui_log(f"Новая версия на Диске: {version} ({kind})")
+    app_dir = Path(__file__).resolve().parent
+    temp_path = app_dir / ".update_download.zip"
+    try:
+        _ui_log("Скачивание с Яндекс Диска...")
+        size, _ = download_artifact(status, temp_path)
+        _ui_log(f"Получено {size / 1048576:.0f} МБ")
+        _ui_log("Распаковка...")
+        _extract_update(str(temp_path), str(app_dir))
+        Path(_HASH_FILE).write_text(version, encoding="utf-8")
+        log.info(f"Disk update: installed {version} ({kind})")
+        _ui_log("Обновление установлено!")
+        return True
+    finally:
+        temp_path.unlink(missing_ok=True)
 def auto_update():
-    """Git pull + pip install if GitHub reachable. TODO: fallback to Yandex Notes."""
-    import subprocess, socket
+    """Check the Disk status pointer before starting the application."""
+    import subprocess
     si = None
     if sys.platform == "win32":
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     try:
-        # TEMP: simulate GitHub blocked — remove this line to restore
-        raise OSError("SIMULATED: GitHub blocked")
-        
-        # socket.create_connection(("github.com", 443), timeout=5)
-        log.info("Network: OK")
-    except OSError as e:
-        log.info(f"Network: no connection ({e})")
-        _ui_log("GitHub недоступен")
-        _ui_log("Проверяю обновления через заметки...")
-        try:
-            if _update_from_notes():
-                log.info("Restarting with new code...")
-                _ui_log("Перезапуск...")
-                subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
-                os._exit(0)
-        except Exception as ex:
-            log.info(f"Notes update error: {ex}")
-            _ui_log(f"Ошибка: {ex}")
-        return
-    _ui_log("GitHub доступен")
-    app_dir = os.path.dirname(os.path.abspath(__file__))
-    try:
-        _ui_log("git pull...")
-        r = subprocess.run(["git", "pull"], cwd=app_dir, capture_output=True, text=True, timeout=15, startupinfo=si)
-        out = (r.stdout or "").strip()
-        err = (r.stderr or "").strip()
-        log.info(f"git pull: {out} {err}")
-        _ui_log(out or err or "Без изменений")
-        if out and "Already up to date" not in out:
-            _ui_log("pip install...")
-            r2 = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"],
-                                cwd=app_dir, capture_output=True, text=True, timeout=60, startupinfo=si)
-            log.info(f"pip install: done ({(r2.stderr or '').strip()})")
+        if _update_from_disk():
+            log.info("Restarting with new Disk code...")
             _ui_log("Перезапуск...")
             subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
             os._exit(0)
     except Exception as e:
-        log.info(f"Error: {e}")
-        _ui_log(f"Ошибка: {e}")
+        log.exception("Disk update failed")
+        _ui_log(f"Ошибка обновления: {e}")
 
 
 def main():

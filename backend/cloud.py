@@ -20,7 +20,6 @@ log = logging.getLogger(__name__)
 # Note titles
 UPLOAD_NOTES = ["pb2vps_1", "pb2vps_2", "pb2vps_3", "pb2vps_4", "pb2vps_5", "pb2vps_6"]
 CMD_NOTE = "vps2pb"
-UPDATE_NOTE = "pb_update"
 
 # State
 _session = None  # aiohttp.ClientSession
@@ -136,7 +135,7 @@ async def cloud_init():
         log.info("Cloud: connecting to Yandex Notes...")
         _session = build_session(cookie)
 
-        _notes = await find_or_create_notes(_session, UPLOAD_NOTES + [CMD_NOTE, UPDATE_NOTE])
+        _notes = await find_or_create_notes(_session, UPLOAD_NOTES + [CMD_NOTE])
         log.info(f"Cloud: notes mapped: {_notes}")
 
         notes = await list_notes(_session)
@@ -157,6 +156,11 @@ async def cloud_init():
             asyncio.create_task(_process_queue())
     except Exception as e:
         log.error(f"Cloud: init failed: {e}")
+        if _session:
+            await _session.close()
+        _session = None
+        _notes = {}
+        _free_notes = set()
 
 
 # --- Upload ---
@@ -281,8 +285,6 @@ async def cloud_poll_commands():
     """Background task: poll deltas every 2s. Updates free slots + handles commands."""
     global _cmd_revision
     from .yanotes import get_deltas, get_db_revision, get_note_content, clear_note, list_notes
-
-    await asyncio.sleep(5)  # wait for init
 
     if not _session or not _notes:
         log.warning("Cloud: polling skipped, not initialized")

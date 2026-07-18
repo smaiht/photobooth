@@ -1,18 +1,19 @@
-"""Yandex.Disk uploader for photobooth sessions.
+"""Reliable Yandex.Disk outbox for photobooth sessions.
 
-All session files (photos + video) go into one flat folder on Yandex.Disk.
-Filename format: <YYYYMMDD>_<HHMMSS>_<session_id>_<index>.<ext>
-
-On init: ensure folder exists.
-On upload: serialise via semaphore (one file at a time -- faster on slow nets).
-On failure: persist to upload_queue.json, retry every 5s in background.
+Media files stay flat in the event folder so the folder can be shared as an
+album.  A JSON manifest is uploaded to ``_sessions/inbox`` only after every
+session file is present and verified.  The VPS treats that manifest as the
+durable "session complete" marker.
 """
 
+from __future__ import annotations
+
 import asyncio
-import json as _json
+import hashlib
+import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiohttp
@@ -20,183 +21,364 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 API = "https://cloud-api.yandex.net/v1/disk"
+SCHEMA_VERSION = 1
+RETRY_MIN_SECONDS = 5
+RETRY_MAX_SECONDS = 60
 
-# State
 _session: aiohttp.ClientSession | None = None
-_folder: str = ""
-_initialized = False
-_upload_lock = asyncio.Lock()  # one upload at a time
+_transfer_session: aiohttp.ClientSession | None = None
+_folder = ""
+_token = ""
+_queue: list[dict] = []
+_queue_file: Path | None = None
+_queue_lock = asyncio.Lock()
+_queue_loaded = False
+_configured = False
 
-# Persistent retry queue
-_queue: list[dict] = []  # [{local_path, remote_name}]
-_QUEUE_FILE: Path | None = None
-
-
-# --- Queue persistence ---
 
 def _queue_path() -> Path:
-    global _QUEUE_FILE
-    if not _QUEUE_FILE:
+    global _queue_file
+    if _queue_file is None:
         from .config import ROOT_DIR
-        _QUEUE_FILE = Path(ROOT_DIR) / "yadisk_queue.json"
-    return _QUEUE_FILE
+        _queue_file = Path(ROOT_DIR) / "yadisk_queue.json"
+    return _queue_file
 
 
-def _queue_save():
+def _queue_save() -> None:
     try:
         path = _queue_path()
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(_json.dumps(_queue, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps(_queue, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(path)
-    except Exception as e:
-        log.warning(f"YaDisk: queue save failed: {e}")
+    except Exception as exc:
+        log.error(f"YaDisk: queue save failed: {exc}")
+        raise
 
 
-def _queue_load():
-    global _queue
+def _queue_load() -> None:
+    global _queue, _queue_loaded
+    if _queue_loaded:
+        return
+    _queue_loaded = True
     path = _queue_path()
     if not path.exists():
+        _queue = []
         return
     try:
-        _queue = _json.loads(path.read_text(encoding="utf-8"))
-        _queue = [e for e in _queue if Path(e["local_path"]).exists()]
-        _queue_save()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            raise ValueError("queue root must be a list")
+        if data and "files" not in data[0]:
+            raise ValueError("legacy per-file queue requires manual migration")
+        _queue = data
         if _queue:
-            log.info(f"YaDisk: {len(_queue)} pending uploads loaded")
-    except Exception as e:
-        log.warning(f"YaDisk: queue load failed: {e}")
+            log.info(f"YaDisk: loaded {len(_queue)} pending sessions")
+    except Exception as exc:
+        log.error(f"YaDisk: queue load failed: {exc}")
         _queue = []
 
 
-# --- Init ---
+def _safe_extension(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    if not suffix or len(suffix) > 10 or not suffix[1:].isalnum():
+        return ".bin"
+    return suffix
 
-async def yadisk_init():
-    """Create aiohttp session, ensure target folder exists, load queue."""
-    global _session, _folder, _initialized
 
+def build_session_job(session_id: str, photos: list[str], collage: str | None,
+                      video: str | None, created_at: datetime | None = None,
+                      event_folder: str | None = None) -> dict:
+    """Build a serializable outbox job with stable remote names."""
+    if not session_id or not session_id.isalnum():
+        raise ValueError("session_id must be non-empty and alphanumeric")
+
+    created_at = created_at or datetime.now(timezone.utc)
+    prefix = created_at.astimezone().strftime("%Y%m%d_%H%M%S")
+    base = f"{prefix}_{session_id}"
+    files = []
+
+    for index, local_path in enumerate(photos, start=1):
+        files.append({
+            "local_path": str(local_path),
+            "name": f"{base}_photo_{index:02d}{_safe_extension(local_path)}",
+            "kind": "photo",
+            "index": index,
+        })
+
+    if collage:
+        files.append({
+            "local_path": str(collage),
+            "name": f"{base}_print{_safe_extension(collage)}",
+            "kind": "print",
+        })
+
+    if video:
+        files.append({
+            "local_path": str(video),
+            "name": f"{base}_video{_safe_extension(video)}",
+            "kind": "video",
+        })
+
+    if not files:
+        raise ValueError("cannot queue an empty session")
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "session_id": session_id,
+        "created_at": created_at.isoformat(),
+        "event_folder": event_folder,
+        "manifest_name": f"{base}.json",
+        "files": files,
+    }
+
+
+async def enqueue_session(session_id: str, photos: list[str], collage: str | None,
+                          video: str | None) -> None:
+    """Persist a complete local session for background delivery."""
     _queue_load()
+    from .config import load_event_config
+    folder_name = str(load_event_config().get("yadisk_folder") or "").strip().strip("/")
+    if not folder_name or any(part in ("", ".", "..") for part in folder_name.split("/")):
+        raise ValueError("yadisk_folder is missing or invalid")
+    job = build_session_job(
+        session_id, photos, collage, video, event_folder="/" + folder_name)
+    missing = [entry["local_path"] for entry in job["files"]
+               if not Path(entry["local_path"]).is_file()]
+    if missing:
+        raise FileNotFoundError(f"session files missing: {missing}")
 
-    token = os.environ.get("YADISK_TOKEN", "")
-    if not token:
-        log.warning("YaDisk: YADISK_TOKEN not set, uploads disabled")
-        return
+    async with _queue_lock:
+        # Re-queueing the same session is idempotent.
+        _queue[:] = [entry for entry in _queue
+                     if entry.get("session_id") != session_id]
+        _queue.append(job)
+        _queue_save()
+    log.info(f"YaDisk: queued session {session_id} ({len(job['files'])} files)")
+
+
+async def _close_sessions() -> None:
+    global _session, _transfer_session
+    if _session and not _session.closed:
+        await _session.close()
+    if _transfer_session and not _transfer_session.closed:
+        await _transfer_session.close()
+    _session = None
+    _transfer_session = None
+
+
+async def _connect() -> bool:
+    global _session, _transfer_session
+    if not _configured:
+        return False
+    if _session and not _session.closed:
+        return True
+
+    await _close_sessions()
+    timeout = aiohttp.ClientTimeout(total=60, connect=15)
+    _session = aiohttp.ClientSession(
+        headers={"Authorization": f"OAuth {_token}"}, timeout=timeout)
+    _transfer_session = aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=600, connect=30))
+
+    try:
+        for path in (_folder, f"{_folder}/_sessions",
+                     f"{_folder}/_sessions/inbox",
+                     f"{_folder}/_sessions/done"):
+            if not await _ensure_directory(path):
+                await _close_sessions()
+                return False
+        log.info(f"YaDisk: connected, event folder {_folder}")
+        return True
+    except Exception as exc:
+        log.warning(f"YaDisk: connect failed: {exc}")
+        await _close_sessions()
+        return False
+
+
+async def _ensure_directory(path: str) -> bool:
+    try:
+        async with _session.put(f"{API}/resources", params={"path": path}) as response:
+            if response.status in (201, 409):
+                return True
+            log.warning(f"YaDisk: create directory {path}: {response.status} "
+                        f"{await response.text()}")
+            return False
+    except Exception as exc:
+        log.warning(f"YaDisk: create directory {path} failed: {exc}")
+        return False
+
+
+def _file_md5(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+async def _resource_matches(remote_path: str, size: int, md5: str | None) -> bool:
+    """Wait for a 202 upload to become visible and verify its metadata."""
+    for attempt in range(10):
+        try:
+            async with _session.get(
+                f"{API}/resources",
+                params={"path": remote_path, "fields": "size,md5"},
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    remote_md5 = data.get("md5")
+                    if data.get("size") == size and (not md5 or not remote_md5 or remote_md5 == md5):
+                        return True
+                elif response.status not in (404, 423):
+                    log.warning(f"YaDisk: verify {remote_path}: {response.status} "
+                                f"{await response.text()}")
+                    return False
+        except Exception as exc:
+            log.warning(f"YaDisk: verify {remote_path} failed: {exc}")
+            return False
+        await asyncio.sleep(min(1 + attempt, 5))
+    return False
+
+
+async def _upload_path(local_path: Path, remote_path: str) -> tuple[bool, dict]:
+    size = local_path.stat().st_size
+    md5 = await asyncio.to_thread(_file_md5, local_path)
+    try:
+        async with _session.get(
+            f"{API}/resources/upload",
+            params={"path": remote_path, "overwrite": "true"},
+        ) as response:
+            if response.status != 200:
+                log.warning(f"YaDisk: upload URL {remote_path}: {response.status} "
+                            f"{await response.text()}")
+                return False, {}
+            href = (await response.json())["href"]
+
+        with local_path.open("rb") as source:
+            async with _transfer_session.put(href, data=source) as upload_response:
+                if upload_response.status not in (201, 202):
+                    log.warning(f"YaDisk: upload {remote_path}: {upload_response.status} "
+                                f"{await upload_response.text()}")
+                    return False, {}
+
+        if not await _resource_matches(remote_path, size, md5):
+            log.warning(f"YaDisk: uploaded file did not verify: {remote_path}")
+            return False, {}
+        return True, {"size": size, "md5": md5}
+    except Exception as exc:
+        log.warning(f"YaDisk: upload {remote_path} failed: {exc}")
+        return False, {}
+
+
+async def _upload_bytes(data: bytes, remote_path: str) -> bool:
+    try:
+        async with _session.get(
+            f"{API}/resources/upload",
+            params={"path": remote_path, "overwrite": "true"},
+        ) as response:
+            if response.status != 200:
+                log.warning(f"YaDisk: manifest URL: {response.status} {await response.text()}")
+                return False
+            href = (await response.json())["href"]
+        async with _transfer_session.put(href, data=data) as upload_response:
+            if upload_response.status not in (201, 202):
+                log.warning(f"YaDisk: manifest upload: {upload_response.status} "
+                            f"{await upload_response.text()}")
+                return False
+        return await _resource_matches(remote_path, len(data), None)
+    except Exception as exc:
+        log.warning(f"YaDisk: manifest upload failed: {exc}")
+        return False
+
+
+async def _upload_job(job: dict) -> bool:
+    event_folder = job.get("event_folder") or _folder
+    for path in (event_folder, f"{event_folder}/_sessions",
+                 f"{event_folder}/_sessions/inbox",
+                 f"{event_folder}/_sessions/done"):
+        if not await _ensure_directory(path):
+            return False
+
+    manifest_files = []
+    for entry in job["files"]:
+        local_path = Path(entry["local_path"])
+        if not local_path.is_file():
+            log.error(f"YaDisk: local session file disappeared: {local_path}")
+            return False
+        remote_path = f"{event_folder}/{entry['name']}"
+        ok, metadata = await _upload_path(local_path, remote_path)
+        if not ok:
+            return False
+        manifest_entry = {key: value for key, value in entry.items()
+                          if key != "local_path"}
+        manifest_entry.update(metadata)
+        manifest_files.append(manifest_entry)
+
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "session_id": job["session_id"],
+        "created_at": job["created_at"],
+        "files": manifest_files,
+    }
+    payload = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    manifest_path = f"{event_folder}/_sessions/inbox/{job['manifest_name']}"
+    if not await _upload_bytes(payload, manifest_path):
+        return False
+
+    log.info(f"YaDisk: session {job['session_id']} published "
+             f"({len(manifest_files)} files)")
+    return True
+
+
+async def yadisk_init() -> bool:
+    """Load configuration and make an initial connection attempt."""
+    global _folder, _token, _configured
+    _queue_load()
+    _token = os.environ.get("YADISK_TOKEN", "").strip()
+    if not _token:
+        log.warning("YaDisk: YADISK_TOKEN not set, worker will stay disabled")
+        return False
 
     from .config import load_event_config
-    folder_name = (load_event_config().get("yadisk_folder") or "").strip()
-    if not folder_name:
-        log.warning("YaDisk: yadisk_folder not set in config")
-        return
-    _folder = "/" + folder_name.lstrip("/")
-
-    _session = aiohttp.ClientSession(headers={"Authorization": f"OAuth {token}"})
-
-    try:
-        async with _session.put(f"{API}/resources", params={"path": _folder}) as r:
-            if r.status == 201:
-                log.info(f"YaDisk: created folder {_folder}")
-            elif r.status == 409:
-                log.info(f"YaDisk: folder {_folder} already exists")
-            else:
-                log.warning(f"YaDisk: create folder status {r.status}: {await r.text()}")
-                await _session.close()
-                _session = None
-                return
-    except Exception as e:
-        log.error(f"YaDisk: init failed: {e}")
-        await _session.close()
-        _session = None
-        return
-
-    _initialized = True
-
-
-async def yadisk_close():
-    global _session
-    if _session:
-        await _session.close()
-        _session = None
-
-
-# --- Upload ---
-
-def make_remote_name(session_id: str, index: int, total: int, ext: str) -> str:
-    """<YYYYMMDD_HHMMSS>_<session_id>_<index>of<total>.<ext>
-
-    `total` is the total number of files the session will produce. The VPS
-    poller waits until <total> files for the same session appear, then sends
-    them as one TG album.
-    """
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{ts}_{session_id}_{index}of{total}.{ext.lstrip('.')}"
-
-
-async def upload_file(local_path: str, remote_name: str) -> bool:
-    """Upload one file.  Serialised via semaphore.  On failure -> queue.
-
-    Returns True on success.
-    """
-    if not _initialized:
-        log.warning(f"YaDisk: not initialized, queueing {remote_name}")
-        _queue.append({"local_path": local_path, "remote_name": remote_name})
-        _queue_save()
+    folder_name = str(load_event_config().get("yadisk_folder") or "").strip().strip("/")
+    if not folder_name or any(part in ("", ".", "..") for part in folder_name.split("/")):
+        log.warning("YaDisk: yadisk_folder is missing or invalid")
         return False
 
-    if not Path(local_path).exists():
-        log.warning(f"YaDisk: local file missing: {local_path}")
-        return False
-
-    async with _upload_lock:
-        ok = await _do_upload(local_path, remote_name)
-
-    if not ok:
-        _queue.append({"local_path": local_path, "remote_name": remote_name})
-        _queue_save()
-        log.info(f"YaDisk: queued {remote_name} ({len(_queue)} pending)")
-    return ok
+    _folder = "/" + folder_name
+    _configured = True
+    return await _connect()
 
 
-async def _do_upload(local_path: str, remote_name: str) -> bool:
-    """Get upload URL from API, then PUT the file there.  No retries here."""
-    remote_path = f"{_folder}/{remote_name}"
-    try:
-        async with _session.get(f"{API}/resources/upload",
-                                params={"path": remote_path, "overwrite": "true"}) as r:
-            if r.status != 200:
-                log.warning(f"YaDisk: get upload-url status {r.status}: {await r.text()}")
-                return False
-            href = (await r.json())["href"]
-
-        with open(local_path, "rb") as f:
-            async with _session.put(href, data=f) as r2:
-                if r2.status not in (201, 202):
-                    log.warning(f"YaDisk: PUT status {r2.status}: {await r2.text()}")
-                    return False
-
-        log.info(f"YaDisk: uploaded {remote_name}")
-        return True
-    except Exception as e:
-        log.warning(f"YaDisk: upload {remote_name} failed: {e}")
-        return False
+async def yadisk_close() -> None:
+    await _close_sessions()
 
 
-# --- Retry queue (background) ---
-
-async def yadisk_poll_queue():
-    """Drain the queue every 5 seconds.  Run as a background task."""
+async def yadisk_poll_queue() -> None:
+    """Deliver queued sessions forever, reconnecting with bounded backoff."""
+    delay = RETRY_MIN_SECONDS
     while True:
-        await asyncio.sleep(5)
-        if not _queue or not _initialized:
+        if not _configured:
+            await asyncio.sleep(RETRY_MAX_SECONDS)
             continue
-        async with _upload_lock:
-            while _queue and _initialized:
-                entry = _queue[0]
-                if not Path(entry["local_path"]).exists():
+        if not _queue:
+            delay = RETRY_MIN_SECONDS
+            await asyncio.sleep(2)
+            continue
+        if not await _connect():
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, RETRY_MAX_SECONDS)
+            continue
+
+        job = _queue[0]
+        if await _upload_job(job):
+            async with _queue_lock:
+                if _queue and _queue[0].get("session_id") == job.get("session_id"):
                     _queue.pop(0)
                     _queue_save()
-                    continue
-                ok = await _do_upload(entry["local_path"], entry["remote_name"])
-                if ok:
-                    _queue.pop(0)
-                    _queue_save()
-                else:
-                    break  # network/auth still down, wait next tick
+            delay = RETRY_MIN_SECONDS
+            continue
+
+        await _close_sessions()
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, RETRY_MAX_SECONDS)

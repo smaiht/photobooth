@@ -10,3 +10,6 @@ build/
 *.spec
 .update_hash
 .update_log
+photobooth.log*
+upload_queue.json
+yadisk_queue.json
