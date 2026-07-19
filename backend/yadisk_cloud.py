@@ -156,6 +156,35 @@ async def enqueue_session(session_id: str, photos: list[str], collage: str | Non
     log.info(f"YaDisk: queued session {session_id} ({len(job['files'])} files)")
 
 
+def pending_count() -> int:
+    _queue_load()
+    return len(_queue)
+
+
+async def set_event_folder(folder_name: str) -> None:
+    """Switch future sessions after all jobs for the previous event are uploaded."""
+    global _folder
+    name = str(folder_name or "").strip()
+    if (not name or name in (".", "..") or "/" in name or "\\" in name
+            or any(ord(char) < 32 for char in name) or len(name) > 160):
+        raise ValueError("invalid event folder name")
+    if pending_count():
+        raise RuntimeError("есть незавершённые загрузки предыдущего event")
+    if not await _connect():
+        raise RuntimeError("Яндекс Диск недоступен")
+    target = "/" + name
+    for path in (target, f"{target}/_sessions", f"{target}/_sessions/inbox",
+                 f"{target}/_sessions/done"):
+        if not await _ensure_directory(path):
+            raise RuntimeError(f"не удалось создать папку {path}")
+    _folder = target
+    log.info(f"YaDisk: active event changed to {_folder}")
+
+
+def current_event_folder() -> str:
+    return _folder.lstrip("/")
+
+
 async def _close_sessions() -> None:
     global _session, _transfer_session
     if _session and not _session.closed:

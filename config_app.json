@@ -18,10 +18,10 @@
     "print_enabled": false,
     "printer_name": "",
     "hot_folder": "",
-    "media_transport": "yadisk",
-    "_media_transport_comment": "yadisk = event folder + manifest delivery; notes = emergency legacy ZIP transport.",
     "yadisk_folder": "test_event",
     "_yadisk_folder_comment": "Name of the folder on Yandex.Disk where session files are uploaded. Created on first start.",
     "yadisk_updates_folder": "photobooth_system/updates",
-    "_yadisk_updates_folder_comment": "Private Disk folder with full/small artifacts and status.json. Must match VPS."
+    "_yadisk_updates_folder_comment": "Private Disk folder with full/small artifacts and status.json. Must match VPS.",
+    "yadisk_control_folder": "photobooth_system/control",
+    "_yadisk_control_folder_comment": "Private command inbox, responses and logs. Must match VPS."
 }

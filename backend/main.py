@@ -17,11 +17,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 
-from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL
+from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL, ROOT_DIR
 from .composer import compose
 from .video import VideoRecorder
-from .cloud import cloud_upload, cloud_init, cloud_poll_commands, register_command_handler
-from . import yadisk_cloud
+from . import yadisk_cloud, yadisk_control
 
 log = logging.getLogger(__name__)
 
@@ -33,9 +32,6 @@ SESSION_ID = ""
 SESSION_PHOTOS: list[str] = []
 SESSION_COUNT = 0
 CONFIG = load_event_config()
-MEDIA_TRANSPORT = CONFIG.get("media_transport", "yadisk")
-if MEDIA_TRANSPORT not in ("yadisk", "notes"):
-    raise ValueError(f"Unknown media_transport: {MEDIA_TRANSPORT}")
 
 CLIENTS: list[WebSocket] = []
 
@@ -55,6 +51,7 @@ _event_loop = None
 _latest_frame: bytes | None = None
 _live_view_active = False
 _evf_accept_after: float = 0.0
+_background_uploads: set[asyncio.Task] = set()
 
 
 def _clear_live_view():
@@ -298,18 +295,15 @@ async def _run_session():
     session_id = SESSION_ID
     async def _bg_upload():
         video_file = await video_future
-        if MEDIA_TRANSPORT == "notes":
-            await cloud_upload(session_id, photos_copy,
-                               str(output_path) if output_path else None,
-                               video_file)
-        else:
-            await yadisk_cloud.enqueue_session(
-                session_id,
-                photos_copy,
-                str(output_path) if output_path else None,
-                video_file,
-            )
-    asyncio.create_task(_bg_upload())
+        await yadisk_cloud.enqueue_session(
+            session_id,
+            photos_copy,
+            str(output_path) if output_path else None,
+            video_file,
+        )
+    upload_task = asyncio.create_task(_bg_upload())
+    _background_uploads.add(upload_task)
+    upload_task.add_done_callback(_background_uploads.discard)
 
     # Show done/QR screen before allowing the next session
     await asyncio.sleep(max(0, float(CONFIG.get("done_screen_seconds", 8))))
@@ -397,45 +391,132 @@ async def _do_restart():
     os._exit(0)
 
 
-async def handle_cloud_command(cmd: str, data: str | None) -> bool:
-    """Handle app-level commands delivered by the cloud transport."""
-    # App-owned commands stay here because they need STATE, camera, restart, or
-    # run_session(). Transport-only commands remain in cloud.py. TODO: move both
-    # sides to one command router/registry once the command list grows.
+def _save_event_folder(name: str) -> None:
+    config_path = ROOT_DIR / "config_app.json"
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    data["yadisk_folder"] = name
+    temporary = config_path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(data, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+    temporary.replace(config_path)
+    CONFIG["yadisk_folder"] = name
+
+
+def _clear_local_logs() -> None:
+    from logging.handlers import RotatingFileHandler
+
+    log_path = ROOT_DIR / "photobooth.log"
+    for rotated in ROOT_DIR.glob("photobooth.log.*"):
+        if rotated.is_file():
+            rotated.unlink(missing_ok=True)
+    if log_path.exists() and log_path.stat().st_size:
+        for handler in logging.getLogger().handlers:
+            if (isinstance(handler, RotatingFileHandler)
+                    and Path(handler.baseFilename).resolve() == log_path.resolve()):
+                handler.doRollover()
+                break
+        else:
+            log_path.replace(log_path.with_name("photobooth.log.1"))
+            log_path.write_text("", encoding="utf-8")
+    else:
+        log_path.write_text("", encoding="utf-8")
+
+
+async def handle_disk_command(command: dict) -> dict:
+    """Execute one validated Disk command and return its response payload."""
+    cmd = command["command"]
+    data = command.get("data")
+    command_id = command["command_id"]
+
     if cmd == "restart":
-        asyncio.create_task(_do_restart())
-        return True
+        if STATE not in ("idle", "no_camera"):
+            return {"status": "error", "message": f"Перезапуск отложен: state={STATE}"}
+        if _background_uploads:
+            return {
+                "status": "error",
+                "message": "Перезапуск отложен: завершается подготовка загрузки",
+            }
+        return {
+            "status": "ok",
+            "message": "Перезапуск подтверждён",
+            "_post_action": _do_restart,
+        }
 
     if cmd in ("run", "start_session"):
         if STATE != "idle":
-            log.info(f"Cloud: run skipped, state={STATE}")
-            return True
-        if camera and camera.is_connected:
-            log.info("Cloud: starting session from remote command")
-            asyncio.create_task(run_session())
-        else:
-            log.info("Cloud: run requested but camera is not connected")
+            return {"status": "error", "message": f"Будка занята: state={STATE}"}
+        if not camera or not camera.is_connected:
             await set_state("no_camera")
-        return True
+            return {"status": "error", "message": "Камера не подключена"}
 
-    if cmd == "update_config":
-        log.info(f"Cloud: config update: {data}")
-        return True
+        async def start_session_after_ack() -> None:
+            asyncio.create_task(run_session())
 
-    return False
+        return {
+            "status": "ok",
+            "message": "Сессия запущена",
+            "_post_action": start_session_after_ack,
+        }
 
+    if cmd == "status":
+        hash_path = ROOT_DIR / ".update_hash"
+        version = hash_path.read_text(encoding="utf-8").strip() if hash_path.exists() else "unknown"
+        connected = bool(camera and camera.is_connected)
+        event = yadisk_cloud.current_event_folder() or str(CONFIG.get("yadisk_folder", ""))
+        return {
+            "status": "ok",
+            "message": (
+                f"State: {STATE}\nCamera: {'online' if connected else 'offline'}\n"
+                f"Event: {event}\nUpload queue: {yadisk_cloud.pending_count()}\n"
+                f"Version: {version}"
+            ),
+            "event_folder": event,
+        }
 
-async def _cloud_service():
-    """Initialize Notes before polling and retry after startup failures."""
-    while True:
-        await cloud_init()
-        await cloud_poll_commands()
-        await asyncio.sleep(10)
+    if cmd == "set_event":
+        name = data.get("name", "") if isinstance(data, dict) else ""
+        if STATE not in ("idle", "no_camera"):
+            return {"status": "error", "message": f"Event не изменён: state={STATE}"}
+        if _background_uploads:
+            return {"status": "error", "message": "Event не изменён: завершается текущая загрузка"}
+        try:
+            await yadisk_cloud.set_event_folder(name)
+            _save_event_folder(name)
+        except Exception as exc:
+            return {"status": "error", "message": f"Event не изменён: {exc}"}
+        return {
+            "status": "ok",
+            "message": f"Event активирован на будке: {name}",
+            "event_folder": name,
+        }
+
+    if cmd == "send_logs":
+        log_path = ROOT_DIR / "photobooth.log"
+        if not log_path.is_file():
+            return {"status": "error", "message": "photobooth.log не найден"}
+        artifact_path = await yadisk_control.upload_log(command_id, log_path)
+        return {
+            "status": "ok",
+            "message": "Лог загружен",
+            "artifact_path": artifact_path,
+        }
+
+    if cmd == "clear_logs":
+        await asyncio.to_thread(_clear_local_logs)
+        return {"status": "ok", "message": "Логи очищены"}
+
+    return {"status": "error", "message": f"Неизвестная команда: {cmd}"}
 
 
 async def _yadisk_service():
     await yadisk_cloud.yadisk_init()
     await yadisk_cloud.yadisk_poll_queue()
+
+
+async def _control_service():
+    folder = CONFIG.get("yadisk_control_folder", "photobooth_system/control")
+    await yadisk_control.control_init(folder)
+    await yadisk_control.control_poll_loop(handle_disk_command)
 
 
 @app.post("/api/restart")
@@ -486,10 +567,8 @@ async def startup():
     _event_loop = asyncio.get_event_loop()
 
     # Log auto-update results (deferred - will show after WS connects)
-    from .config import ROOT_DIR
     update_log = os.path.join(ROOT_DIR, ".update_log")
     app.state.update_log_path = update_log
-    register_command_handler(handle_cloud_command)
 
     if camera:
         camera.set_callbacks(
@@ -503,8 +582,5 @@ async def startup():
     else:
         log.info("Running without camera (not Windows or EDSDK not found)")
 
-    # Yandex.Notes remains available for commands, logs and the emergency
-    # media fallback selected by config_app.json.
-    asyncio.create_task(_cloud_service())
-    if MEDIA_TRANSPORT == "yadisk":
-        asyncio.create_task(_yadisk_service())
+    asyncio.create_task(_control_service())
+    asyncio.create_task(_yadisk_service())

@@ -13,6 +13,20 @@ from backend import yadisk_updates
 
 
 class DiskUpdateDownloadTests(unittest.TestCase):
+    def test_selects_active_artifact(self):
+        artifact = {
+            "path": "/photobooth_system/updates/artifacts/small.zip",
+            "size": 10,
+            "sha256": "a" * 64,
+        }
+        kind, selected = app._active_update({
+            "schema_version": 1,
+            "active": "small",
+            "artifacts": {"full": None, "small": artifact},
+        })
+        self.assertEqual(kind, "small")
+        self.assertEqual(selected, artifact)
+
     def test_downloads_and_verifies_artifact(self):
         payload = b"update zip bytes"
         status = {
@@ -83,6 +97,29 @@ class UpdateExtractionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "escapes application directory"):
                 app._extract_update(str(archive), str(target))
             self.assertFalse((root / "outside.txt").exists())
+
+
+class FullUpdateSchedulingTests(unittest.TestCase):
+    def test_creates_one_shot_windows_apply_script(self):
+        with TemporaryDirectory() as tmpdir, \
+             patch("subprocess.Popen") as popen, \
+             patch.object(app.sys, "argv", ["app.py"]), \
+             patch.object(app.sys, "executable", r"C:\photobooth\python\pythonw.exe"):
+            root = Path(tmpdir)
+            archive = root / ".update_download.zip"
+            archive.write_bytes(b"zip")
+
+            app._schedule_full_update(archive, root, "a" * 16)
+
+            script = (root / ".update_apply.ps1").read_text(encoding="utf-8")
+            self.assertIn("Wait-Process -Id $ParentPid", script)
+            self.assertIn("Expand-Archive -LiteralPath $ZipPath", script)
+            self.assertIn('"config_app.json"', script)
+            self.assertIn('Start-Process -FilePath $PythonExe', script)
+            args = popen.call_args.args[0]
+            self.assertEqual(args[0], "powershell.exe")
+            self.assertIn("-ParentPid", args)
+            self.assertIn("-ArgsJson", args)
 
 
 if __name__ == "__main__":
