@@ -6,10 +6,14 @@ from backend import main, yadisk_control
 
 
 class CommandValidationTests(unittest.TestCase):
+    def test_poll_interval_is_ten_seconds(self):
+        self.assertEqual(yadisk_control.POLL_INTERVAL, 10)
+
     def test_validates_command_id_and_filename(self):
         command_id = "a" * 32
         command = yadisk_control.validate_command({
-            "schema_version": 1,
+            "schema_version": 2,
+            "message_type": "command",
             "command_id": command_id,
             "command": "set_event",
             "data": {"name": "Свадьба Ивановых 2026"},
@@ -25,7 +29,8 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
     async def test_writes_response_and_moves_done_before_restart(self):
         command_id = "a" * 32
         body = json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
+            "message_type": "command",
             "command_id": command_id,
             "command": "restart",
             "data": None,
@@ -43,7 +48,10 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
 
         async def upload(payload, path):
             calls.append("response")
-            self.assertEqual(json.loads(payload)["command_id"], command_id)
+            response = json.loads(payload)
+            self.assertEqual(response["command_id"], command_id)
+            self.assertEqual(response["message_type"], "command_response")
+            self.assertEqual(path, f"/control/to_vps/response_{command_id}.json")
 
         async def move(filename):
             calls.append("done")
@@ -51,9 +59,10 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
 
         item = {
             "name": f"{command_id}.json",
-            "path": f"disk:/control/commands/inbox/{command_id}.json",
+            "path": f"disk:/control/to_booth/{command_id}.json",
         }
-        with patch("backend.yadisk_control._download_bytes", AsyncMock(return_value=body)), \
+        with patch.object(yadisk_control, "_root", "/control"), \
+             patch("backend.yadisk_control._download_bytes", AsyncMock(return_value=body)), \
              patch("backend.yadisk_control._upload_bytes", side_effect=upload), \
              patch("backend.yadisk_control._move_done", side_effect=move):
             self.assertTrue(await yadisk_control._process_command(item, handler))

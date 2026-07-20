@@ -553,7 +553,7 @@ async def handle_disk_command(command: dict) -> dict:
 
 async def _yadisk_service():
     await yadisk_cloud.yadisk_init()
-    await yadisk_cloud.yadisk_poll_queue()
+    await yadisk_cloud.yadisk_upload_queue_loop()
 
 
 async def _control_service():

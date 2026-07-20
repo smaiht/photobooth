@@ -239,17 +239,18 @@ try {
     )
 
 
-def _active_update(status: dict) -> tuple[str, dict]:
+def _full_update(status: dict) -> dict:
     if not isinstance(status, dict) or status.get("schema_version") != 1:
         raise ValueError("invalid update status")
-    kind = status.get("active")
+    if status.get("active") != "full":
+        raise ValueError("update status does not point to the full artifact")
     artifacts = status.get("artifacts")
-    if kind not in ("full", "small") or not isinstance(artifacts, dict):
+    if not isinstance(artifacts, dict):
         raise ValueError("invalid update status")
-    artifact = artifacts.get(kind)
+    artifact = artifacts.get("full")
     if not isinstance(artifact, dict):
-        raise ValueError("active update artifact is missing")
-    return kind, artifact
+        raise ValueError("full update artifact is missing")
+    return artifact
 
 
 def _update_from_disk() -> str | None:
@@ -266,19 +267,19 @@ def _update_from_disk() -> str | None:
         _ui_log("На Диске нет обновлений")
         return None
 
-    kind, artifact = _active_update(status)
+    artifact = _full_update(status)
     version = artifact.get("sha256")
     if not isinstance(version, str) or len(version) != 64:
         raise ValueError("invalid update sha256")
     local_hash = Path(_HASH_FILE).read_text(encoding="utf-8").strip() \
         if os.path.exists(_HASH_FILE) else ""
     if version == local_hash:
-        log.info(f"Disk update: already current ({version[:16]}, {kind})")
+        log.info(f"Disk update: already current ({version[:16]}, full)")
         _ui_log(f"Версия актуальна ({version[:16]})")
         return None
 
     _ui(f"setStatus('Обновление')")
-    _ui_log(f"Новая версия на Диске: {version[:16]} ({kind})")
+    _ui_log(f"Новая полная версия на Диске: {version[:16]}")
     app_dir = Path(__file__).resolve().parent
     temp_path = app_dir / ".update_download.zip"
     keep_download = False
@@ -286,7 +287,7 @@ def _update_from_disk() -> str | None:
         _ui_log("Скачивание с Яндекс Диска...")
         size, _ = download_artifact(artifact, temp_path)
         _ui_log(f"Получено {size / 1048576:.0f} МБ")
-        if kind == "full" and sys.platform == "win32":
+        if sys.platform == "win32":
             _ui_log("Полная установка после перезапуска...")
             # Validate paths and CRC before handing the archive to PowerShell.
             import zipfile
@@ -308,7 +309,7 @@ def _update_from_disk() -> str | None:
         _ui_log("Распаковка...")
         _extract_update(str(temp_path), str(app_dir))
         Path(_HASH_FILE).write_text(version, encoding="utf-8")
-        log.info(f"Disk update: installed {version[:16]} ({kind})")
+        log.info(f"Disk update: installed full {version[:16]}")
         _ui_log("Обновление установлено!")
         return "restart"
     finally:

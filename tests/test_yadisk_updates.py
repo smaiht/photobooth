@@ -13,18 +13,17 @@ from backend import yadisk_updates
 
 
 class DiskUpdateDownloadTests(unittest.TestCase):
-    def test_selects_active_artifact(self):
+    def test_selects_full_artifact(self):
         artifact = {
-            "path": "/photobooth_system/updates/artifacts/small.zip",
+            "path": "/photobooth_system/updates/artifacts/full.zip",
             "size": 10,
             "sha256": "a" * 64,
         }
-        kind, selected = app._active_update({
+        selected = app._full_update({
             "schema_version": 1,
-            "active": "small",
-            "artifacts": {"full": None, "small": artifact},
+            "active": "full",
+            "artifacts": {"full": artifact},
         })
-        self.assertEqual(kind, "small")
         self.assertEqual(selected, artifact)
 
     def test_downloads_and_verifies_artifact(self):

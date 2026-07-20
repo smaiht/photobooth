@@ -1,4 +1,4 @@
-"""Yandex.Disk command inbox used by the VPS to control the booth."""
+"""Stable VPS-to-booth Yandex.Disk command channel."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 API = "https://cloud-api.yandex.net/v1/disk"
-SCHEMA_VERSION = 1
-POLL_INTERVAL = 2
+SCHEMA_VERSION = 2
+POLL_INTERVAL = 10
 PAGE_SIZE = 100
 COMMAND_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
@@ -39,6 +39,8 @@ def normalize_folder(folder: str) -> str:
 def validate_command(data: dict, filename: str = "") -> dict:
     if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("unsupported command schema")
+    if data.get("message_type") != "command":
+        raise ValueError("invalid command message_type")
     command_id = data.get("command_id")
     if not isinstance(command_id, str) or not COMMAND_ID_RE.fullmatch(command_id):
         raise ValueError("invalid command_id")
@@ -55,6 +57,7 @@ def validate_command(data: dict, filename: str = "") -> dict:
         raise ValueError("invalid reply_chat_id")
     return {
         "schema_version": SCHEMA_VERSION,
+        "message_type": "command",
         "command_id": command_id,
         "command": command,
         "data": command_data,
@@ -98,7 +101,8 @@ async def _connect() -> bool:
         for part in _root.strip("/").split("/"):
             current += "/" + part
             await _ensure_directory(current)
-        for suffix in ("commands", "commands/inbox", "commands/done", "responses", "logs"):
+        for suffix in ("to_booth", "to_vps", "done", "done/to_booth",
+                       "done/to_vps", "logs"):
             await _ensure_directory(f"{_root}/{suffix}")
         return True
     except Exception as exc:
@@ -110,7 +114,7 @@ async def _connect() -> bool:
 async def _list_commands() -> list[dict]:
     result = []
     offset = 0
-    path = f"{_root}/commands/inbox"
+    path = f"{_root}/to_booth"
     while True:
         params = {
             "path": path,
@@ -205,8 +209,8 @@ async def _wait_operation(href: str) -> bool:
 
 async def _move_done(filename: str) -> bool:
     params = {
-        "from": f"{_root}/commands/inbox/{filename}",
-        "path": f"{_root}/commands/done/{filename}",
+        "from": f"{_root}/to_booth/{filename}",
+        "path": f"{_root}/done/to_booth/{filename}",
         "overwrite": "true",
     }
     async with _session.post(f"{API}/resources/move", params=params) as response:
@@ -223,6 +227,7 @@ def _response(command: dict, result: dict) -> tuple[dict, Callable[[], Awaitable
     post_action = result.pop("_post_action", None)
     response = {
         "schema_version": SCHEMA_VERSION,
+        "message_type": "command_response",
         "command_id": command["command_id"],
         "command": command["command"],
         "status": result.get("status", "ok"),
@@ -258,7 +263,8 @@ async def _process_command(
 
     response, post_action = _response(command, result)
     payload = json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    await _upload_bytes(payload, f"{_root}/responses/{command['command_id']}.json")
+    await _upload_bytes(
+        payload, f"{_root}/to_vps/response_{command['command_id']}.json")
     if not await _move_done(filename):
         return False
     log.info(f"Control: completed {command['command']} ({command['command_id']})")

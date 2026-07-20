@@ -1,9 +1,10 @@
 """Reliable Yandex.Disk outbox for photobooth sessions.
 
-Media files stay flat in the event folder so the folder can be shared as an
-album.  A JSON manifest is uploaded to ``_sessions/inbox`` only after every
-session file is present and verified.  The VPS treats that manifest as the
-durable "session complete" marker.
+Media files stay flat in the event folder so it can be shared as an album.
+After every file is present and verified, a typed ``session_ready`` message is
+published to the stable ``control/to_vps`` inbox.  The message carries its
+event folder, so delivery never depends on both machines switching events at
+the same instant.
 """
 
 from __future__ import annotations
@@ -21,13 +22,14 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 API = "https://cloud-api.yandex.net/v1/disk"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RETRY_MIN_SECONDS = 5
 RETRY_MAX_SECONDS = 60
 
 _session: aiohttp.ClientSession | None = None
 _transfer_session: aiohttp.ClientSession | None = None
 _folder = ""
+_bus_root = ""
 _token = ""
 _queue: list[dict] = []
 _queue_file: Path | None = None
@@ -173,10 +175,8 @@ async def set_event_folder(folder_name: str) -> None:
     if not await _connect():
         raise RuntimeError("Яндекс Диск недоступен")
     target = "/" + name
-    for path in (target, f"{target}/_sessions", f"{target}/_sessions/inbox",
-                 f"{target}/_sessions/done"):
-        if not await _ensure_directory(path):
-            raise RuntimeError(f"не удалось создать папку {path}")
+    if not await _ensure_directory(target):
+        raise RuntimeError(f"не удалось создать папку {target}")
     _folder = target
     log.info(f"YaDisk: active event changed to {_folder}")
 
@@ -210,9 +210,13 @@ async def _connect() -> bool:
         timeout=aiohttp.ClientTimeout(total=600, connect=30))
 
     try:
-        for path in (_folder, f"{_folder}/_sessions",
-                     f"{_folder}/_sessions/inbox",
-                     f"{_folder}/_sessions/done"):
+        paths = [_folder]
+        current = ""
+        for part in _bus_root.strip("/").split("/"):
+            current += "/" + part
+            paths.append(current)
+        paths.append(f"{_bus_root}/to_vps")
+        for path in paths:
             if not await _ensure_directory(path):
                 await _close_sessions()
                 return False
@@ -322,9 +326,7 @@ async def _upload_bytes(data: bytes, remote_path: str) -> bool:
 
 async def _upload_job(job: dict) -> bool:
     event_folder = job.get("event_folder") or _folder
-    for path in (event_folder, f"{event_folder}/_sessions",
-                 f"{event_folder}/_sessions/inbox",
-                 f"{event_folder}/_sessions/done"):
+    for path in (event_folder, f"{_bus_root}/to_vps"):
         if not await _ensure_directory(path):
             return False
 
@@ -345,12 +347,14 @@ async def _upload_job(job: dict) -> bool:
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
+        "message_type": "session_ready",
+        "event_folder": event_folder.lstrip("/"),
         "session_id": job["session_id"],
         "created_at": job["created_at"],
         "files": manifest_files,
     }
     payload = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    manifest_path = f"{event_folder}/_sessions/inbox/{job['manifest_name']}"
+    manifest_path = f"{_bus_root}/to_vps/session_{job['manifest_name']}"
     if not await _upload_bytes(payload, manifest_path):
         return False
 
@@ -361,7 +365,7 @@ async def _upload_job(job: dict) -> bool:
 
 async def yadisk_init() -> bool:
     """Load configuration and make an initial connection attempt."""
-    global _folder, _token, _configured
+    global _folder, _bus_root, _token, _configured
     _queue_load()
     _token = os.environ.get("YADISK_TOKEN", "").strip()
     if not _token:
@@ -369,12 +373,18 @@ async def yadisk_init() -> bool:
         return False
 
     from .config import load_event_config
-    folder_name = str(load_event_config().get("yadisk_folder") or "").strip().strip("/")
+    config = load_event_config()
+    folder_name = str(config.get("yadisk_folder") or "").strip().strip("/")
+    bus_name = str(config.get("yadisk_control_folder") or "").strip().strip("/")
     if not folder_name or any(part in ("", ".", "..") for part in folder_name.split("/")):
         log.warning("YaDisk: yadisk_folder is missing or invalid")
         return False
+    if not bus_name or any(part in ("", ".", "..") for part in bus_name.split("/")):
+        log.warning("YaDisk: yadisk_control_folder is missing or invalid")
+        return False
 
     _folder = "/" + folder_name
+    _bus_root = "/" + bus_name
     _configured = True
     return await _connect()
 
@@ -383,8 +393,8 @@ async def yadisk_close() -> None:
     await _close_sessions()
 
 
-async def yadisk_poll_queue() -> None:
-    """Deliver queued sessions forever, reconnecting with bounded backoff."""
+async def yadisk_upload_queue_loop() -> None:
+    """Deliver the local upload queue forever with bounded retry backoff."""
     delay = RETRY_MIN_SECONDS
     while True:
         if not _configured:

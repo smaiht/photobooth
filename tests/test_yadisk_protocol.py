@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ class SessionJobTests(unittest.TestCase):
         )
 
         self.assertIn("abc123def456", job["manifest_name"])
+        self.assertEqual(job["schema_version"], 2)
         self.assertEqual(job["event_folder"], "/event_2026")
         self.assertEqual(
             [entry["kind"] for entry in job["files"]],
@@ -51,16 +53,19 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
                 return True, {"size": local_path.stat().st_size, "md5": "0" * 32}
 
             async def upload_bytes(data, remote_path):
-                calls.append(("manifest", remote_path))
+                calls.append(("manifest", remote_path, json.loads(data)))
                 return True
 
             with patch("backend.yadisk_cloud._ensure_directory", AsyncMock(return_value=True)), \
                  patch("backend.yadisk_cloud._upload_path", side_effect=upload_path), \
-                 patch("backend.yadisk_cloud._upload_bytes", side_effect=upload_bytes):
+                 patch("backend.yadisk_cloud._upload_bytes", side_effect=upload_bytes), \
+                 patch("backend.yadisk_cloud._bus_root", "/photobooth_system/control"):
                 self.assertTrue(await _upload_job(job))
 
-            self.assertEqual([kind for kind, _ in calls], ["media", "media", "manifest"])
-            self.assertIn("/_sessions/inbox/", calls[-1][1])
+            self.assertEqual([call[0] for call in calls], ["media", "media", "manifest"])
+            self.assertIn("/to_vps/session_", calls[-1][1])
+            self.assertEqual(calls[-1][2]["message_type"], "session_ready")
+            self.assertEqual(calls[-1][2]["event_folder"], "event")
 
 
 if __name__ == "__main__":

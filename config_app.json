@@ -28,9 +28,9 @@
     "_print_orientation_comment": "DNP driver portrait setting produces the physical 6x4 landscape sheet.",
     "print_copies": 1,
     "yadisk_folder": "test_event",
-    "_yadisk_folder_comment": "Name of the folder on Yandex.Disk where session files are uploaded. Created on first start.",
+    "_yadisk_folder_comment": "Event folder where media files are uploaded. Session notifications use yadisk_control_folder/to_vps.",
     "yadisk_updates_folder": "photobooth_system/updates",
-    "_yadisk_updates_folder_comment": "Private Disk folder with full/small artifacts and status.json. Must match VPS.",
+    "_yadisk_updates_folder_comment": "Private Disk folder with the full update artifact and status.json. Must match VPS.",
     "yadisk_control_folder": "photobooth_system/control",
-    "_yadisk_control_folder_comment": "Private command inbox, responses and logs. Must match VPS."
+    "_yadisk_control_folder_comment": "Stable private bus: to_booth, to_vps, done and logs. Must match VPS."
 }

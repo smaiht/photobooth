@@ -1,4 +1,4 @@
-"""Small stdlib-only Yandex.Disk update client used before FastAPI starts."""
+"""Minimal stdlib-only Yandex.Disk update client used before FastAPI starts."""
 
 from __future__ import annotations
 
@@ -59,13 +59,13 @@ def read_status(folder: str) -> dict | None:
         raise
 
 
-def download_artifact(status: dict, destination: Path) -> tuple[int, str]:
+def download_artifact(artifact: dict, destination: Path) -> tuple[int, str]:
     token = os.environ.get("YADISK_TOKEN", "").strip()
     if not token:
         raise RuntimeError("YADISK_TOKEN is not set")
-    path = status.get("path")
-    size = status.get("size")
-    expected_sha = status.get("sha256")
+    path = artifact.get("path")
+    size = artifact.get("size")
+    expected_sha = artifact.get("sha256")
     if (not isinstance(path, str) or not path.startswith("/")
             or ".." in path.split("/") or not path.endswith(".zip")):
         raise ValueError("invalid update artifact path")
