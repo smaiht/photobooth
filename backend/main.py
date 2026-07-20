@@ -17,7 +17,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 
-from .config import load_event_config, PHOTOS_DIR, FRONTEND_DIR, EDSDK_DLL, ROOT_DIR
+from .config import (
+    EDSDK_DLL,
+    FRONTEND_DIR,
+    PHOTOS_DIR,
+    ROOT_DIR,
+    TEMPLATES_DIR,
+    load_event_config,
+)
 from .composer import compose
 from .video import VideoRecorder
 from . import yadisk_cloud, yadisk_control
@@ -52,6 +59,7 @@ _latest_frame: bytes | None = None
 _live_view_active = False
 _evf_accept_after: float = 0.0
 _background_uploads: set[asyncio.Task] = set()
+_session_running = False
 
 
 def _clear_live_view():
@@ -130,6 +138,11 @@ def _countdown_timing() -> tuple[float, int, int]:
 
 # --- Session flow ---
 async def run_session():
+    global _session_running
+    if _session_running:
+        log.warning("Duplicate session start ignored")
+        return
+    _session_running = True
     try:
         await _run_session()
     except Exception:
@@ -138,6 +151,8 @@ async def run_session():
         if camera:
             camera.stop_live_view()
         await set_state("idle")
+    finally:
+        _session_running = False
 
 
 async def _run_session():
@@ -148,6 +163,26 @@ async def _run_session():
         await set_state("no_camera")
         return
 
+    num_photos = int(CONFIG["num_photos"])
+    if num_photos <= 0:
+        raise ValueError("num_photos must be positive")
+    template_dir = TEMPLATES_DIR / CONFIG.get("template_pack", "default")
+    tpl_config = json.loads((template_dir / "config.json").read_text(encoding="utf-8"))
+    available_templates = tpl_config.get("templates", {})
+    if not isinstance(available_templates, dict) or not available_templates:
+        raise ValueError(f"No templates configured in {template_dir}")
+    for template_name, template in available_templates.items():
+        slots = template.get("photos") if isinstance(template, dict) else None
+        if not isinstance(slots, list) or len(slots) != num_photos:
+            raise ValueError(
+                f"Template {template_name!r} must contain {num_photos} photo slots"
+            )
+        background = template.get("background")
+        if not isinstance(background, str) or not (template_dir / background).is_file():
+            raise ValueError(f"Template background is missing: {template_name!r}")
+    if CONFIG["default_template"] not in available_templates:
+        raise ValueError(f"Unknown default template: {CONFIG['default_template']}")
+
     SESSION_COUNT += 1
     SESSION_ID = uuid.uuid4().hex[:8] + hex(int(time.time() * 1000000))[2:]
     SESSION_PHOTOS = []
@@ -155,7 +190,6 @@ async def _run_session():
     session_dir.mkdir(exist_ok=True)
     log.info(f"=== Session {SESSION_ID} started ===")
 
-    num_photos = CONFIG["num_photos"]
     pre_countdown_delay, countdown_seconds, countdown_sound_seconds = _countdown_timing()
 
     # Drop the previous session frame before the frontend reconnects to /live.
@@ -241,13 +275,19 @@ async def _run_session():
     )
 
     # Template selection
-    await set_state("template_select")
+    await set_state(
+        "template_select",
+        {"timeout": int(CONFIG["template_select_timeout"])},
+    )
     log.info("Waiting for template choice...")
     selected_template = CONFIG["default_template"]
     template_event = asyncio.Event()
     chosen = {"template": selected_template}
 
     def on_template_choice(t):
+        if t not in available_templates:
+            log.warning(f"Ignoring unknown template: {t}")
+            return
         log.info(f"Template chosen: {t}")
         chosen["template"] = t
         template_event.set()
@@ -268,15 +308,15 @@ async def _run_session():
     log.info(f"SESSION_PHOTOS: {SESSION_PHOTOS}")
     output_path = None
     if SESSION_PHOTOS:
-        from .config import TEMPLATES_DIR
-        template_dir = TEMPLATES_DIR / CONFIG.get("template_pack", "default")
-        tpl_config = json.loads((template_dir / "config.json").read_text())
-
         def _compose():
             log.info(f"Composing {selected_template}...")
-            result = compose(template_dir, selected_template, SESSION_PHOTOS[:4], tpl_config)
+            result = compose(template_dir, selected_template, SESSION_PHOTOS, tpl_config)
             path = session_dir / f"print_{selected_template}.jpg"
-            result.save(str(path), "JPEG", quality=95, dpi=(300, 300))
+            try:
+                dpi = int(CONFIG.get("print_dpi", 600))
+                result.save(str(path), "JPEG", quality=95, subsampling=0, dpi=(dpi, dpi))
+            finally:
+                result.close()
             return path
 
         output_path = await asyncio.get_event_loop().run_in_executor(None, _compose)
@@ -289,7 +329,7 @@ async def _run_session():
     # Print in background
     if CONFIG["print_enabled"] and output_path:
         from .printer import enqueue_print
-        await enqueue_print(str(output_path), CONFIG)
+        await enqueue_print(str(output_path), CONFIG, selected_template)
 
     # Upload in background
     session_id = SESSION_ID
@@ -363,7 +403,10 @@ async def get_config():
 async def get_state(frontend: str = ""):
     if frontend and frontend != STATE:
         log.warning(f"State desync: frontend={frontend} backend={STATE}")
-    return {"state": STATE}
+    response = {"state": STATE}
+    if STATE == "template_select":
+        response["timeout"] = int(CONFIG["template_select_timeout"])
+    return response
 
 
 @app.post("/api/shutdown")
@@ -529,7 +572,10 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     if ws not in CLIENTS:
         CLIENTS.append(ws)
-    await ws.send_text(json.dumps({"type": "state", "state": STATE}))
+    initial_state = {"type": "state", "state": STATE}
+    if STATE == "template_select":
+        initial_state["timeout"] = int(CONFIG["template_select_timeout"])
+    await ws.send_text(json.dumps(initial_state))
 
     # Show update log on first client connect
     update_log = getattr(app.state, "update_log_path", None)

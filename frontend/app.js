@@ -43,7 +43,7 @@ setInterval(() => {
     fetch(`/api/state?frontend=${currentState}`).then(r => r.json()).then(s => {
         if (s.state !== currentState) {
             console.warn(`State desync: frontend=${currentState} backend=${s.state}, fixing`);
-            switchScreen(s.state);
+            switchScreen(s.state, s);
         }
     }).catch(() => {});
 }, 1000);
@@ -135,7 +135,7 @@ function switchScreen(state, data = {}) {
         setLiveView(true); // connect to /live in background while animating
         hideQrModal();
         tapPrompt.classList.add("exiting");
-        const warmup = config.live_view_warmup * 1000;
+        const warmup = (config.live_view_warmup ?? 0.3) * 1000;
         setTimeout(() => {
             sessionStarting = false;
             tapPrompt.classList.remove("exiting");
@@ -177,7 +177,7 @@ function _doSwitch(state, data) {
     }
 
     if (state === "template_select") {
-        startTemplateTimer(data.timeout ?? 5);
+        startTemplateTimer(data.timeout ?? config.template_select_timeout ?? 5);
     }
 
     // Composing — show QR immediately

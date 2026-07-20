@@ -151,8 +151,12 @@ html, body {
     border-radius: 0.5vw;
 }
 
-.strip-preview { flex-direction: column; }
-.strip-preview div { flex: 1; background: #666; border-radius: 2px; }
+.strip-preview {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-rows: repeat(4, 1fr);
+}
+.strip-preview div { background: #666; border-radius: 2px; }
 .grid-preview div { width: calc(50% - 2px); height: calc(50% - 2px); background: #666; border-radius: 2px; }
 
 #template-timer { font-size: 2.5vw; opacity: 0.6; }
