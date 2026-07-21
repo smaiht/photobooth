@@ -26,26 +26,18 @@
             <div id="photo-counter"></div>
         </div>
 
+        <!-- PROCESSING: build real previews from this session -->
+        <div class="screen" id="screen-processing" hidden>
+            <div class="processing-row">
+                <img src="/assets/dots.svg" class="dots-anim" alt="">
+                <div class="processing-title">Обрабатываем фото…</div>
+            </div>
+        </div>
+
         <!-- TEMPLATE SELECT -->
         <div class="screen" id="screen-template" hidden>
             <div class="template-title">ВЫБЕРИ ФОРМАТ</div>
-            <div class="template-options">
-                <button class="template-btn" data-template="strips">
-                    <div class="template-preview strip-preview">
-                        <div></div><div></div>
-                        <div></div><div></div>
-                        <div></div><div></div>
-                        <div></div><div></div>
-                    </div>
-                    <span>2 полоски</span>
-                </button>
-                <button class="template-btn" data-template="grid">
-                    <div class="template-preview grid-preview">
-                        <div></div><div></div><div></div><div></div>
-                    </div>
-                    <span>4 фото</span>
-                </button>
-            </div>
+            <div class="template-options" id="template-options"></div>
             <div id="template-timer"></div>
         </div>
 

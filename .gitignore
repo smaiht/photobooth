@@ -15,3 +15,5 @@ build/
 .update_stage/
 photobooth.log*
 yadisk_queue.json
+templates/**/*_preview.jpg
+templates/**/*_preview.jpg.tmp

@@ -2,6 +2,7 @@ const screens = {
     no_camera: document.getElementById("screen-no-camera"),
     idle: document.getElementById("screen-idle"),
     shooting: document.getElementById("screen-shooting"),
+    processing: document.getElementById("screen-processing"),
     template: document.getElementById("screen-template"),
     done: document.getElementById("screen-done"),
 };
@@ -10,7 +11,7 @@ const liveView = document.getElementById("live-view");
 const countdownNum = document.getElementById("countdown-number");
 const photoCounter = document.getElementById("photo-counter");
 const templateTimer = document.getElementById("template-timer");
-const processingOverlay = null; // removed
+const templateOptions = document.getElementById("template-options");
 const qrModal = document.getElementById("qr-modal");
 const qrModalCode = document.getElementById("qr-modal-code");
 const qrModalText = document.getElementById("qr-modal-text");
@@ -23,6 +24,7 @@ let templateTimeout = null;
 let liveViewStarted = false;
 let currentSessionId = "";
 let displayedQrUrl = "";
+let renderedTemplateSignature = "";
 const sessionLinks = new Map();
 
 // --- WebSocket ---
@@ -51,6 +53,9 @@ setInterval(() => {
             switchScreen(s.state, s);
         } else {
             syncSessionContext(s.state, s);
+            if (s.state === "template_select") {
+                renderTemplateOptions(s.templates);
+            }
             refreshQr();
         }
     }).catch(() => {});
@@ -197,6 +202,7 @@ function _doSwitch(state, data) {
         idle: "idle",
         countdown: "shooting",
         shooting: "shooting",
+        processing: "processing",
         template_select: "template",
         composing: "done",
         printing: "done",
@@ -228,7 +234,11 @@ function _doSwitch(state, data) {
     }
 
     if (state === "template_select") {
+        renderTemplateOptions(data.templates);
         startTemplateTimer(data.timeout ?? config.template_select_timeout ?? 5);
+    } else {
+        clearInterval(templateTimeout);
+        templateTimer.textContent = "";
     }
 
     refreshQr();
@@ -244,6 +254,49 @@ function showCountdown(value) {
 }
 
 // --- Template selection ---
+function renderTemplateOptions(options) {
+    if (!Array.isArray(options)) return;
+    const signature = JSON.stringify(options.map((option) => [
+        option.name,
+        option.label,
+        option.preview_url,
+    ]));
+    if (signature === renderedTemplateSignature) return;
+
+    renderedTemplateSignature = signature;
+    templateOptions.replaceChildren();
+    options.forEach((option) => {
+        if (!option || typeof option.name !== "string"
+                || typeof option.preview_url !== "string") return;
+
+        const label = typeof option.label === "string" && option.label
+            ? option.label
+            : option.name;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "template-btn";
+
+        const preview = document.createElement("img");
+        preview.className = "template-preview";
+        preview.src = option.preview_url;
+        preview.alt = label;
+        preview.draggable = false;
+
+        const caption = document.createElement("span");
+        caption.textContent = label;
+        button.append(preview, caption);
+        button.addEventListener("click", () => {
+            if (!send({ type: "select_template", template: option.name })) return;
+            clearInterval(templateTimeout);
+            templateTimer.textContent = "";
+            templateOptions.querySelectorAll("button").forEach((item) => {
+                item.disabled = true;
+            });
+        });
+        templateOptions.appendChild(button);
+    });
+}
+
 function startTemplateTimer(seconds) {
     let remaining = seconds;
     templateTimer.textContent = `Авто-выбор через ${remaining}с`;
@@ -258,13 +311,6 @@ function startTemplateTimer(seconds) {
         }
     }, 1000);
 }
-
-document.querySelectorAll(".template-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-        send({ type: "select_template", template: btn.dataset.template });
-        clearInterval(templateTimeout);
-    });
-});
 
 // --- Start session ---
 screens.idle.addEventListener("click", () => {

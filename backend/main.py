@@ -1,13 +1,14 @@
 """Photobooth backend - FastAPI + WebSocket.
 
 State machine:
-  IDLE -> COUNTDOWN -> CAPTURE -> FREEZE -> (repeat num_photos times) -> TEMPLATE_SELECT -> COMPOSING -> PRINTING -> IDLE
+  IDLE -> COUNTDOWN -> CAPTURE -> (repeat num_photos times) -> PROCESSING -> TEMPLATE_SELECT -> COMPOSING -> DONE -> IDLE
 """
 
 import asyncio
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 import uuid
@@ -26,7 +27,7 @@ from .config import (
     TEMPLATES_DIR,
     load_event_config,
 )
-from .composer import compose
+from .composer import compose, generate_template_previews
 from .log import read_log_snapshot
 from .video import VideoRecorder
 from . import yadisk_cloud, yadisk_control
@@ -41,6 +42,7 @@ SESSION_ID = ""
 SESSION_PHOTOS: list[str] = []
 SESSION_COUNT = 0
 SESSION_LINK = ""
+TEMPLATE_OPTIONS: list[dict] = []
 CONFIG = load_event_config()
 
 CLIENTS: list[WebSocket] = []
@@ -83,6 +85,27 @@ def _clear_live_view():
     _latest_frame = None
 
 
+def _remove_preview_dir(preview_dir: Path) -> None:
+    """Remove only a generated session directory named exactly ``previews``."""
+    if preview_dir.name != "previews":
+        raise ValueError(f"Refusing to remove non-preview directory: {preview_dir}")
+    if preview_dir.is_symlink() or preview_dir.is_file():
+        preview_dir.unlink(missing_ok=True)
+    elif preview_dir.is_dir():
+        shutil.rmtree(preview_dir)
+
+
+def _cleanup_stale_preview_dirs() -> None:
+    if not PHOTOS_DIR.is_dir():
+        return
+    for session_dir in PHOTOS_DIR.iterdir():
+        if session_dir.is_dir() and not session_dir.is_symlink():
+            preview_dir = session_dir / "previews"
+            if preview_dir.exists() or preview_dir.is_symlink():
+                _remove_preview_dir(preview_dir)
+                log.info("Removed stale template previews: %s", preview_dir)
+
+
 # --- WebSocket broadcast ---
 async def broadcast(msg: dict):
     data = json.dumps(msg)
@@ -102,6 +125,9 @@ def _state_message(new_state: str) -> dict:
         msg["session_id"] = SESSION_ID
     if SESSION_LINK:
         msg["session_link"] = SESSION_LINK
+    if new_state == "template_select":
+        msg["timeout"] = int(CONFIG["template_select_timeout"])
+        msg["templates"] = [dict(option) for option in TEMPLATE_OPTIONS]
     return msg
 
 
@@ -216,7 +242,7 @@ def _countdown_timing() -> tuple[float, int, int]:
 
 # --- Session flow ---
 async def run_session():
-    global _session_running
+    global _session_running, TEMPLATE_OPTIONS
     if _session_running:
         log.warning("Duplicate session start ignored")
         return
@@ -241,6 +267,12 @@ async def run_session():
     finally:
         _session_running = False
         app.state.on_template_choice = None
+        TEMPLATE_OPTIONS = []
+        if SESSION_ID:
+            try:
+                _remove_preview_dir(PHOTOS_DIR / SESSION_ID / "previews")
+            except OSError:
+                log.exception("Could not remove session template previews")
         if (camera and camera.is_connected
                 and STATE in ("no_camera", "camera_searching")):
             await set_state("idle")
@@ -248,6 +280,7 @@ async def run_session():
 
 async def _run_session():
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT, SESSION_LINK
+    global TEMPLATE_OPTIONS
     global _live_view_active, _evf_accept_after
 
     if not camera or not camera.is_connected:
@@ -280,6 +313,7 @@ async def _run_session():
     SESSION_COUNT += 1
     SESSION_ID = uuid.uuid4().hex[:8] + hex(int(time.time() * 1000000))[2:]
     SESSION_LINK = ""
+    TEMPLATE_OPTIONS = []
     session_created_at = datetime.now(timezone.utc)
     event_folder = (
         yadisk_cloud.current_event_folder()
@@ -374,18 +408,51 @@ async def _run_session():
     ))
     _track_background(link_task, f"QR preparation for {SESSION_ID}")
 
-    # Template selection
-    await set_state(
-        "template_select",
-        {"timeout": int(CONFIG["template_select_timeout"])},
+    # Build real, session-specific options before showing template selection.
+    await set_state("processing")
+    preview_dir = session_dir / "previews"
+    log.info("Generating previews for %d templates...", len(available_templates))
+    preview_started = time.monotonic()
+    preview_paths = await asyncio.get_running_loop().run_in_executor(
+        None,
+        generate_template_previews,
+        template_dir,
+        photos_copy,
+        tpl_config,
+        preview_dir,
     )
-    log.info("Waiting for template choice...")
+    _require_session_camera(camera_generation)
+    for template_name, preview_path in preview_paths.items():
+        template = available_templates[template_name]
+        label = template.get("label")
+        if not isinstance(label, str) or not label.strip():
+            label = template_name
+        TEMPLATE_OPTIONS.append({
+            "name": template_name,
+            "label": label,
+            "preview_url": (
+                f"/photos/{SESSION_ID}/previews/{preview_path.name}"
+            ),
+        })
+    selectable_templates = set(preview_paths)
     selected_template = CONFIG["default_template"]
+    if selected_template not in selectable_templates:
+        selected_template = TEMPLATE_OPTIONS[0]["name"]
+        log.warning(
+            "Default template preview unavailable; falling back to %s",
+            selected_template,
+        )
+    log.info(
+        "Template previews ready in %.2fs: %s",
+        time.monotonic() - preview_started,
+        ", ".join(preview_paths),
+    )
+
     template_event = asyncio.Event()
     chosen = {"template": selected_template}
 
     def on_template_choice(t):
-        if t not in available_templates:
+        if t not in selectable_templates:
             log.warning(f"Ignoring unknown template: {t}")
             return
         log.info(f"Template chosen: {t}")
@@ -393,6 +460,8 @@ async def _run_session():
         template_event.set()
 
     app.state.on_template_choice = on_template_choice
+    await set_state("template_select")
+    log.info("Waiting for template choice...")
     choice_task = asyncio.create_task(template_event.wait())
     disconnect_task = asyncio.create_task(_camera_disconnected_event.wait())
     try:
@@ -414,6 +483,11 @@ async def _run_session():
 
     # Compose the local print file. It never enters the cloud outbox.
     await set_state("composing")
+    TEMPLATE_OPTIONS = []
+    try:
+        _remove_preview_dir(preview_dir)
+    except OSError:
+        log.exception("Could not remove session template previews: %s", preview_dir)
     log.info(f"SESSION_PHOTOS: {SESSION_PHOTOS}")
     output_path = None
     if SESSION_PHOTOS:
@@ -528,8 +602,6 @@ async def get_state(frontend: str = ""):
         log.warning(f"State desync: frontend={frontend} backend={STATE}")
     response = _state_message(STATE)
     response.pop("type", None)
-    if STATE == "template_select":
-        response["timeout"] = int(CONFIG["template_select_timeout"])
     return response
 
 
@@ -698,8 +770,6 @@ async def websocket_endpoint(ws: WebSocket):
     if ws not in CLIENTS:
         CLIENTS.append(ws)
     initial_state = _state_message(STATE)
-    if STATE == "template_select":
-        initial_state["timeout"] = int(CONFIG["template_select_timeout"])
     await ws.send_text(json.dumps(initial_state))
 
     # Show update log on first client connect
@@ -723,7 +793,7 @@ async def websocket_endpoint(ws: WebSocket):
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)
                 if cb:
-                    cb(msg.get("template", "strips"))
+                    cb(msg.get("template", ""))
 
     except WebSocketDisconnect:
         try:
@@ -737,6 +807,7 @@ async def startup():
     global _event_loop
     _event_loop = asyncio.get_event_loop()
     yadisk_cloud.set_session_link_handler(_on_session_link)
+    await asyncio.to_thread(_cleanup_stale_preview_dirs)
 
     # Log auto-update results (deferred - will show after WS connects)
     update_log = os.path.join(ROOT_DIR, ".update_log")

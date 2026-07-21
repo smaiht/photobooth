@@ -2,6 +2,7 @@
     "print_size": [3688, 2480],
     "templates": {
         "strips": {
+            "label": "2 полоски",
             "background": "strip_bg.png",
             "duplicate": true,
             "photos": [
@@ -12,6 +13,7 @@
             ]
         },
         "grid": {
+            "label": "4 фото",
             "background": "grid_bg.png",
             "photos": [
                 {"x": 61, "y": 61, "w": 1722, "h": 1148},
