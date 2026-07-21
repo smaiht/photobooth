@@ -9,7 +9,6 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Awaitable, Callable
 
 import aiohttp
@@ -20,6 +19,9 @@ API = "https://cloud-api.yandex.net/v1/disk"
 SCHEMA_VERSION = 2
 POLL_INTERVAL = 10
 PAGE_SIZE = 100
+# Normal snapshots are about 400 KB.  The larger ceiling allows one legacy
+# 1 MB segment to be delivered immediately after upgrading the rotation size.
+MAX_LOG_ARTIFACT_SIZE = 2 * 1024 * 1024
 COMMAND_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 _session: aiohttp.ClientSession | None = None
@@ -182,12 +184,13 @@ async def _upload_bytes(payload: bytes, remote_path: str) -> None:
         raise RuntimeError(f"uploaded control file did not verify: {remote_path}")
 
 
-async def upload_log(command_id: str, log_path: Path) -> str:
-    if not COMMAND_ID_RE.fullmatch(command_id) or not log_path.is_file():
+async def upload_log(command_id: str, payload: bytes) -> str:
+    if (not COMMAND_ID_RE.fullmatch(command_id)
+            or not isinstance(payload, bytes)
+            or len(payload) > MAX_LOG_ARTIFACT_SIZE):
         raise ValueError("invalid log upload")
     if not await _connect():
         raise RuntimeError("Yandex.Disk control is unavailable")
-    payload = await asyncio.to_thread(log_path.read_bytes)
     remote_path = f"{_root}/logs/{command_id}.log"
     await _upload_bytes(payload, remote_path)
     return remote_path

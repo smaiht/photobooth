@@ -14,6 +14,8 @@ const processingOverlay = null; // removed
 const qrModal = document.getElementById("qr-modal");
 const qrModalCode = document.getElementById("qr-modal-code");
 const qrModalText = document.getElementById("qr-modal-text");
+const cameraStatusTitle = document.getElementById("camera-status-title");
+const cameraStatusSubtitle = document.getElementById("camera-status-subtitle");
 
 let ws = null;
 let currentState = "idle";
@@ -49,7 +51,9 @@ setInterval(() => {
 }, 1000);
 
 function send(msg) {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(msg));
+    return true;
 }
 
 // --- Sound ---
@@ -153,6 +157,7 @@ function _doSwitch(state, data) {
 
     const map = {
         no_camera: "no_camera",
+        camera_searching: "no_camera",
         idle: "idle",
         countdown: "shooting",
         shooting: "shooting",
@@ -165,6 +170,16 @@ function _doSwitch(state, data) {
     const key = map[state];
     if (key && screens[key]) screens[key].hidden = false;
     setLiveView(key === "shooting");
+
+    if (key === "no_camera") {
+        const searching = state === "camera_searching";
+        cameraStatusTitle.textContent = searching
+            ? "ИЩЕМ КАМЕРУ…"
+            : "КАМЕРА НЕДОСТУПНА";
+        cameraStatusSubtitle.textContent = searching
+            ? "Подключите камеру — поиск идёт автоматически"
+            : "Проверьте установку Canon EDSDK";
+    }
 
     if (state === "countdown" || state === "shooting") {
         const idx = (data.photo_index ?? 0) + 1;

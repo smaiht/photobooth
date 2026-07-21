@@ -26,6 +26,7 @@ from .config import (
     load_event_config,
 )
 from .composer import compose
+from .log import read_log_snapshot
 from .video import VideoRecorder
 from . import yadisk_cloud, yadisk_control
 
@@ -60,6 +61,18 @@ _live_view_active = False
 _evf_accept_after: float = 0.0
 _background_uploads: set[asyncio.Task] = set()
 _session_running = False
+_camera_disconnected_event = asyncio.Event()
+
+
+class CameraSessionAborted(RuntimeError):
+    """The camera connection changed while a session was in progress."""
+
+
+def _require_session_camera(generation: int) -> None:
+    if (not camera or not camera.is_connected
+            or camera.connection_generation != generation
+            or _camera_disconnected_event.is_set()):
+        raise CameraSessionAborted("camera disconnected during session")
 
 
 def _clear_live_view():
@@ -117,15 +130,21 @@ def on_camera_error(error: str):
     log.warning(f"Camera error: {error}")
     _clear_live_view()
     if _event_loop and _event_loop.is_running():
-        asyncio.run_coroutine_threadsafe(set_state("no_camera"), _event_loop)
+        async def show_disconnected():
+            _camera_disconnected_event.set()
+            await set_state("camera_searching")
+
+        asyncio.run_coroutine_threadsafe(show_disconnected(), _event_loop)
 
 
 def on_camera_connected():
     log.info("Camera connected")
     if _event_loop and _event_loop.is_running():
-        asyncio.run_coroutine_threadsafe(
-            set_state("idle"),
-            _event_loop)
+        async def show_ready():
+            if not _session_running:
+                await set_state("idle")
+
+        asyncio.run_coroutine_threadsafe(show_ready(), _event_loop)
 
 
 def _countdown_timing() -> tuple[float, int, int]:
@@ -145,14 +164,27 @@ async def run_session():
     _session_running = True
     try:
         await _run_session()
+    except CameraSessionAborted as exc:
+        log.warning("Session aborted: %s", exc)
+        _clear_live_view()
+        SESSION_PHOTOS.clear()
+        video_recorder.abort()
+        await set_state(
+            "idle" if camera and camera.is_connected else "camera_searching")
     except Exception:
         log.exception("Session error")
         _clear_live_view()
-        if camera:
+        video_recorder.abort()
+        if camera and camera.is_connected:
             camera.stop_live_view()
-        await set_state("idle")
+        await set_state(
+            "idle" if camera and camera.is_connected else "camera_searching")
     finally:
         _session_running = False
+        app.state.on_template_choice = None
+        if (camera and camera.is_connected
+                and STATE in ("no_camera", "camera_searching")):
+            await set_state("idle")
 
 
 async def _run_session():
@@ -160,8 +192,11 @@ async def _run_session():
     global _live_view_active, _evf_accept_after
 
     if not camera or not camera.is_connected:
-        await set_state("no_camera")
+        await set_state("camera_searching" if camera else "no_camera")
         return
+    camera_generation = camera.connection_generation
+    _camera_disconnected_event.clear()
+    _require_session_camera(camera_generation)
 
     num_photos = int(CONFIG["num_photos"])
     if num_photos <= 0:
@@ -205,10 +240,7 @@ async def _run_session():
 
     # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
-        if not camera.is_connected:
-            _clear_live_view()
-            await set_state("no_camera")
-            return
+        _require_session_camera(camera_generation)
 
         tag = f"[P{photo_idx+1}]"
         log.info(
@@ -222,16 +254,10 @@ async def _run_session():
         })
         if pre_countdown_delay > 0:
             await asyncio.sleep(pre_countdown_delay)
-        if not camera.is_connected:
-            _clear_live_view()
-            await set_state("no_camera")
-            return
+        _require_session_camera(camera_generation)
 
         for sec in range(countdown_seconds, 0, -1):
-            if not camera.is_connected:
-                _clear_live_view()
-                await set_state("no_camera")
-                return
+            _require_session_camera(camera_generation)
             beep = sec <= countdown_sound_seconds
             await broadcast({
                 "type": "countdown",
@@ -241,10 +267,7 @@ async def _run_session():
             })
             await asyncio.sleep(1)
 
-        if not camera.is_connected:
-            _clear_live_view()
-            await set_state("no_camera")
-            return
+        _require_session_camera(camera_generation)
 
         log.info(f"{tag} take_picture + mark_photo")
         camera.take_picture(tag)
@@ -252,21 +275,23 @@ async def _run_session():
         await broadcast({"type": "flash"})
 
     # Wait for all photos to download
-    if camera and camera.is_connected:
-        log.info(f"Waiting for {num_photos} photos to download...")
-        for _ in range(300):
-            if len(SESSION_PHOTOS) >= num_photos:
-                break
-            await asyncio.sleep(0.1)
-        _clear_live_view()
-        camera.stop_live_view()
-        log.info("Live view stopped")
+    log.info(f"Waiting for {num_photos} photos to download...")
+    for _ in range(300):
+        _require_session_camera(camera_generation)
+        if len(SESSION_PHOTOS) >= num_photos:
+            break
+        await asyncio.sleep(0.1)
+    _require_session_camera(camera_generation)
+    _clear_live_view()
+    camera.stop_live_view()
+    log.info("Live view stopped")
 
-        if len(SESSION_PHOTOS) < num_photos:
-            await broadcast({"type": "error", "message": "Photo download error. Try again."})
-            await asyncio.sleep(3)
-            await set_state("idle")
-            return
+    if len(SESSION_PHOTOS) < num_photos:
+        video_recorder.abort()
+        await broadcast({"type": "error", "message": "Photo download error. Try again."})
+        await asyncio.sleep(3)
+        await set_state("idle")
+        return
 
     # Start video encoding in background (all frames + photos ready)
     photos_copy = SESSION_PHOTOS[:]
@@ -293,10 +318,22 @@ async def _run_session():
         template_event.set()
 
     app.state.on_template_choice = on_template_choice
+    choice_task = asyncio.create_task(template_event.wait())
+    disconnect_task = asyncio.create_task(_camera_disconnected_event.wait())
     try:
-        await asyncio.wait_for(template_event.wait(), timeout=CONFIG["template_select_timeout"])
-    except asyncio.TimeoutError:
-        log.info(f"Template timeout, using default: {selected_template}")
+        done, _ = await asyncio.wait(
+            (choice_task, disconnect_task),
+            timeout=CONFIG["template_select_timeout"],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        _require_session_camera(camera_generation)
+        if choice_task not in done:
+            log.info(f"Template timeout, using default: {selected_template}")
+    finally:
+        for task in (choice_task, disconnect_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(choice_task, disconnect_task, return_exceptions=True)
     selected_template = chosen["template"]
     log.info(f"Selected template: {selected_template}")
 
@@ -320,16 +357,19 @@ async def _run_session():
             return path
 
         output_path = await asyncio.get_event_loop().run_in_executor(None, _compose)
+        _require_session_camera(camera_generation)
         log.info(f"Composed: {output_path}")
     else:
         log.warning("No photos to compose!")
 
+    _require_session_camera(camera_generation)
     await set_state("done")
 
     # Print in background
     if CONFIG["print_enabled"] and output_path:
         from .printer import enqueue_print
         await enqueue_print(str(output_path), CONFIG, selected_template)
+        _require_session_camera(camera_generation)
 
     # Upload in background
     session_id = SESSION_ID
@@ -347,7 +387,10 @@ async def _run_session():
 
     # Show done/QR screen before allowing the next session
     await asyncio.sleep(max(0, float(CONFIG.get("done_screen_seconds", 8))))
-    await set_state("idle")
+    if (camera and camera.is_connected
+            and camera.connection_generation == camera_generation
+            and not _camera_disconnected_event.is_set()):
+        await set_state("idle")
 
 
 # --- MJPEG live view stream ---
@@ -472,7 +515,7 @@ async def handle_disk_command(command: dict) -> dict:
     command_id = command["command_id"]
 
     if cmd == "restart":
-        if STATE not in ("idle", "no_camera"):
+        if STATE not in ("idle", "no_camera", "camera_searching"):
             return {"status": "error", "message": f"Перезапуск отложен: state={STATE}"}
         if _background_uploads:
             return {
@@ -489,7 +532,7 @@ async def handle_disk_command(command: dict) -> dict:
         if STATE != "idle":
             return {"status": "error", "message": f"Будка занята: state={STATE}"}
         if not camera or not camera.is_connected:
-            await set_state("no_camera")
+            await set_state("camera_searching" if camera else "no_camera")
             return {"status": "error", "message": "Камера не подключена"}
 
         async def start_session_after_ack() -> None:
@@ -518,7 +561,7 @@ async def handle_disk_command(command: dict) -> dict:
 
     if cmd == "set_event":
         name = data.get("name", "") if isinstance(data, dict) else ""
-        if STATE not in ("idle", "no_camera"):
+        if STATE not in ("idle", "no_camera", "camera_searching"):
             return {"status": "error", "message": f"Event не изменён: state={STATE}"}
         if _background_uploads:
             return {"status": "error", "message": "Event не изменён: завершается текущая загрузка"}
@@ -537,7 +580,8 @@ async def handle_disk_command(command: dict) -> dict:
         log_path = ROOT_DIR / "photobooth.log"
         if not log_path.is_file():
             return {"status": "error", "message": "photobooth.log не найден"}
-        artifact_path = await yadisk_control.upload_log(command_id, log_path)
+        payload = await asyncio.to_thread(read_log_snapshot, log_path)
+        artifact_path = await yadisk_control.upload_log(command_id, payload)
         return {
             "status": "ok",
             "message": "Лог загружен",
@@ -593,7 +637,7 @@ async def websocket_endpoint(ws: WebSocket):
                 if camera and camera.is_connected:
                     asyncio.create_task(run_session())
                 else:
-                    await set_state("no_camera")
+                    await set_state("camera_searching" if camera else "no_camera")
 
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)
@@ -623,6 +667,7 @@ async def startup():
             on_error=on_camera_error,
             on_connected=on_camera_connected,
         )
+        await set_state("camera_searching")
         camera.start()
         log.info("Camera started")
     else:

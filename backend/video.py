@@ -6,6 +6,7 @@ Collects frames in memory + photo placeholders. Assembles video at end via ffmpe
 import subprocess
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 from PIL import Image
@@ -27,50 +28,76 @@ class VideoRecorder:
         self._skip_until = 0.0
         self._session_dir: Path | None = None
         self._placeholders: list[int] = []  # indices in _items where photos go
+        self._photo_idx = 0
+        self._lock = threading.Lock()
 
     def start(self, session_dir: Path):
-        self._items = []
-        self._frame_size = None
-        self._skip_until = 0.0
-        self._session_dir = session_dir
-        self._placeholders = []
-        self._photo_idx = 0
-        self._recording = True
+        with self._lock:
+            self._items = []
+            self._frame_size = None
+            self._skip_until = 0.0
+            self._session_dir = session_dir
+            self._placeholders = []
+            self._photo_idx = 0
+            self._recording = True
         log.info("Video recording started")
 
     def add_frame(self, jpeg_bytes: bytes):
-        if not self._recording or time.monotonic() < self._skip_until:
-            return
-        if not self._frame_size:
-            img = Image.open(io.BytesIO(jpeg_bytes))
-            self._frame_size = img.size
-        self._items.append(jpeg_bytes)
+        with self._lock:
+            if not self._recording or time.monotonic() < self._skip_until:
+                return
+            if not self._frame_size:
+                with Image.open(io.BytesIO(jpeg_bytes)) as img:
+                    self._frame_size = img.size
+            self._items.append(jpeg_bytes)
 
     def mark_photo(self):
         """Placeholder for photo + skip 1.5s of frames. Called at take_picture time."""
-        idx = len(self._items)
-        self._items.append(None)  # placeholder
-        self._placeholders.append(idx)
-        self._skip_until = time.monotonic() + FREEZE_SECONDS
+        with self._lock:
+            if not self._recording:
+                return
+            idx = len(self._items)
+            self._items.append(None)  # placeholder
+            self._placeholders.append(idx)
+            self._skip_until = time.monotonic() + FREEZE_SECONDS
         log.info(f"Video: photo placeholder at index {idx}")
 
     def set_photo_path(self, photo_path: str):
         """Fill next placeholder with actual photo path. Called in order of capture."""
-        idx = self._placeholders[self._photo_idx]
-        self._items[idx] = photo_path
-        self._photo_idx += 1
+        with self._lock:
+            if not self._recording or self._photo_idx >= len(self._placeholders):
+                log.warning("Video: ignoring photo received after session abort: %s", photo_path)
+                return
+            idx = self._placeholders[self._photo_idx]
+            self._items[idx] = photo_path
+            self._photo_idx += 1
         log.info(f"Video: placeholder {idx} -> {photo_path}")
 
-    def stop_and_encode(self, fps: int = 30) -> str | None:
-        self._recording = False
-        items = self._items
-        frame_size = self._frame_size
-        session_dir = self._session_dir
+    def abort(self):
+        """Drop an incomplete recording without starting ffmpeg."""
+        with self._lock:
+            self._recording = False
+            self._items = []
+            self._frame_size = None
+            self._skip_until = 0.0
+            self._session_dir = None
+            self._placeholders = []
+            self._photo_idx = 0
+        log.info("Video recording aborted")
 
-        self._items = []
-        self._frame_size = None
-        self._session_dir = None
-        self._placeholders = []
+    def stop_and_encode(self, fps: int = 30) -> str | None:
+        with self._lock:
+            self._recording = False
+            items = self._items
+            frame_size = self._frame_size
+            session_dir = self._session_dir
+
+            self._items = []
+            self._frame_size = None
+            self._skip_until = 0.0
+            self._session_dir = None
+            self._placeholders = []
+            self._photo_idx = 0
 
         if not items or not frame_size or not session_dir:
             return None

@@ -54,10 +54,15 @@ class EdsDirectoryItemInfo(ctypes.Structure):
     ]
 
 
-# Callback function types (EDSCALLBACK = __stdcall on Windows)
-OBJECT_EVENT_HANDLER = ctypes.WINFUNCTYPE(EdsError, ctypes.c_uint32, EdsBaseRef, ctypes.c_void_p)
-STATE_EVENT_HANDLER = ctypes.WINFUNCTYPE(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
-PROPERTY_EVENT_HANDLER = ctypes.WINFUNCTYPE(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
+# Callback function types (EDSCALLBACK = __stdcall on Windows).  CFUNCTYPE is
+# only a test/import fallback for non-Windows development machines.
+_CALLBACK = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+OBJECT_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, EdsBaseRef, ctypes.c_void_p)
+STATE_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
+PROPERTY_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
+
+RECONNECT_MIN_SECONDS = 2
+RECONNECT_MAX_SECONDS = 10
 
 
 class EDSDKError(Exception):
@@ -80,9 +85,13 @@ class Camera:
         self._camera = EdsBaseRef()
         self._running = False
         self._connected = False
+        self._connection_generation = 0
+        self._failure_notified = False
         self._photo_tag = ""
         self._cfg = {}
         self._thread: threading.Thread | None = None
+        self._thread_lock = threading.Lock()
+        self._retry_event = threading.Event()
         self._cmd_queue: Queue = Queue()
         self._evf_frame_cb = None  # callback(jpeg_bytes)
         self._photo_cb = None  # callback(file_path)
@@ -105,13 +114,20 @@ class Camera:
         self._download_dir.mkdir(parents=True, exist_ok=True)
 
     def start(self):
-        """Start the EDSDK thread. All SDK calls happen on this thread."""
-        self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        """Start the persistent EDSDK thread and wake its automatic search."""
+        with self._thread_lock:
+            if self._thread and self._thread.is_alive():
+                self._retry_event.set()
+                return
+            self._running = True
+            self._retry_event.set()
+            self._thread = threading.Thread(
+                target=self._run, name="edsdk-camera", daemon=True)
+            self._thread.start()
 
     def stop(self):
         self._running = False
+        self._retry_event.set()
         if self._thread:
             self._thread.join(timeout=5)
 
@@ -119,81 +135,135 @@ class Camera:
     def is_connected(self) -> bool:
         return bool(self._connected and self._running and self._thread and self._thread.is_alive())
 
+    @property
+    def connection_generation(self) -> int:
+        """Changes on every disconnect so an old session cannot resume after reconnect."""
+        return self._connection_generation
+
     def take_picture(self, tag: str = ""):
         """Queue a capture command."""
-        self._cmd_queue.put(("capture", tag))
+        if self.is_connected:
+            self._cmd_queue.put(("capture", tag))
 
     def start_live_view(self):
-        self._cmd_queue.put(("start_evf",))
+        if self.is_connected:
+            self._cmd_queue.put(("start_evf",))
 
     def stop_live_view(self):
-        self._cmd_queue.put(("stop_evf",))
+        if self.is_connected:
+            self._cmd_queue.put(("stop_evf",))
 
     # --- Internal: runs on dedicated EDSDK thread ---
 
     def _run(self):
-        try:
-            self._sdk = ctypes.WinDLL(self._dll_path)
-            self._setup_sdk_functions()
-            self._init_sdk()
+        """Keep one EDSDK thread alive and reconnect automatically with backoff."""
+        retry_delay = 0
+        while self._running:
+            if retry_delay:
+                log.info("Camera: next automatic search in %ds", retry_delay)
+                self._retry_event.wait(timeout=retry_delay)
+            self._retry_event.clear()
+            if not self._running:
+                break
 
-            # Retry camera connection until found
-            while self._running and not self._connected:
-                try:
-                    self._connect_camera()
-                    self._configure_for_photobooth()
-                    self._register_handlers()
-                    self._connected = True
-                    log.info("Camera ready")
-                    if self._connected_cb:
-                        self._connected_cb()
-                except RuntimeError:
-                    log.info("Waiting for camera...")
-                    time.sleep(3)
+            self._discard_commands()
+            log.info("Camera: search started")
+            reached_ready = False
+            try:
+                self._sdk = ctypes.WinDLL(self._dll_path)
+                self._setup_sdk_functions()
+                self._init_sdk()
+                self._connect_camera()
+                self._configure_for_photobooth()
+                self._register_handlers()
+                self._connected = True
+                self._failure_notified = False
+                reached_ready = True
+                log.info("Camera ready")
+                if self._connected_cb:
+                    self._connected_cb()
+                self._run_connected()
+            except RuntimeError as exc:
+                if self._running:
+                    log.warning("Camera search failed: %s", exc)
+                    self._mark_disconnected(str(exc))
+            except Exception as exc:
+                if self._running:
+                    log.exception("Camera connection failed")
+                    self._mark_disconnected(str(exc))
+            finally:
+                self._connected = False
+                self._cleanup()
+                self._sdk = None
+            if reached_ready:
+                # A runtime USB disconnect gets one immediate reconnect attempt.
+                retry_delay = 0
+            elif retry_delay:
+                retry_delay = min(retry_delay * 2, RECONNECT_MAX_SECONDS)
+            else:
+                retry_delay = RECONNECT_MIN_SECONDS
 
-            evf_active = False
-            while self._running:
-                try:
-                    self._sdk.EdsGetEvent()
-                except Exception:
-                    log.exception("EdsGetEvent failed")
+        self._connected = False
+        self._discard_commands()
+        log.info("EDSDK thread stopped")
 
-                try:
-                    cmd = self._cmd_queue.get_nowait()
-                    log.info(f"CMD: {cmd[0]}")
-                    if cmd[0] == "capture":
-                        self._photo_tag = cmd[1] if len(cmd) > 1 else ""
-                        try:
-                            self._do_capture()
-                        except Exception:
-                            log.exception("Capture exception")
-                    elif cmd[0] == "start_evf":
-                        self._do_start_evf()
-                        evf_active = True
-                    elif cmd[0] == "stop_evf":
-                        self._do_stop_evf()
-                        evf_active = False
-                except Empty:
-                    pass
+    def _run_connected(self):
+        evf_active = False
+        while self._running and self._connected:
+            _check("EdsGetEvent", self._sdk.EdsGetEvent())
+            # The shutdown callback runs synchronously inside EdsGetEvent().
+            # Do not execute one final queued command against a camera that the
+            # callback has just marked as disconnected.
+            if not self._connected:
+                break
 
-                if evf_active and self._evf_frame_cb:
+            try:
+                cmd = self._cmd_queue.get_nowait()
+                log.info(f"CMD: {cmd[0]}")
+                if cmd[0] == "capture":
+                    self._photo_tag = cmd[1] if len(cmd) > 1 else ""
                     try:
-                        frame = self._download_evf_frame()
-                        if frame:
-                            self._evf_frame_cb(frame)
+                        self._do_capture()
                     except Exception:
-                        log.exception("EVF frame failed")
+                        log.exception("Capture exception")
+                elif cmd[0] == "start_evf":
+                    self._do_start_evf()
+                    evf_active = True
+                elif cmd[0] == "stop_evf":
+                    self._do_stop_evf()
+                    evf_active = False
+            except Empty:
+                pass
 
-                time.sleep(0.03)
+            if evf_active and self._evf_frame_cb:
+                frame = self._download_evf_frame()
+                if frame:
+                    self._evf_frame_cb(frame)
 
-        except Exception as e:
-            self._connected = False
-            log.exception("EDSDK thread error")
+            time.sleep(0.03)
+
+    def _discard_commands(self):
+        discarded = 0
+        while True:
+            try:
+                self._cmd_queue.get_nowait()
+                discarded += 1
+            except Empty:
+                break
+        if discarded:
+            log.info("Camera: discarded %d stale commands", discarded)
+
+    def _mark_disconnected(self, reason: str):
+        was_connected = self._connected
+        self._connected = False
+        if was_connected:
+            self._connection_generation += 1
+        self._discard_commands()
+        if not self._failure_notified:
+            self._failure_notified = True
+            log.warning("Camera disconnected: %s", reason)
             if self._error_cb:
-                self._error_cb(str(e))
-        finally:
-            self._connected = False
-            self._cleanup()
+                self._error_cb(reason)
 
     def _setup_sdk_functions(self):
         """Declare return/arg types for the SDK functions we use."""
@@ -244,13 +314,17 @@ class Camera:
         camera_list = EdsBaseRef()
         _check("EdsGetCameraList", self._sdk.EdsGetCameraList(ctypes.byref(camera_list)))
 
-        count = EdsUInt32()
-        _check("EdsGetChildCount", self._sdk.EdsGetChildCount(camera_list, ctypes.byref(count)))
-        if count.value == 0:
-            raise RuntimeError("No camera found")
+        try:
+            count = EdsUInt32()
+            _check("EdsGetChildCount", self._sdk.EdsGetChildCount(camera_list, ctypes.byref(count)))
+            if count.value == 0:
+                raise RuntimeError("No camera found")
 
-        _check("EdsGetChildAtIndex", self._sdk.EdsGetChildAtIndex(camera_list, 0, ctypes.byref(self._camera)))
-        self._sdk.EdsRelease(camera_list)
+            _check("EdsGetChildAtIndex", self._sdk.EdsGetChildAtIndex(
+                camera_list, 0, ctypes.byref(self._camera)))
+        finally:
+            if camera_list:
+                self._sdk.EdsRelease(camera_list)
 
         info = EdsDeviceInfo()
         _check("EdsGetDeviceInfo", self._sdk.EdsGetDeviceInfo(self._camera, ctypes.byref(info)))
@@ -467,11 +541,7 @@ class Camera:
             elif event == kEdsStateEvent_CaptureError:
                 log.warning(f"CaptureError: 0x{data:08X} {edsdk_error_name(data)}")
             elif event == kEdsStateEvent_Shutdown:
-                self._connected = False
-                self._running = False
-                log.warning("Camera shutdown/disconnected")
-                if self._error_cb:
-                    self._error_cb("Camera shutdown/disconnected")
+                self._mark_disconnected("Camera shutdown/disconnected")
             return 0
 
         self._obj_handler_ref = OBJECT_EVENT_HANDLER(on_object_event)
@@ -512,8 +582,9 @@ class Camera:
             _check("CreateEvfRef", self._sdk.EdsCreateEvfImageRef(stream, ctypes.byref(evf_image)))
 
             err = self._sdk.EdsDownloadEvfImage(self._camera, evf_image)
-            if err != EDS_ERR_OK:
-                return None  # Frame not ready yet
+            if err in (EDS_ERR_OBJECT_NOTREADY, EDS_ERR_DEVICE_BUSY):
+                return None  # Normal while the next frame is not ready yet.
+            _check("DownloadEvfImage", err)
 
             length = EdsUInt64()
             _check("GetLength", self._sdk.EdsGetLength(stream, ctypes.byref(length)))
@@ -524,8 +595,6 @@ class Camera:
             buf = (ctypes.c_ubyte * length.value)()
             ctypes.memmove(buf, ptr.value, length.value)
             return bytes(buf)
-        except EDSDKError:
-            return None
         finally:
             if evf_image:
                 self._sdk.EdsRelease(evf_image)
@@ -547,6 +616,8 @@ class Camera:
             end = time.monotonic() + focus_delay
             while time.monotonic() < end:
                 self._sdk.EdsGetEvent()
+                if not self._connected:
+                    return
                 time.sleep(0.05)
             shutter_button = kEdsCameraCommand_ShutterButton_Completely
             log.info(f"{t} Capture: sending ShutterButton_Completely")
@@ -555,6 +626,8 @@ class Camera:
             log.info(f"{t} Capture: sending ShutterButton_Completely_NonAF")
 
         for attempt in range(3):
+            if not self._connected:
+                return
             err = self._sdk.EdsSendCommand(
                 self._camera, kEdsCameraCommand_PressShutterButton,
                 shutter_button)
@@ -566,9 +639,13 @@ class Camera:
                 f"err=0x{err:08X} {edsdk_error_name(err)}")
             for _ in range(10):
                 self._sdk.EdsGetEvent()
+                if not self._connected:
+                    return
                 time.sleep(0.1)
         else:
             log.error(f"{t} Capture: FAILED after 3 attempts")
+        if not self._connected:
+            return
         log.info(f"{t} Capture: sending ShutterButton_OFF")
         self._sdk.EdsSendCommand(
             self._camera, kEdsCameraCommand_PressShutterButton,
@@ -597,14 +674,33 @@ class Camera:
         finally:
             self._sdk.EdsRelease(stream)
 
+    def _cleanup_camera(self):
+        camera = self._camera
+        self._camera = EdsBaseRef()
+        if not camera or not self._sdk:
+            return
+        # A disconnected camera commonly rejects the first cleanup call.  Keep
+        # trying the remaining calls so its SDK reference is still released.
+        for cleanup_call in (
+            lambda: self._sdk.EdsSendStatusCommand(
+                camera, kEdsCameraStatusCommand_UIUnLock, 0),
+            lambda: self._sdk.EdsSendCommand(
+                camera, kEdsCameraCommand_SetModeDialDisable, 0),
+            lambda: self._sdk.EdsCloseSession(camera),
+            lambda: self._sdk.EdsRelease(camera),
+        ):
+            try:
+                cleanup_call()
+            except Exception:
+                pass
+
     def _cleanup(self):
+        self._cleanup_camera()
         try:
-            if self._camera:
-                self._sdk.EdsSendStatusCommand(self._camera, kEdsCameraStatusCommand_UIUnLock, 0)
-                self._sdk.EdsSendCommand(self._camera, kEdsCameraCommand_SetModeDialDisable, 0)
-                self._sdk.EdsCloseSession(self._camera)
-                self._sdk.EdsRelease(self._camera)
-            self._sdk.EdsTerminateSDK()
+            if self._sdk:
+                self._sdk.EdsTerminateSDK()
         except Exception:
             pass
+        self._obj_handler_ref = None
+        self._state_handler_ref = None
         log.info("EDSDK cleaned up")
