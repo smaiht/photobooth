@@ -11,6 +11,7 @@ import os
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -39,6 +40,7 @@ STATE = "idle"
 SESSION_ID = ""
 SESSION_PHOTOS: list[str] = []
 SESSION_COUNT = 0
+SESSION_LINK = ""
 CONFIG = load_event_config()
 
 CLIENTS: list[WebSocket] = []
@@ -94,14 +96,71 @@ async def broadcast(msg: dict):
                 pass
 
 
+def _state_message(new_state: str) -> dict:
+    msg = {"type": "state", "state": new_state}
+    if SESSION_ID:
+        msg["session_id"] = SESSION_ID
+    if SESSION_LINK:
+        msg["session_link"] = SESSION_LINK
+    return msg
+
+
 async def set_state(new_state: str, extra: dict | None = None):
     global STATE
     STATE = new_state
-    msg = {"type": "state", "state": new_state}
+    msg = _state_message(new_state)
     if extra:
         msg.update(extra)
     log.info(f"State -> {new_state}")
     await broadcast(msg)
+
+
+def _track_background(task: asyncio.Task, label: str) -> None:
+    _background_uploads.add(task)
+
+    def finished(done: asyncio.Task) -> None:
+        _background_uploads.discard(done)
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.exception("Background %s failed", label)
+
+    task.add_done_callback(finished)
+
+
+async def _on_session_link(session_id: str, public_url: str) -> None:
+    """Show a link only while its session is still the booth's latest one."""
+    global SESSION_LINK
+    if SESSION_ID != session_id:
+        log.info("YaDisk: ignoring QR for an older session %s", session_id)
+        return
+    SESSION_LINK = public_url
+    await broadcast({
+        "type": "session_link",
+        "session_id": session_id,
+        "url": public_url,
+    })
+
+
+async def _prepare_session_link(session_id: str, created_at: datetime,
+                                event_folder: str,
+                                session_folder: str) -> None:
+    """Prepare the URL early; frontend decides when it may become visible."""
+    delay = 1
+    for attempt in range(4):
+        if await yadisk_cloud.prepare_session_share(
+            session_id,
+            created_at,
+            event_folder=event_folder,
+            session_folder=session_folder,
+        ):
+            return
+        if attempt < 3:
+            await asyncio.sleep(delay)
+            delay *= 2
+    log.warning("YaDisk: early QR preparation failed for session %s", session_id)
 
 
 # --- Callbacks from EDSDK thread ---
@@ -188,7 +247,7 @@ async def run_session():
 
 
 async def _run_session():
-    global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT
+    global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT, SESSION_LINK
     global _live_view_active, _evf_accept_after
 
     if not camera or not camera.is_connected:
@@ -220,6 +279,14 @@ async def _run_session():
 
     SESSION_COUNT += 1
     SESSION_ID = uuid.uuid4().hex[:8] + hex(int(time.time() * 1000000))[2:]
+    SESSION_LINK = ""
+    session_created_at = datetime.now(timezone.utc)
+    event_folder = (
+        yadisk_cloud.current_event_folder()
+        or str(CONFIG.get("yadisk_folder") or "").strip().strip("/")
+    )
+    session_folder = yadisk_cloud.session_folder_name(
+        SESSION_ID, session_created_at)
     SESSION_PHOTOS = []
     session_dir = PHOTOS_DIR / SESSION_ID
     session_dir.mkdir(exist_ok=True)
@@ -299,6 +366,14 @@ async def _run_session():
         None, video_recorder.stop_and_encode
     )
 
+    link_task = asyncio.create_task(_prepare_session_link(
+        SESSION_ID,
+        session_created_at,
+        event_folder,
+        session_folder,
+    ))
+    _track_background(link_task, f"QR preparation for {SESSION_ID}")
+
     # Template selection
     await set_state(
         "template_select",
@@ -337,11 +412,8 @@ async def _run_session():
     selected_template = chosen["template"]
     log.info(f"Selected template: {selected_template}")
 
-    # Compose collage
-    vps_url = os.environ.get("VPS_URL", "")
-    vps_path = os.environ.get("VPS_SESSION_PATH", "/s")
-    session_url = f"{vps_url}{vps_path}/{SESSION_ID}" if vps_url else ""
-    await set_state("composing", {"session_url": session_url})
+    # Compose the local print file. It never enters the cloud outbox.
+    await set_state("composing")
     log.info(f"SESSION_PHOTOS: {SESSION_PHOTOS}")
     output_path = None
     if SESSION_PHOTOS:
@@ -374,16 +446,24 @@ async def _run_session():
     # Upload in background
     session_id = SESSION_ID
     async def _bg_upload():
-        video_file = await video_future
+        try:
+            video_file = await video_future
+        except Exception:
+            log.exception(
+                "Video encoding failed for session %s; uploading photos only",
+                session_id,
+            )
+            video_file = None
         await yadisk_cloud.enqueue_session(
             session_id,
             photos_copy,
-            str(output_path) if output_path else None,
             video_file,
+            created_at=session_created_at,
+            event_folder=event_folder,
+            session_folder=session_folder,
         )
     upload_task = asyncio.create_task(_bg_upload())
-    _background_uploads.add(upload_task)
-    upload_task.add_done_callback(_background_uploads.discard)
+    _track_background(upload_task, f"outbox preparation for {session_id}")
 
     # Show done/QR screen before allowing the next session
     await asyncio.sleep(max(0, float(CONFIG.get("done_screen_seconds", 8))))
@@ -446,7 +526,8 @@ async def get_config():
 async def get_state(frontend: str = ""):
     if frontend and frontend != STATE:
         log.warning(f"State desync: frontend={frontend} backend={STATE}")
-    response = {"state": STATE}
+    response = _state_message(STATE)
+    response.pop("type", None)
     if STATE == "template_select":
         response["timeout"] = int(CONFIG["template_select_timeout"])
     return response
@@ -616,7 +697,7 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     if ws not in CLIENTS:
         CLIENTS.append(ws)
-    initial_state = {"type": "state", "state": STATE}
+    initial_state = _state_message(STATE)
     if STATE == "template_select":
         initial_state["timeout"] = int(CONFIG["template_select_timeout"])
     await ws.send_text(json.dumps(initial_state))
@@ -655,6 +736,7 @@ async def websocket_endpoint(ws: WebSocket):
 async def startup():
     global _event_loop
     _event_loop = asyncio.get_event_loop()
+    yadisk_cloud.set_session_link_handler(_on_session_link)
 
     # Log auto-update results (deferred - will show after WS connects)
     update_log = os.path.join(ROOT_DIR, ".update_log")

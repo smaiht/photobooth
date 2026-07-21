@@ -21,6 +21,9 @@ let ws = null;
 let currentState = "idle";
 let templateTimeout = null;
 let liveViewStarted = false;
+let currentSessionId = "";
+let displayedQrUrl = "";
+const sessionLinks = new Map();
 
 // --- WebSocket ---
 let wsReconnectTimer = null;
@@ -46,6 +49,9 @@ setInterval(() => {
         if (s.state !== currentState) {
             console.warn(`State desync: frontend=${currentState} backend=${s.state}, fixing`);
             switchScreen(s.state, s);
+        } else {
+            syncSessionContext(s.state, s);
+            refreshQr();
         }
     }).catch(() => {});
 }, 1000);
@@ -75,20 +81,42 @@ function beep(freq, duration) {
 // --- QR modal ---
 function showQrModal(url, text) {
     if (!config.show_qr || !url || typeof qrcode === "undefined") return;
-    const qr = qrcode(0, "M");
-    qr.addData(url);
-    qr.make();
-    qrModalCode.innerHTML = qr.createSvgTag(8);
+    if (displayedQrUrl !== url) {
+        const qr = qrcode(0, "M");
+        qr.addData(url);
+        qr.make();
+        qrModalCode.innerHTML = qr.createSvgTag(8);
+        displayedQrUrl = url;
+    }
     qrModalText.textContent = text;
     qrModal.hidden = false;
 }
 
-function updateQrText(text) {
-    qrModalText.textContent = text;
-}
-
 function hideQrModal() {
     qrModal.hidden = true;
+}
+
+function syncSessionContext(state, data = {}) {
+    const sessionId = typeof data.session_id === "string" ? data.session_id : "";
+    if (sessionId) {
+        if (sessionId !== currentSessionId) {
+            currentSessionId = sessionId;
+            sessionLinks.clear();
+            displayedQrUrl = "";
+            hideQrModal();
+        }
+        if (data.session_link) sessionLinks.set(sessionId, data.session_link);
+    }
+}
+
+function refreshQr() {
+    const visibleStates = new Set(["composing", "printing", "done", "idle"]);
+    const url = sessionLinks.get(currentSessionId);
+    if (!url || !visibleStates.has(currentState)) {
+        hideQrModal();
+        return;
+    }
+    showQrModal(url, "Фото и видео загружаются — обновите страницу чуть позже");
 }
 
 // --- Message handler ---
@@ -96,6 +124,12 @@ function handleMessage(msg) {
     switch (msg.type) {
         case "state":
             switchScreen(msg.state, msg);
+            break;
+        case "session_link":
+            if (msg.session_id && msg.url) {
+                sessionLinks.set(msg.session_id, msg.url);
+                refreshQr();
+            }
             break;
         case "countdown":
             showCountdown(msg.value);
@@ -133,6 +167,8 @@ function setLiveView(active) {
 }
 
 function switchScreen(state, data = {}) {
+    syncSessionContext(state, data);
+
     // First countdown of a new session — delay screen switch, animate tap prompt
     if (state === "countdown" && data.photo_index === 0 && !sessionStarting) {
         sessionStarting = true;
@@ -195,17 +231,7 @@ function _doSwitch(state, data) {
         startTemplateTimer(data.timeout ?? config.template_select_timeout ?? 5);
     }
 
-    // Composing — show QR immediately
-    if (state === "composing") {
-        if (data.session_url) {
-            showQrModal(data.session_url, "Скачать оригиналы");
-        }
-    }
-
-    // Idle — update QR text if visible
-    if (state === "idle") {
-        updateQrText("Прошлые фото");
-    }
+    refreshQr();
 }
 
 // --- Countdown ---
@@ -252,6 +278,7 @@ fetch("/api/config").then(r => r.json()).then(cfg => {
     config = cfg;
     if (cfg.mirror_live_view) liveView.style.transform = "scaleX(-1)";
     document.documentElement.style.setProperty("--warmup", (cfg.live_view_warmup || 0.3) + "s");
+    refreshQr();
 });
 
 connect();

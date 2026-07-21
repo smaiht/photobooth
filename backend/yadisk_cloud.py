@@ -1,21 +1,22 @@
 """Reliable Yandex.Disk outbox for photobooth sessions.
 
-Media files stay flat in the event folder so it can be shared as an album.
-After every file is present and verified, a typed ``session_ready`` message is
-published to the stable ``control/to_vps`` inbox.  The message carries its
-event folder, so delivery never depends on both machines switching events at
-the same instant.
+Original photos and video are uploaded once into a public per-session folder.
+Yandex.Disk then copies them server-side into the flat event folder consumed by
+the VPS.  A typed ``session_ready`` message is published to ``control/to_vps``
+only after every flat copy has completed.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
+import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Awaitable, Callable
 
 import aiohttp
 
@@ -23,6 +24,7 @@ log = logging.getLogger(__name__)
 
 API = "https://cloud-api.yandex.net/v1/disk"
 SCHEMA_VERSION = 2
+STORAGE_LAYOUT = "event_sibling_v1"
 RETRY_MIN_SECONDS = 5
 RETRY_MAX_SECONDS = 60
 
@@ -36,6 +38,8 @@ _queue_file: Path | None = None
 _queue_lock = asyncio.Lock()
 _queue_loaded = False
 _configured = False
+_session_link_handler: Callable[[str, str], Awaitable[None]] | None = None
+_prepared_links: dict[str, str] = {}
 
 
 def _queue_path() -> Path:
@@ -57,6 +61,127 @@ def _queue_save() -> None:
         raise
 
 
+async def _persist_job(job: dict) -> None:
+    """Persist delivery progress when this is a live durable-queue job."""
+    async with _queue_lock:
+        if any(queued is job for queued in _queue):
+            _queue_save()
+
+
+def set_session_link_handler(
+    handler: Callable[[str, str], Awaitable[None]] | None,
+) -> None:
+    global _session_link_handler
+    _session_link_handler = handler
+
+
+async def _notify_session_link(session_id: str, public_url: str) -> None:
+    if not _session_link_handler:
+        return
+    try:
+        await _session_link_handler(session_id, public_url)
+    except Exception:
+        log.exception("YaDisk: session link handler failed for %s", session_id)
+
+
+def session_folder_name(session_id: str, created_at: datetime) -> str:
+    """Return the stable, human-readable folder name used by a session."""
+    if not session_id or not session_id.isalnum():
+        raise ValueError("session_id must be non-empty and alphanumeric")
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return f"{created_at.astimezone():%Y-%m-%d_%H-%M-%S}_{session_id}"
+
+
+def sessions_root(event_folder: str) -> str:
+    """Return the sibling folder that keeps guest-facing session directories."""
+    folder = "/" + str(event_folder or "").strip().strip("/")
+    if folder == "/":
+        raise ValueError("invalid event folder")
+    return f"{folder}_by_sessions"
+
+
+def _legacy_session_folder_name(job: dict) -> str:
+    session_id = str(job.get("session_id") or "session")
+    try:
+        created_at = datetime.fromisoformat(str(job.get("created_at") or ""))
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if session_id.isalnum():
+            return session_folder_name(session_id, created_at)
+    except (TypeError, ValueError):
+        pass
+
+    stem = Path(str(job.get("manifest_name") or session_id)).stem
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._")
+    return safe[:180] or "legacy_session"
+
+
+def _migrate_queue_jobs(jobs: list[dict]) -> tuple[list[dict], bool]:
+    """Upgrade pending flat-layout jobs without losing originals or videos."""
+    migrated: list[dict] = []
+    changed = False
+    for job in jobs:
+        if not isinstance(job, dict) or not isinstance(job.get("files"), list):
+            log.error("YaDisk: skipped malformed pending queue entry")
+            changed = True
+            continue
+
+        layout_changed = job.get("storage_layout") != STORAGE_LAYOUT
+        if layout_changed:
+            job["storage_layout"] = STORAGE_LAYOUT
+            job.pop("public_url", None)
+            changed = True
+
+        photo_index = 0
+        files = []
+        for raw_entry in job["files"]:
+            if not isinstance(raw_entry, dict):
+                changed = True
+                continue
+            kind = raw_entry.get("kind")
+            if kind == "print":
+                log.info(
+                    "YaDisk: removed legacy print file from pending session %s",
+                    job.get("session_id", "?"),
+                )
+                changed = True
+                continue
+            if kind not in ("photo", "video"):
+                log.error("YaDisk: skipped unsupported queued file kind %r", kind)
+                changed = True
+                continue
+
+            entry = dict(raw_entry)
+            if layout_changed:
+                entry.pop("session_uploaded", None)
+            if kind == "photo":
+                photo_index += 1
+                expected_name = f"photo_{photo_index:02d}{_safe_extension(str(entry.get('local_path', '')))}"
+            else:
+                expected_name = f"video{_safe_extension(str(entry.get('local_path', '')))}"
+            if entry.get("session_name") != expected_name:
+                entry["session_name"] = expected_name
+                changed = True
+            files.append(entry)
+
+        if not files:
+            log.error(
+                "YaDisk: dropped pending session %s because it has no originals or video",
+                job.get("session_id", "?"),
+            )
+            changed = True
+            continue
+        if job.get("session_folder_name") is None:
+            job["session_folder_name"] = _legacy_session_folder_name(job)
+            changed = True
+        if job.get("files") != files:
+            job["files"] = files
+            changed = True
+        migrated.append(job)
+    return migrated, changed
+
+
 def _queue_load() -> None:
     global _queue, _queue_loaded
     if _queue_loaded:
@@ -70,9 +195,10 @@ def _queue_load() -> None:
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, list):
             raise ValueError("queue root must be a list")
-        if data and "files" not in data[0]:
-            raise ValueError("legacy per-file queue requires manual migration")
-        _queue = data
+        _queue, migrated = _migrate_queue_jobs(data)
+        if migrated:
+            _queue_save()
+            log.info("YaDisk: pending queue migrated to per-session folders")
         if _queue:
             log.info(f"YaDisk: loaded {len(_queue)} pending sessions")
     except Exception as exc:
@@ -87,37 +213,39 @@ def _safe_extension(path: str) -> str:
     return suffix
 
 
-def build_session_job(session_id: str, photos: list[str], collage: str | None,
-                      video: str | None, created_at: datetime | None = None,
-                      event_folder: str | None = None) -> dict:
+def build_session_job(session_id: str, photos: list[str], video: str | None,
+                      created_at: datetime | None = None,
+                      event_folder: str | None = None,
+                      session_folder: str | None = None) -> dict:
     """Build a serializable outbox job with stable remote names."""
     if not session_id or not session_id.isalnum():
         raise ValueError("session_id must be non-empty and alphanumeric")
 
     created_at = created_at or datetime.now(timezone.utc)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
     prefix = created_at.astimezone().strftime("%Y%m%d_%H%M%S")
     base = f"{prefix}_{session_id}"
+    folder_name = session_folder or session_folder_name(session_id, created_at)
+    if (not folder_name or folder_name in (".", "..") or "/" in folder_name
+            or "\\" in folder_name or len(folder_name) > 200):
+        raise ValueError("invalid session folder name")
     files = []
 
     for index, local_path in enumerate(photos, start=1):
         files.append({
             "local_path": str(local_path),
             "name": f"{base}_photo_{index:02d}{_safe_extension(local_path)}",
+            "session_name": f"photo_{index:02d}{_safe_extension(local_path)}",
             "kind": "photo",
             "index": index,
-        })
-
-    if collage:
-        files.append({
-            "local_path": str(collage),
-            "name": f"{base}_print{_safe_extension(collage)}",
-            "kind": "print",
         })
 
     if video:
         files.append({
             "local_path": str(video),
             "name": f"{base}_video{_safe_extension(video)}",
+            "session_name": f"video{_safe_extension(video)}",
             "kind": "video",
         })
 
@@ -126,24 +254,32 @@ def build_session_job(session_id: str, photos: list[str], collage: str | None,
 
     return {
         "schema_version": SCHEMA_VERSION,
+        "storage_layout": STORAGE_LAYOUT,
         "session_id": session_id,
         "created_at": created_at.isoformat(),
         "event_folder": event_folder,
+        "session_folder_name": folder_name,
         "manifest_name": f"{base}.json",
         "files": files,
     }
 
 
-async def enqueue_session(session_id: str, photos: list[str], collage: str | None,
-                          video: str | None) -> None:
+async def enqueue_session(session_id: str, photos: list[str], video: str | None,
+                          created_at: datetime | None = None,
+                          event_folder: str | None = None,
+                          session_folder: str | None = None) -> None:
     """Persist a complete local session for background delivery."""
     _queue_load()
-    from .config import load_event_config
-    folder_name = str(load_event_config().get("yadisk_folder") or "").strip().strip("/")
+    if event_folder is None:
+        from .config import load_event_config
+        folder_name = str(load_event_config().get("yadisk_folder") or "").strip().strip("/")
+    else:
+        folder_name = str(event_folder).strip().strip("/")
     if not folder_name or any(part in ("", ".", "..") for part in folder_name.split("/")):
         raise ValueError("yadisk_folder is missing or invalid")
     job = build_session_job(
-        session_id, photos, collage, video, event_folder="/" + folder_name)
+        session_id, photos, video, created_at=created_at,
+        event_folder="/" + folder_name, session_folder=session_folder)
     missing = [entry["local_path"] for entry in job["files"]
                if not Path(entry["local_path"]).is_file()]
     if missing:
@@ -175,8 +311,9 @@ async def set_event_folder(folder_name: str) -> None:
     if not await _connect():
         raise RuntimeError("Яндекс Диск недоступен")
     target = "/" + name
-    if not await _ensure_directory(target):
-        raise RuntimeError(f"не удалось создать папку {target}")
+    for path in (target, sessions_root(target)):
+        if not await _ensure_directory(path):
+            raise RuntimeError(f"не удалось создать папку {path}")
     _folder = target
     log.info(f"YaDisk: active event changed to {_folder}")
 
@@ -210,7 +347,7 @@ async def _connect() -> bool:
         timeout=aiohttp.ClientTimeout(total=600, connect=30))
 
     try:
-        paths = [_folder]
+        paths = [_folder, sessions_root(_folder)]
         current = ""
         for part in _bus_root.strip("/").split("/"):
             current += "/" + part
@@ -241,26 +378,87 @@ async def _ensure_directory(path: str) -> bool:
         return False
 
 
-def _file_md5(path: Path) -> str:
-    digest = hashlib.md5()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+async def _publish_directory(path: str) -> str | None:
+    """Publish a folder and return its stable public Yandex.Disk URL."""
+    try:
+        async with _session.put(
+            f"{API}/resources/publish", params={"path": path},
+        ) as response:
+            # 409 is harmless for an already-published resource; the metadata
+            # read below is the source of truth for whether a URL exists.
+            if response.status not in (200, 201, 409):
+                log.warning(
+                    f"YaDisk: publish directory {path}: {response.status} "
+                    f"{await response.text()}"
+                )
+                return None
+
+        for attempt in range(5):
+            async with _session.get(
+                f"{API}/resources",
+                params={"path": path, "fields": "public_url"},
+            ) as response:
+                if response.status == 200:
+                    public_url = str((await response.json()).get("public_url") or "")
+                    if public_url:
+                        return public_url
+                elif response.status not in (404, 423):
+                    log.warning(
+                        f"YaDisk: read public URL {path}: {response.status} "
+                        f"{await response.text()}"
+                    )
+                    return None
+            await asyncio.sleep(min(attempt + 1, 3))
+        log.warning(f"YaDisk: public URL did not appear for {path}")
+        return None
+    except Exception as exc:
+        log.warning(f"YaDisk: publish directory {path} failed: {exc}")
+        return None
 
 
-async def _resource_matches(remote_path: str, size: int, md5: str | None) -> bool:
-    """Wait for a 202 upload to become visible and verify its metadata."""
-    for attempt in range(10):
+async def prepare_session_share(session_id: str, created_at: datetime,
+                                event_folder: str | None = None,
+                                session_folder: str | None = None) -> str | None:
+    """Publish an empty sibling session folder so its QR can be prepared early."""
+    folder = "/" + str(event_folder or _folder).strip().strip("/")
+    folder_name = session_folder or session_folder_name(session_id, created_at)
+    if (folder == "/" or not folder_name or "/" in folder_name
+            or "\\" in folder_name):
+        log.warning("YaDisk: cannot prepare session share: invalid folder")
+        return None
+    if not await _connect():
+        log.warning(f"YaDisk: cannot prepare QR folder for session {session_id}: offline")
+        return None
+
+    session_path = f"{sessions_root(folder)}/{folder_name}"
+    if not await _ensure_directory(session_path):
+        return None
+    public_url = await _publish_directory(session_path)
+    if public_url:
+        _prepared_links[session_id] = public_url
+        while len(_prepared_links) > 100:
+            _prepared_links.pop(next(iter(_prepared_links)))
+        log.info(
+            "YaDisk: session %s QR prepared before media path=%s",
+            session_id,
+            session_path,
+        )
+        await _notify_session_link(session_id, public_url)
+    return public_url
+
+
+async def _resource_size_matches(remote_path: str, size: int,
+                                 attempts: int = 10) -> bool:
+    """Wait until an uploaded resource is visible with its expected size."""
+    for attempt in range(attempts):
         try:
             async with _session.get(
                 f"{API}/resources",
-                params={"path": remote_path, "fields": "size,md5"},
+                params={"path": remote_path, "fields": "size"},
             ) as response:
                 if response.status == 200:
                     data = await response.json()
-                    remote_md5 = data.get("md5")
-                    if data.get("size") == size and (not md5 or not remote_md5 or remote_md5 == md5):
+                    if data.get("size") == size:
                         return True
                 elif response.status not in (404, 423):
                     log.warning(f"YaDisk: verify {remote_path}: {response.status} "
@@ -269,13 +467,13 @@ async def _resource_matches(remote_path: str, size: int, md5: str | None) -> boo
         except Exception as exc:
             log.warning(f"YaDisk: verify {remote_path} failed: {exc}")
             return False
-        await asyncio.sleep(min(1 + attempt, 5))
+        if attempt + 1 < attempts:
+            await asyncio.sleep(min(1 + attempt, 5))
     return False
 
 
 async def _upload_path(local_path: Path, remote_path: str) -> tuple[bool, dict]:
     size = local_path.stat().st_size
-    md5 = await asyncio.to_thread(_file_md5, local_path)
     try:
         async with _session.get(
             f"{API}/resources/upload",
@@ -294,10 +492,10 @@ async def _upload_path(local_path: Path, remote_path: str) -> tuple[bool, dict]:
                                 f"{await upload_response.text()}")
                     return False, {}
 
-        if not await _resource_matches(remote_path, size, md5):
+        if not await _resource_size_matches(remote_path, size):
             log.warning(f"YaDisk: uploaded file did not verify: {remote_path}")
             return False, {}
-        return True, {"size": size, "md5": md5}
+        return True, {"size": size}
     except Exception as exc:
         log.warning(f"YaDisk: upload {remote_path} failed: {exc}")
         return False, {}
@@ -318,15 +516,83 @@ async def _upload_bytes(data: bytes, remote_path: str) -> bool:
                 log.warning(f"YaDisk: manifest upload: {upload_response.status} "
                             f"{await upload_response.text()}")
                 return False
-        return await _resource_matches(remote_path, len(data), None)
+        return await _resource_size_matches(remote_path, len(data))
     except Exception as exc:
         log.warning(f"YaDisk: manifest upload failed: {exc}")
         return False
 
 
+async def _wait_operation(href: str) -> bool:
+    for _ in range(120):
+        try:
+            async with _session.get(href) as response:
+                if response.status != 200:
+                    log.warning(
+                        f"YaDisk: copy operation status: {response.status} "
+                        f"{await response.text()}"
+                    )
+                    return False
+                status = (await response.json()).get("status")
+        except Exception as exc:
+            log.warning(f"YaDisk: copy operation status failed: {exc}")
+            return False
+        if status == "success":
+            return True
+        if status == "failed":
+            return False
+        await asyncio.sleep(1)
+    log.warning("YaDisk: copy operation timed out")
+    return False
+
+
+async def _copy_path(source_path: str, destination_path: str) -> bool:
+    """Copy inside Yandex.Disk and wait for completion without metadata reads."""
+    started = time.monotonic()
+    try:
+        async with _session.post(
+            f"{API}/resources/copy",
+            params={
+                "from": source_path,
+                "path": destination_path,
+                "overwrite": "true",
+            },
+        ) as response:
+            if response.status == 201:
+                log.info(
+                    "YaDisk: server copy complete path=%s in %.2fs",
+                    destination_path,
+                    time.monotonic() - started,
+                )
+                return True
+            if response.status == 202:
+                body = await response.json()
+                href = body.get("href")
+                copied = bool(href and await _wait_operation(href))
+                log.info(
+                    "YaDisk: async server copy %s path=%s in %.2fs",
+                    "complete" if copied else "failed",
+                    destination_path,
+                    time.monotonic() - started,
+                )
+                return copied
+            log.warning(
+                f"YaDisk: copy {source_path} -> {destination_path}: "
+                f"{response.status} {await response.text()}"
+            )
+            return False
+    except Exception as exc:
+        log.warning(
+            f"YaDisk: copy {source_path} -> {destination_path} failed: {exc}"
+        )
+        return False
+
+
 async def _upload_job(job: dict) -> bool:
     event_folder = job.get("event_folder") or _folder
-    for path in (event_folder, f"{_bus_root}/to_vps"):
+    folder_name = job.get("session_folder_name") or _legacy_session_folder_name(job)
+    session_root = sessions_root(event_folder)
+    session_folder = f"{session_root}/{folder_name}"
+    for path in (event_folder, session_root, session_folder, f"{_bus_root}/to_vps"):
         if not await _ensure_directory(path):
             return False
 
@@ -336,14 +602,63 @@ async def _upload_job(job: dict) -> bool:
         if not local_path.is_file():
             log.error(f"YaDisk: local session file disappeared: {local_path}")
             return False
-        remote_path = f"{event_folder}/{entry['name']}"
-        ok, metadata = await _upload_path(local_path, remote_path)
-        if not ok:
-            return False
+        session_path = f"{session_folder}/{entry['session_name']}"
+        size = local_path.stat().st_size
+        already_uploaded = (
+            entry.get("session_uploaded") is True
+            and entry.get("size") == size
+            and await _resource_size_matches(session_path, size, attempts=1)
+        )
+        if already_uploaded:
+            metadata = {"size": size}
+            log.info(
+                "YaDisk: session %s already has %s; upload skipped",
+                job["session_id"],
+                entry["session_name"],
+            )
+        else:
+            ok, metadata = await _upload_path(local_path, session_path)
+            if not ok:
+                return False
+            entry["size"] = metadata["size"]
+            entry.pop("md5", None)
+            entry["session_uploaded"] = True
+            await _persist_job(job)
+
         manifest_entry = {key: value for key, value in entry.items()
-                          if key != "local_path"}
+                          if key not in ("local_path", "session_name",
+                                         "session_uploaded")}
+        manifest_entry.pop("md5", None)
         manifest_entry.update(metadata)
         manifest_files.append(manifest_entry)
+
+    # Reuse the URL prepared during template selection. If that early attempt
+    # failed, publish now as a fallback before secondary flat copies start.
+    public_url = str(job.get("public_url") or _prepared_links.get(job["session_id"]) or "")
+    if not public_url:
+        public_url = str(await _publish_directory(session_folder) or "")
+        if not public_url:
+            return False
+    if job.get("public_url") != public_url:
+        job["public_url"] = public_url
+        await _persist_job(job)
+    log.info(
+        "YaDisk: session %s QR folder ready path=%s",
+        job["session_id"],
+        session_folder,
+    )
+    await _notify_session_link(job["session_id"], public_url)
+
+    for entry in job["files"]:
+        session_path = f"{session_folder}/{entry['session_name']}"
+        root_path = f"{event_folder}/{entry['name']}"
+        log.info(
+            "YaDisk: session %s copying %s into event root",
+            job["session_id"],
+            entry["session_name"],
+        )
+        if not await _copy_path(session_path, root_path):
+            return False
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -358,6 +673,7 @@ async def _upload_job(job: dict) -> bool:
     if not await _upload_bytes(payload, manifest_path):
         return False
 
+    _prepared_links.pop(job["session_id"], None)
     log.info(f"YaDisk: session {job['session_id']} published "
              f"({len(manifest_files)} files)")
     return True
