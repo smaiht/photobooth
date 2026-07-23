@@ -11,8 +11,15 @@ build/
 .update_hash
 .update_log
 .update_download.zip
+.update_download.*.zip
 .update_apply.ps1
+.update_apply.*.ps1
+.update_args.*.json
+.update_in_progress.json
+.update_in_progress.json.*.tmp
+.update_hash.tmp
 .update_stage/
+.update_stage.*/
 photobooth.log*
 yadisk_queue.json
 templates/**/*_preview.jpg
