@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from PIL import Image, ImageChops, ImageStat
+from PIL import Image, ImageChops
 
 from backend.composer import compose, generate_template_previews
 from backend import main
@@ -158,13 +158,17 @@ class PreviewComposerTests(unittest.TestCase):
             with Image.open(folder / "grid_preview.jpg") as grid_cache:
                 self.assertEqual(grid_cache.size, (300, 200))
             with Image.open(folder / "strip_preview.jpg") as strip_cache:
-                self.assertEqual(strip_cache.size, (100, 300))
+                self.assertEqual(strip_cache.size, (57, 172))
 
             with Image.open(results["strips"]) as strips:
-                top = strips.crop((0, 0, 300, 100))
-                bottom = strips.crop((0, 100, 300, 200))
-                difference = ImageChops.difference(top, bottom)
-                self.assertLess(max(ImageStat.Stat(difference).mean), 1)
+                # This is a presentation preview, not the rotated printer
+                # sheet: two portrait strips, with the second lower and to the
+                # right, on the same 3:2 canvas as the other choices.
+                self.assertLess(max(strips.getpixel((10, 10))), 80)
+                self.assertGreater(max(strips.getpixel((116, 10))), 150)
+                self.assertLess(max(strips.getpixel((183, 10))), 80)
+                self.assertLess(max(strips.getpixel((116, 190))), 80)
+                self.assertGreater(max(strips.getpixel((183, 190))), 150)
 
     def test_background_cache_is_reused_and_rebuilt_when_stale_or_wrong(self):
         with tempfile.TemporaryDirectory() as tmpdir:

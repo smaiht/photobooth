@@ -21,7 +21,18 @@ echo.
 :: 1. Create kiosk user
 echo [1/3] Creating Photobooth user...
 net user Photobooth /add /passwordreq:no >nul 2>&1
-net user Photobooth "" >nul 2>&1
+net user Photobooth "" /active:yes /expires:never /passwordreq:no >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: Could not create or update the Photobooth user.
+    pause
+    exit /b 1
+)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; Set-LocalUser -Name 'Photobooth' -PasswordNeverExpires $true"
+if errorlevel 1 (
+    echo ERROR: Could not set PasswordNeverExpires for the Photobooth user.
+    pause
+    exit /b 1
+)
 echo [OK]
 
 :: 2. Set custom shell

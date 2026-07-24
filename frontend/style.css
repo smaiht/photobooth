@@ -187,6 +187,31 @@ html, body {
     gap: 0.4vh;
 }
 #qr-modal[hidden] { display: none; }
+#qr-modal-close {
+    position: absolute;
+    top: -1.2vh;
+    right: -1.2vh;
+    width: 6.4vh;
+    height: 6.4vh;
+    border: 0;
+    border-radius: 50%;
+    padding: 0 0 0.3vh;
+    display: grid;
+    place-items: center;
+    background: rgba(255,255,255,0.9);
+    color: rgba(0,0,0,0.38);
+    font-family: Arial, sans-serif;
+    font-size: 3.2vh;
+    font-weight: 300;
+    line-height: 1;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+#qr-modal-close:active {
+    background: #fff;
+    color: rgba(0,0,0,0.62);
+}
 #qr-modal-code svg { width: 20vh; height: 20vh; }
 #qr-modal-text { font-size: 1.7vh; font-weight: 400; opacity: 0.75; text-align: center; line-height: 1.3; }
 

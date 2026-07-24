@@ -13,6 +13,7 @@ const photoCounter = document.getElementById("photo-counter");
 const templateTimer = document.getElementById("template-timer");
 const templateOptions = document.getElementById("template-options");
 const qrModal = document.getElementById("qr-modal");
+const qrModalClose = document.getElementById("qr-modal-close");
 const qrModalCode = document.getElementById("qr-modal-code");
 const qrModalText = document.getElementById("qr-modal-text");
 const cameraStatusTitle = document.getElementById("camera-status-title");
@@ -24,6 +25,7 @@ let templateTimeout = null;
 let liveViewStarted = false;
 let currentSessionId = "";
 let displayedQrUrl = "";
+let dismissedQrSessionId = "";
 let renderedTemplateSignature = "";
 const sessionLinks = new Map();
 
@@ -101,6 +103,13 @@ function hideQrModal() {
     qrModal.hidden = true;
 }
 
+qrModalClose.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    dismissedQrSessionId = currentSessionId;
+    hideQrModal();
+});
+
 function syncSessionContext(state, data = {}) {
     const sessionId = typeof data.session_id === "string" ? data.session_id : "";
     if (sessionId) {
@@ -108,6 +117,7 @@ function syncSessionContext(state, data = {}) {
             currentSessionId = sessionId;
             sessionLinks.clear();
             displayedQrUrl = "";
+            dismissedQrSessionId = "";
             hideQrModal();
         }
         if (data.session_link) sessionLinks.set(sessionId, data.session_link);
@@ -117,11 +127,12 @@ function syncSessionContext(state, data = {}) {
 function refreshQr() {
     const visibleStates = new Set(["composing", "printing", "done", "idle"]);
     const url = sessionLinks.get(currentSessionId);
-    if (!url || !visibleStates.has(currentState)) {
+    if (!url || !visibleStates.has(currentState)
+            || dismissedQrSessionId === currentSessionId) {
         hideQrModal();
         return;
     }
-    showQrModal(url, "Фото и видео загружаются — обновите страницу чуть позже");
+    showQrModal(url, "Фото с последней съёмки загружаются сюда");
 }
 
 // --- Message handler ---

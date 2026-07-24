@@ -187,7 +187,7 @@ borderless/margin off, glossy или matte и, если нужна автома�
 
 `_setup_windows.bat` (от админа):
 1. Создаёт/проверяет `python/` (через `_ensure_python.bat`)
-2. Создаёт пользователя Photobooth
+2. Создаёт пользователя Photobooth с пустым бессрочным паролем
 3. Shell = `python\pythonw.exe app.py` (вместо explorer.exe)
 4. Автологин без пароля
 

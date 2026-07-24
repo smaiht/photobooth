@@ -459,6 +459,12 @@ async def _resource_size_matches(remote_path: str, size: int,
                 if response.status == 200:
                     data = await response.json()
                     if data.get("size") == size:
+                        if attempt:
+                            log.info(
+                                "YaDisk: metadata visible path=%s after %d checks",
+                                remote_path,
+                                attempt + 1,
+                            )
                         return True
                 elif response.status not in (404, 423):
                     log.warning(f"YaDisk: verify {remote_path}: {response.status} "
@@ -474,6 +480,12 @@ async def _resource_size_matches(remote_path: str, size: int,
 
 async def _upload_path(local_path: Path, remote_path: str) -> tuple[bool, dict]:
     size = local_path.stat().st_size
+    total_started = time.monotonic()
+    log.info(
+        "YaDisk: file upload started name=%s size=%.2f MiB",
+        local_path.name,
+        size / 1048576,
+    )
     try:
         async with _session.get(
             f"{API}/resources/upload",
@@ -485,16 +497,30 @@ async def _upload_path(local_path: Path, remote_path: str) -> tuple[bool, dict]:
                 return False, {}
             href = (await response.json())["href"]
 
+        transfer_started = time.monotonic()
         with local_path.open("rb") as source:
             async with _transfer_session.put(href, data=source) as upload_response:
                 if upload_response.status not in (201, 202):
                     log.warning(f"YaDisk: upload {remote_path}: {upload_response.status} "
                                 f"{await upload_response.text()}")
                     return False, {}
+        transfer_seconds = max(time.monotonic() - transfer_started, 0.001)
 
+        verify_started = time.monotonic()
         if not await _resource_size_matches(remote_path, size):
             log.warning(f"YaDisk: uploaded file did not verify: {remote_path}")
             return False, {}
+        verify_seconds = time.monotonic() - verify_started
+        log.info(
+            "YaDisk: file upload complete name=%s size=%.2f MiB "
+            "transfer=%.2fs speed=%.2f MiB/s verify=%.2fs total=%.2fs",
+            local_path.name,
+            size / 1048576,
+            transfer_seconds,
+            size / 1048576 / transfer_seconds,
+            verify_seconds,
+            time.monotonic() - total_started,
+        )
         return True, {"size": size}
     except Exception as exc:
         log.warning(f"YaDisk: upload {remote_path} failed: {exc}")
@@ -502,6 +528,12 @@ async def _upload_path(local_path: Path, remote_path: str) -> tuple[bool, dict]:
 
 
 async def _upload_bytes(data: bytes, remote_path: str) -> bool:
+    total_started = time.monotonic()
+    log.info(
+        "YaDisk: manifest upload started path=%s size=%d bytes",
+        remote_path,
+        len(data),
+    )
     try:
         async with _session.get(
             f"{API}/resources/upload",
@@ -511,12 +543,28 @@ async def _upload_bytes(data: bytes, remote_path: str) -> bool:
                 log.warning(f"YaDisk: manifest URL: {response.status} {await response.text()}")
                 return False
             href = (await response.json())["href"]
+        transfer_started = time.monotonic()
         async with _transfer_session.put(href, data=data) as upload_response:
             if upload_response.status not in (201, 202):
                 log.warning(f"YaDisk: manifest upload: {upload_response.status} "
                             f"{await upload_response.text()}")
                 return False
-        return await _resource_size_matches(remote_path, len(data))
+        transfer_seconds = time.monotonic() - transfer_started
+        verify_started = time.monotonic()
+        verified = await _resource_size_matches(remote_path, len(data))
+        verify_seconds = time.monotonic() - verify_started
+        if not verified:
+            log.warning("YaDisk: manifest did not verify path=%s", remote_path)
+            return False
+        log.info(
+            "YaDisk: manifest upload complete path=%s transfer=%.2fs "
+            "verify=%.2fs total=%.2fs",
+            remote_path,
+            transfer_seconds,
+            verify_seconds,
+            time.monotonic() - total_started,
+        )
+        return True
     except Exception as exc:
         log.warning(f"YaDisk: manifest upload failed: {exc}")
         return False
@@ -588,6 +636,7 @@ async def _copy_path(source_path: str, destination_path: str) -> bool:
 
 
 async def _upload_job(job: dict) -> bool:
+    job_started = time.monotonic()
     event_folder = job.get("event_folder") or _folder
     folder_name = job.get("session_folder_name") or _legacy_session_folder_name(job)
     session_root = sessions_root(event_folder)
@@ -596,8 +645,21 @@ async def _upload_job(job: dict) -> bool:
         if not await _ensure_directory(path):
             return False
 
+    total_files = len(job["files"])
+    total_size = sum(
+        Path(entry["local_path"]).stat().st_size
+        for entry in job["files"]
+        if Path(entry["local_path"]).is_file()
+    )
+    media_started = time.monotonic()
+    log.info(
+        "YaDisk: session %s media upload started files=%d size=%.2f MiB",
+        job["session_id"],
+        total_files,
+        total_size / 1048576,
+    )
     manifest_files = []
-    for entry in job["files"]:
+    for file_number, entry in enumerate(job["files"], start=1):
         local_path = Path(entry["local_path"])
         if not local_path.is_file():
             log.error(f"YaDisk: local session file disappeared: {local_path}")
@@ -612,11 +674,20 @@ async def _upload_job(job: dict) -> bool:
         if already_uploaded:
             metadata = {"size": size}
             log.info(
-                "YaDisk: session %s already has %s; upload skipped",
+                "YaDisk: session %s file %d/%d already uploaded name=%s; skipped",
                 job["session_id"],
+                file_number,
+                total_files,
                 entry["session_name"],
             )
         else:
+            log.info(
+                "YaDisk: session %s uploading file %d/%d name=%s",
+                job["session_id"],
+                file_number,
+                total_files,
+                entry["session_name"],
+            )
             ok, metadata = await _upload_path(local_path, session_path)
             if not ok:
                 return False
@@ -631,6 +702,14 @@ async def _upload_job(job: dict) -> bool:
         manifest_entry.pop("md5", None)
         manifest_entry.update(metadata)
         manifest_files.append(manifest_entry)
+
+    log.info(
+        "YaDisk: session %s media upload complete files=%d size=%.2f MiB in %.2fs",
+        job["session_id"],
+        total_files,
+        total_size / 1048576,
+        time.monotonic() - media_started,
+    )
 
     # Reuse the URL prepared during template selection. If that early attempt
     # failed, publish now as a fallback before secondary flat copies start.
@@ -649,6 +728,7 @@ async def _upload_job(job: dict) -> bool:
     )
     await _notify_session_link(job["session_id"], public_url)
 
+    copies_started = time.monotonic()
     for entry in job["files"]:
         session_path = f"{session_folder}/{entry['session_name']}"
         root_path = f"{event_folder}/{entry['name']}"
@@ -659,6 +739,12 @@ async def _upload_job(job: dict) -> bool:
         )
         if not await _copy_path(session_path, root_path):
             return False
+    log.info(
+        "YaDisk: session %s server copies complete files=%d in %.2fs",
+        job["session_id"],
+        total_files,
+        time.monotonic() - copies_started,
+    )
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -674,8 +760,12 @@ async def _upload_job(job: dict) -> bool:
         return False
 
     _prepared_links.pop(job["session_id"], None)
-    log.info(f"YaDisk: session {job['session_id']} published "
-             f"({len(manifest_files)} files)")
+    log.info(
+        "YaDisk: session %s published files=%d total=%.2fs",
+        job["session_id"],
+        len(manifest_files),
+        time.monotonic() - job_started,
+    )
     return True
 
 

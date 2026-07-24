@@ -227,6 +227,7 @@ class FrontendProtocolTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         backend_source = (root / "backend" / "main.py").read_text(encoding="utf-8")
         frontend_source = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+        frontend_html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
         config = json.loads((root / "config_app.json").read_text(encoding="utf-8"))
 
         self.assertNotIn("VPS_URL", backend_source)
@@ -235,6 +236,9 @@ class FrontendProtocolTests(unittest.TestCase):
         self.assertIn('"type": "session_link"', backend_source)
         self.assertIn('case "session_link"', frontend_source)
         self.assertIn('new Set(["composing", "printing", "done", "idle"])', frontend_source)
+        self.assertIn("Фото с последней съёмки загружаются сюда", frontend_source)
+        self.assertIn("dismissedQrSessionId === currentSessionId", frontend_source)
+        self.assertIn('id="qr-modal-close"', frontend_html)
         self.assertTrue(config["show_qr"])
 
 

@@ -14,6 +14,10 @@ from PIL import Image, ImageOps
 DEFAULT_PRINT_SIZE = (3688, 2480)
 DEFAULT_PREVIEW_WIDTH = 720
 PREVIEW_PHOTO_MAX_EDGE = 720
+PREVIEW_CANVAS_COLOR = (51, 51, 51)
+DUPLICATE_PREVIEW_HEIGHT_RATIO = 0.86
+DUPLICATE_PREVIEW_Y_OFFSET_RATIO = 0.08
+DUPLICATE_PREVIEW_GAP_RATIO = 0.035
 log = logging.getLogger(__name__)
 
 
@@ -206,7 +210,20 @@ def _compose_preview(
     source_path = template_dir / template["background"]
     with Image.open(source_path) as source:
         source_size = source.size
-    scale = preview_width / print_size[0]
+    target_size = (
+        preview_width,
+        max(1, round(print_size[1] * preview_width / print_size[0])),
+    )
+    if template.get("duplicate"):
+        # The print compositor duplicates the strip and rotates the resulting
+        # sheet to match the printer page.  That technical layout is confusing
+        # on the choice screen, so keep the real strip upright and present two
+        # copies as separate physical strips instead.
+        display_height = max(
+            1, round(target_size[1] * DUPLICATE_PREVIEW_HEIGHT_RATIO))
+        scale = display_height / source_size[1]
+    else:
+        scale = preview_width / print_size[0]
     background_size = (
         max(1, round(source_size[0] * scale)),
         max(1, round(source_size[1] * scale)),
@@ -247,19 +264,12 @@ def _compose_preview(
                 fitted.close()
 
         if template.get("duplicate"):
-            sheet = Image.new(
-                "RGB", (background.width * 2, background.height), "white")
-            sheet.paste(background, (0, 0))
-            sheet.paste(background, (background.width, 0))
+            sheet = _present_duplicate_preview(background, target_size)
         else:
             sheet = background.copy()
     finally:
         background.close()
 
-    target_size = (
-        preview_width,
-        max(1, round(print_size[1] * scale)),
-    )
     if sheet.size == target_size:
         return sheet
     if sheet.size[::-1] == target_size:
@@ -275,6 +285,30 @@ def _compose_preview(
         )
     finally:
         sheet.close()
+
+
+def _present_duplicate_preview(
+    strip: Image.Image,
+    target_size: tuple[int, int],
+) -> Image.Image:
+    """Place two upright strip copies with a small gap and vertical offset."""
+    target_width, target_height = target_size
+    gap = max(1, round(target_width * DUPLICATE_PREVIEW_GAP_RATIO))
+    y_offset = max(1, round(target_height * DUPLICATE_PREVIEW_Y_OFFSET_RATIO))
+    group_width = strip.width * 2 + gap
+    group_height = strip.height + y_offset
+    if group_width > target_width or group_height > target_height:
+        raise ValueError(
+            f"duplicate preview does not fit {target_size}: "
+            f"group={group_width}x{group_height}"
+        )
+
+    x = (target_width - group_width) // 2
+    y = (target_height - group_height) // 2
+    preview = Image.new("RGB", target_size, PREVIEW_CANVAS_COLOR)
+    preview.paste(strip, (x, y))
+    preview.paste(strip, (x + strip.width + gap, y + y_offset))
+    return preview
 
 
 def _ensure_background_preview(
