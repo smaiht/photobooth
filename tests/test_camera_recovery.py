@@ -391,6 +391,80 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         self.assertEqual(operation.call_count, 2)
         camera._sdk.EdsGetEvent.assert_called_once_with()
 
+    def test_optional_mode_dial_internal_error_does_not_claim_usb_loss(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsGetEvent.return_value = edsdk.EDS_ERR_OK
+        operation = MagicMock(return_value=edsdk.EDS_ERR_INTERNAL_ERROR)
+
+        with patch.object(edsdk.time, "sleep"):
+            result = camera._retry_optional_command(
+                "lock camera mode dial", operation)
+
+        self.assertEqual(result, edsdk.EDS_ERR_INTERNAL_ERROR)
+        operation.assert_called_once_with()
+        camera._sdk.EdsGetEvent.assert_not_called()
+        self.assertFalse(camera._transport_lost)
+
+    def test_mode_dial_internal_error_does_not_abort_camera_configuration(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._camera = ctypes.c_void_p(123)
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSendCommand.return_value = edsdk.EDS_ERR_INTERNAL_ERROR
+        camera._sdk.EdsGetEvent.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetCapacity.return_value = edsdk.EDS_ERR_OK
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config_camera.json"
+            config_path.write_text(json.dumps({
+                "disable_auto_power_off": False,
+                "lock_camera_ui": False,
+                "lock_mode_dial": True,
+            }), encoding="utf-8")
+            with patch("backend.config.ROOT_DIR", Path(tmpdir)), \
+                 patch.object(camera, "storage_ready", return_value=(True, "")), \
+                 patch.object(camera, "_configure_ae_mode"), \
+                 patch.object(camera, "_set_prop_u32", return_value=edsdk.EDS_ERR_OK), \
+                 patch.object(camera, "_read_camera_identity") as identity, \
+                 patch.object(camera, "_log_applied_config"), \
+                 patch.object(camera, "_log_camera_health"), \
+                 patch.object(edsdk.shutil, "disk_usage", return_value=SimpleNamespace(
+                     free=10 * 1024 ** 3)), \
+                 patch.object(edsdk.time, "sleep"):
+                camera._configure_for_photobooth()
+
+        identity.assert_called_once_with()
+        self.assertFalse(camera._transport_lost)
+
+    def test_generic_internal_error_closes_an_open_session_normally(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._camera = ctypes.c_void_p(123)
+        camera._session_open = True
+        camera._sdk = MagicMock()
+        camera._sdk.EdsCloseSession.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsRelease.return_value = 0
+
+        camera._mark_disconnected(
+            "optional command failed",
+            transport_lost=(
+                edsdk.EDS_ERR_INTERNAL_ERROR in edsdk.FATAL_TRANSPORT_ERRORS),
+        )
+        camera._cleanup_camera()
+
+        camera._sdk.EdsCloseSession.assert_called_once()
+        camera._sdk.EdsRelease.assert_called_once()
+
+    def test_optional_camera_lock_propagates_real_usb_loss(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        operation = MagicMock(return_value=edsdk.EDS_ERR_COMM_DISCONNECTED)
+
+        with self.assertRaises(edsdk.EDSDKError) as raised:
+            camera._retry_optional_command("lock camera UI", operation)
+
+        self.assertEqual(raised.exception.code, edsdk.EDS_ERR_COMM_DISCONNECTED)
+        camera._sdk.EdsGetEvent.assert_not_called()
+
     def test_property_descriptor_blocks_an_unavailable_value(self):
         camera = edsdk.Camera("fake-edSDK.dll")
         camera._sdk = MagicMock()

@@ -89,15 +89,18 @@ TRANSIENT_CAPTURE_ERRORS = {
     EDS_ERR_TAKE_PICTURE_STROBO_CHARGE_NG,
 }
 FATAL_TRANSPORT_ERRORS = {
-    EDS_ERR_INTERNAL_ERROR,
+    # Keep this set limited to errors which explicitly say that the current
+    # device/session transport is unusable.  EDS_ERR_INTERNAL_ERROR is a
+    # generic per-operation failure: EOS R8 may return it for optional body
+    # commands (notably SetModeDialDisable) while the open session remains
+    # perfectly usable.  Treating it as a USB loss makes cleanup skip
+    # EdsCloseSession and can leave the body rejecting every later open.
     EDS_ERR_DEVICE_NOT_FOUND,
     EDS_ERR_DEVICE_INVALID,
     EDS_ERR_DEVICE_EMERGENCY,
     EDS_ERR_DEVICE_INTERNAL_ERROR,
     EDS_ERR_COMM_DISCONNECTED,
     EDS_ERR_COMM_USB_BUS_ERR,
-    EDS_ERR_USB_DEVICE_LOCK_ERROR,
-    EDS_ERR_USB_DEVICE_UNLOCK_ERROR,
     EDS_ERR_SESSION_NOT_OPEN,
 }
 OPTIONAL_PROPERTY_ERRORS = {
@@ -764,7 +767,6 @@ class Camera:
             EDS_ERR_DEVICE_BUSY,
             EDS_ERR_PTP_DEVICE_BUSY,
             EDS_ERR_OBJECT_NOTREADY,
-            EDS_ERR_INTERNAL_ERROR,
         }
         err = EDS_ERR_OK
         for attempt in range(1, attempts + 1):
@@ -777,6 +779,11 @@ class Camera:
                 break
             event_err = self._sdk.EdsGetEvent()
             if event_err in FATAL_TRANSPORT_ERRORS:
+                raise EDSDKError(f"{label}/EdsGetEvent", event_err)
+            if event_err != EDS_ERR_OK:
+                # An event-pump failure is not the optional lock command's
+                # result.  Abort this setup attempt, but allow normal session
+                # cleanup unless the code explicitly denotes transport loss.
                 raise EDSDKError(f"{label}/EdsGetEvent", event_err)
             time.sleep(0.15 * attempt)
         log.warning(
