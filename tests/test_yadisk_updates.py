@@ -354,5 +354,25 @@ class UpdateMarkerTests(unittest.TestCase):
             self.assertEqual(list(root.iterdir()), [])
 
 
+class WindowsGitSyncTests(unittest.TestCase):
+    def test_scripts_align_with_origin_without_touching_ignored_state(self):
+        root = Path(__file__).resolve().parents[1]
+        sync = (root / "_sync_from_git.bat").read_text(encoding="utf-8")
+        dev_start = (root / "script_devstart.bat").read_text(encoding="utf-8")
+        git_pull = (root / "script_gitpull.bat").read_text(encoding="utf-8")
+
+        self.assertIn("git fetch --prune origin main", sync)
+        self.assertIn("git reset --hard origin/main", sync)
+        self.assertIn('.update_in_progress.json', sync)
+        self.assertIn("PHOTOBOOTH_SYNC_PYTHONW", sync)
+        self.assertNotIn("git pull", sync)
+        self.assertNotIn("config_app.json", sync)
+        self.assertNotIn("config_camera.json", sync)
+        self.assertNotIn(".env", sync)
+        self.assertNotIn("CommandLine", sync)
+        self.assertIn('_sync_from_git.bat', dev_start)
+        self.assertIn('_sync_from_git.bat', git_pull)
+
+
 if __name__ == "__main__":
     unittest.main()

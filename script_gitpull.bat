@@ -1,4 +1,9 @@
 @echo off
 cd /d "%~dp0"
-git pull
+call "%~dp0_sync_from_git.bat"
+if errorlevel 1 (
+    echo Git synchronization failed.
+    pause
+    exit /b 1
+)
 pause

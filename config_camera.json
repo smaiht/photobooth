@@ -22,7 +22,7 @@
     "tv": "1/125",
     "_tv_comment": "Shutter speed. 1/160 is a safe flash sync start for EOS R8 + MS300V. Avoid 1/250+ with this non-HSS studio flash.",
 
-    "iso": 400,
+    "iso": 100,
     "_iso_options": [100, 200, 400, 800, 1600, 3200, 6400, "auto"],
 
     "white_balance": "auto",

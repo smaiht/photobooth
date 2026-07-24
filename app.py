@@ -695,7 +695,7 @@ def main():
         return
     update_marker_owned = False
     if installer_active:
-        log.warning("Disk update: recovery launch is ignoring the installer marker")
+        log.info("Disk update: intended post-installer launch accepted")
     else:
         if not skip_update_once and sys.platform == "win32":
             update_marker_owned = _claim_update_marker()
@@ -742,8 +742,8 @@ def main():
     def update_then_start():
         # Auto-update while Loading is shown
         if skip_update_once:
-            log.warning("Disk update: one check skipped after installer failure")
-            _ui_log("Предыдущее обновление не установилось; запуск текущей версии")
+            log.info("Disk update: post-installer launch; one check skipped")
+            _ui_log("Запуск приложения после установщика")
         else:
             try:
                 auto_update()

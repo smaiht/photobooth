@@ -45,7 +45,7 @@ git clone → script_devstart.bat
 ## Запуск
 
 ```
-Разработка:    script_devstart.bat     (git pull + pip install + app.py --dev)
+Разработка:    script_devstart.bat     (fetch/reset origin/main + pip install + app.py --dev)
 Продакшен:     _setup_windows.bat      (киоск-режим, автозапуск при загрузке)
 ```
 
