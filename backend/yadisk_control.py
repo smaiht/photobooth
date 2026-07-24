@@ -22,6 +22,7 @@ PAGE_SIZE = 100
 # Normal snapshots are about 400 KB.  The larger ceiling allows one legacy
 # 1 MB segment to be delivered immediately after upgrading the rotation size.
 MAX_LOG_ARTIFACT_SIZE = 2 * 1024 * 1024
+MAX_CONFIG_EXPORT_SIZE = 512 * 1024
 COMMAND_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 _session: aiohttp.ClientSession | None = None
@@ -104,7 +105,7 @@ async def _connect() -> bool:
             current += "/" + part
             await _ensure_directory(current)
         for suffix in ("to_booth", "to_vps", "done", "done/to_booth",
-                       "done/to_vps", "logs"):
+                       "done/to_vps", "logs", "configs"):
             await _ensure_directory(f"{_root}/{suffix}")
         return True
     except Exception as exc:
@@ -192,6 +193,19 @@ async def upload_log(command_id: str, payload: bytes) -> str:
     if not await _connect():
         raise RuntimeError("Yandex.Disk control is unavailable")
     remote_path = f"{_root}/logs/{command_id}.log"
+    await _upload_bytes(payload, remote_path)
+    return remote_path
+
+
+async def upload_config_export(command_id: str, payload: bytes) -> str:
+    if (not COMMAND_ID_RE.fullmatch(command_id)
+            or not isinstance(payload, bytes)
+            or not payload
+            or len(payload) > MAX_CONFIG_EXPORT_SIZE):
+        raise ValueError("invalid config export upload")
+    if not await _connect():
+        raise RuntimeError("Yandex.Disk control is unavailable")
+    remote_path = f"{_root}/configs/{command_id}.txt"
     await _upload_bytes(payload, remote_path)
     return remote_path
 

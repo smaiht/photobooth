@@ -26,6 +26,7 @@ from .config import (
     ROOT_DIR,
     TEMPLATES_DIR,
     load_event_config,
+    update_camera_config_field,
 )
 from .composer import compose, generate_template_previews
 from .log import read_log_snapshot
@@ -56,6 +57,22 @@ if sys.platform == "win32":
         camera.set_download_dir(PHOTOS_DIR)
     except Exception as e:
         log.warning(f"EDSDK not available: {e}")
+
+
+CONFIG_EXPORT_FILENAMES = ("config_app.json", "config_camera.json")
+
+
+def _build_config_export(root: Path = ROOT_DIR) -> bytes:
+    """Combine both current config files into one readable text document."""
+    output = bytearray()
+    for filename in CONFIG_EXPORT_FILENAMES:
+        payload = (root / filename).read_bytes()
+        output.extend(f"===== {filename} =====\n".encode("utf-8"))
+        output.extend(payload)
+        if not payload.endswith(b"\n"):
+            output.extend(b"\n")
+        output.extend(b"\n")
+    return bytes(output)
 
 # --- Services ---
 video_recorder = VideoRecorder()
@@ -703,6 +720,50 @@ async def handle_disk_command(command: dict) -> dict:
             "_post_action": _do_restart,
         }
 
+    if cmd == "set_camera_config":
+        if STATE not in ("idle", "no_camera", "camera_searching"):
+            return {
+                "status": "error",
+                "message": f"Настройка камеры не изменена: state={STATE}",
+            }
+        if _background_uploads:
+            return {
+                "status": "error",
+                "message": "Настройка камеры не изменена: завершается подготовка загрузки",
+            }
+        if not isinstance(data, dict):
+            return {
+                "status": "error",
+                "message": "Настройка камеры не изменена: отсутствуют field/value",
+            }
+        try:
+            field, old_value, new_value, changed = update_camera_config_field(
+                data.get("field", ""), data.get("value"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return {
+                "status": "error",
+                "message": f"Настройка камеры не изменена: {exc}",
+            }
+        old_text = json.dumps(old_value, ensure_ascii=False)
+        new_text = json.dumps(new_value, ensure_ascii=False)
+        if not changed:
+            return {
+                "status": "ok",
+                "message": (
+                    f"Параметр камеры {field} уже равен {new_text}. "
+                    "Перезапуск подтверждён"
+                ),
+                "_post_action": _do_restart,
+            }
+        return {
+            "status": "ok",
+            "message": (
+                f"Параметр камеры {field}: {old_text} → {new_text}. "
+                "Перезапуск подтверждён"
+            ),
+            "_post_action": _do_restart,
+        }
+
     if cmd in ("run", "start_session"):
         if STATE != "idle":
             return {"status": "error", "message": f"Будка занята: state={STATE}"}
@@ -801,6 +862,22 @@ async def handle_disk_command(command: dict) -> dict:
         return {
             "status": "ok",
             "message": "Лог загружен",
+            "artifact_path": artifact_path,
+        }
+
+    if cmd == "get_config":
+        try:
+            payload = await asyncio.to_thread(_build_config_export)
+        except OSError as exc:
+            return {
+                "status": "error",
+                "message": f"Конфиги не отправлены: {exc}",
+            }
+        artifact_path = await yadisk_control.upload_config_export(
+            command_id, payload)
+        return {
+            "status": "ok",
+            "message": "Конфиги фотобудки готовы",
             "artifact_path": artifact_path,
         }
 
