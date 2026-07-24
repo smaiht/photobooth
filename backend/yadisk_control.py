@@ -250,9 +250,22 @@ async def _process_command(
     filename = item["name"]
     remote_path = str(item.get("path", "")).removeprefix("disk:")
     try:
-        command = validate_command(
-            json.loads((await _download_bytes(remote_path)).decode("utf-8")), filename)
+        body = await _download_bytes(remote_path)
+    except ValueError as exc:
+        # A downloaded artifact that violates the size limit is permanently
+        # invalid and must not block the queue forever.
+        log.warning(f"Control: invalid command {filename}: {exc}")
+        return await _move_done(filename)
     except Exception as exc:
+        # Network/download failures are transient. Keep the command in
+        # to_booth so the next polling cycle retries it.
+        log.warning(f"Control: command download failed {filename}: {exc}")
+        return False
+
+    try:
+        command = validate_command(
+            json.loads(body.decode("utf-8")), filename)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         log.warning(f"Control: invalid command {filename}: {exc}")
         return await _move_done(filename)
 

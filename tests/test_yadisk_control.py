@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend import main, yadisk_control
 
@@ -70,6 +70,43 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, ["handler", "response", "done", "restart"])
 
+    async def test_transient_download_failure_keeps_command_for_retry(self):
+        command_id = "b" * 32
+        item = {
+            "name": f"{command_id}.json",
+            "path": f"disk:/control/to_booth/{command_id}.json",
+        }
+        handler = AsyncMock()
+        with patch(
+            "backend.yadisk_control._download_bytes",
+            AsyncMock(side_effect=OSError("network unavailable")),
+        ), patch(
+            "backend.yadisk_control._move_done", AsyncMock()
+        ) as move_done:
+            self.assertFalse(
+                await yadisk_control._process_command(item, handler))
+
+        handler.assert_not_awaited()
+        move_done.assert_not_awaited()
+
+    async def test_downloaded_invalid_json_is_archived(self):
+        command_id = "c" * 32
+        item = {
+            "name": f"{command_id}.json",
+            "path": f"disk:/control/to_booth/{command_id}.json",
+        }
+        with patch(
+            "backend.yadisk_control._download_bytes",
+            AsyncMock(return_value=b"not-json"),
+        ), patch(
+            "backend.yadisk_control._move_done",
+            AsyncMock(return_value=True),
+        ) as move_done:
+            self.assertTrue(await yadisk_control._process_command(
+                item, AsyncMock()))
+
+        move_done.assert_awaited_once_with(item["name"])
+
 
 class EventCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_switches_event_and_persists_config(self):
@@ -99,6 +136,25 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertNotIn("_post_action", result)
+
+    async def test_backend_shutdown_closes_camera_and_http_sessions_once(self):
+        camera = MagicMock()
+        with patch.object(main, "camera", camera), \
+             patch.object(main, "_service_tasks", set()), \
+             patch.object(main, "_background_uploads", set()), \
+             patch.object(main, "_services_stopping", False), \
+             patch.object(main.video_recorder, "abort") as abort, \
+             patch("backend.main.yadisk_control.control_close",
+                   AsyncMock()) as control_close, \
+             patch("backend.main.yadisk_cloud.yadisk_close",
+                   AsyncMock()) as cloud_close:
+            await main._shutdown_services()
+            await main._shutdown_services()
+
+        camera.stop.assert_called_once_with()
+        abort.assert_called_once_with()
+        control_close.assert_awaited_once_with()
+        cloud_close.assert_awaited_once_with()
 
 
 if __name__ == "__main__":

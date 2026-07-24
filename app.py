@@ -64,40 +64,79 @@ def _build_loading_html():
 """
 
 
-def kill_port(port=8000):
-    """Kill any process using our port."""
-    import socket, subprocess
+_server = None
+_instance_mutex_handle = None
+_INSTANCE_MUTEX_NAME = "Local\\PhotoboothApp.SingleInstance"
+_ERROR_ALREADY_EXISTS = 183
+_RESTART_PARENT_ENV = "PHOTOBOOTH_RESTART_PARENT_PID"
+
+
+def _wait_for_restart_parent() -> None:
+    """Let a deliberately spawned replacement wait for the old mutex owner."""
+    raw_pid = os.environ.pop(_RESTART_PARENT_ENV, "").strip()
+    if sys.platform != "win32" or not raw_pid:
+        return
     try:
-        s = socket.socket()
-        s.settimeout(0.5)
-        s.connect(("127.0.0.1", port))
-        s.close()
-        if sys.platform == "win32":
-            # Find PID on port and kill it
-            result = subprocess.run(
-                f'netstat -ano | findstr :{port}',
-                capture_output=True, text=True, shell=True,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            for line in result.stdout.strip().split('\n'):
-                parts = line.split()
-                if parts and parts[-1].isdigit():
-                    subprocess.run(
-                        f'taskkill /F /PID {parts[-1]}',
-                        capture_output=True, shell=True,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-        else:
-            subprocess.run(f"lsof -ti:{port} | xargs kill -9", shell=True, capture_output=True)
-        time.sleep(1)
-    except Exception:
-        pass
+        parent_pid = int(raw_pid)
+    except ValueError:
+        return
+    deadline = time.monotonic() + 30
+    while (_windows_process_is_running(parent_pid)
+           and time.monotonic() < deadline):
+        time.sleep(0.1)
+
+
+def _acquire_single_instance() -> bool:
+    """Own the booth process without ever killing an existing instance."""
+    global _instance_mutex_handle
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    create_mutex = kernel32.CreateMutexW
+    create_mutex.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
+    create_mutex.restype = wintypes.HANDLE
+    handle = create_mutex(None, False, _INSTANCE_MUTEX_NAME)
+    if not handle:
+        log.error("Photobooth single-instance mutex could not be created")
+        return False
+    if kernel32.GetLastError() == _ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(handle)
+        log.info("Another photobooth instance is already running; exiting")
+        return False
+    _instance_mutex_handle = handle
+    return True
+
+
+def _release_single_instance() -> None:
+    global _instance_mutex_handle
+    if not _instance_mutex_handle or sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.CloseHandle(_instance_mutex_handle)
+    finally:
+        _instance_mutex_handle = None
 
 
 def start_server():
+    global _server
     import uvicorn
     from backend.main import app
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    server = uvicorn.Server(uvicorn.Config(
+        app, host="127.0.0.1", port=8000, log_level="warning"))
+    _server = server
+    try:
+        server.run()
+    finally:
+        _server = None
+
+
+def _request_server_stop() -> None:
+    if _server is not None:
+        _server.should_exit = True
 
 
 def wait_and_load(window):
@@ -287,15 +326,12 @@ def _release_update_marker(marker_path: Path = _UPDATE_MARKER) -> None:
 
 
 def _cleanup_stale_update_artifacts(app_dir: Path = _APP_DIR) -> None:
-    """Best-effort cleanup after a killed legacy or one-shot installer."""
+    """Best-effort cleanup after an interrupted current installer."""
     import shutil
 
     file_patterns = (
-        ".update_download.zip",
         ".update_download.*.zip",
-        ".update_apply.ps1",
         ".update_apply.*.ps1",
-        ".update_args.*.json",
         ".update_in_progress.json.*.tmp",
         ".update_hash.tmp",
     )
@@ -305,7 +341,7 @@ def _cleanup_stale_update_artifacts(app_dir: Path = _APP_DIR) -> None:
                 path.unlink(missing_ok=True)
             except OSError as exc:
                 log.warning("Disk update: stale file is still busy %s: %s", path, exc)
-    for pattern in (".update_stage", ".update_stage.*"):
+    for pattern in (".update_stage.*",):
         for path in app_dir.glob(pattern):
             try:
                 if path.is_dir():
@@ -527,11 +563,12 @@ $relaunchArgumentLine = '"' + $appScript + '"'
 if ($Mode -eq "dev") {
     $relaunchArgumentLine += " --dev"
 }
-if ($installed) {
-    $relaunchArgumentLine += " --post-installer"
-} else {
-    $relaunchArgumentLine += " --skip-update-once"
-}
+
+# The next process is an ordinary application launch. Remove installer
+# ownership first so it performs the normal status.json version check.
+Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 
 try {
     $launched = Start-Process -FilePath $PythonExe `
@@ -539,8 +576,8 @@ try {
     if ($installed) {
         Write-UpdateLog ("Updated application restarted, PID " + $launched.Id)
     } else {
-        Write-UpdateLog ("Application restarted without one update check, PID " + `
-            $launched.Id)
+        Write-UpdateLog ("Application restarted after failed update, PID " + `
+            $launched.Id) "ERROR"
     }
     Start-Sleep -Seconds 2
     if ($launched.HasExited) {
@@ -549,12 +586,6 @@ try {
     }
 } catch {
     Write-UpdateLog ("Application relaunch failed: " + $_.Exception.Message) "ERROR"
-} finally {
-    # An internal post-installer/recovery launch may start while this marker
-    # still protects the copy/cleanup window from unrelated manual launches.
-    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 }
 ''', encoding="utf-8")
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -728,32 +759,20 @@ def auto_update():
         _ui_log(f"Ошибка обновления: {e}")
 
 
-def main():
-    skip_update_once = "--skip-update-once" in sys.argv
-    post_installer = "--post-installer" in sys.argv
-    if skip_update_once or post_installer:
-        # Internal one-shot flags: never propagate them to later restarts.
-        sys.argv[:] = [
-            arg for arg in sys.argv
-            if arg not in {"--skip-update-once", "--post-installer"}
-        ]
-
+def _run_application():
     installer_active = _external_update_active()
-    if installer_active and not (skip_update_once or post_installer):
+    if installer_active:
         # Do not load FastAPI or EDSDK while PowerShell is replacing files. The
         # installer waits for this short-lived Python process before copying.
         log.info("Disk update: installer is active; this extra launch will exit")
         return
     update_marker_owned = False
-    if installer_active:
-        log.info("Disk update: intended post-installer launch accepted")
-    else:
-        if not skip_update_once and sys.platform == "win32":
-            update_marker_owned = _claim_update_marker()
-            if not update_marker_owned:
-                log.info("Disk update: another launch won the update check; exiting")
-                return
-        _cleanup_stale_update_artifacts()
+    if sys.platform == "win32":
+        update_marker_owned = _claim_update_marker()
+        if not update_marker_owned:
+            log.info("Disk update: another launch won the update check; exiting")
+            return
+    _cleanup_stale_update_artifacts()
 
     dev = "--dev" in sys.argv
     sleep_prevention_enabled = _prevent_windows_sleep()
@@ -767,9 +786,6 @@ def main():
                     key, val = line.split("=", 1)
                     if key.strip() and val.strip():
                         os.environ[key.strip()] = val.strip()
-
-    # Kill leftover process on our port
-    kill_port()
 
     # Show loading screen immediately
     import webview
@@ -793,20 +809,17 @@ def main():
 
     def update_then_start():
         # Auto-update while Loading is shown
-        if skip_update_once:
-            log.info("Disk update: installer recovery launch; one check skipped")
-            _ui_log("Восстановление после ошибки обновления")
-        else:
-            try:
-                auto_update()
-            finally:
-                if update_marker_owned:
-                    _release_update_marker()
+        try:
+            auto_update()
+        finally:
+            if update_marker_owned:
+                _release_update_marker()
         _ui_log("Запуск сервера...")
         # Start backend
         start_server()
 
-    threading.Thread(target=update_then_start, daemon=True).start()
+    server_thread = threading.Thread(target=update_then_start, daemon=True)
+    server_thread.start()
 
     # Wait for server in background, then load app
     threading.Thread(target=wait_and_load, args=(window,), daemon=True).start()
@@ -814,7 +827,21 @@ def main():
     try:
         webview.start()
     finally:
+        _request_server_stop()
+        server_thread.join(timeout=15)
+        if server_thread.is_alive():
+            log.warning("Backend did not stop within 15 seconds")
         _restore_windows_sleep(sleep_prevention_enabled)
+
+
+def main():
+    _wait_for_restart_parent()
+    if not _acquire_single_instance():
+        return
+    try:
+        _run_application()
+    finally:
+        _release_single_instance()
 
 
 if __name__ == "__main__":

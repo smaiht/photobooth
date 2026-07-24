@@ -64,8 +64,10 @@ _latest_frame: bytes | None = None
 _live_view_active = False
 _evf_accept_after: float = 0.0
 _background_uploads: set[asyncio.Task] = set()
+_service_tasks: set[asyncio.Task] = set()
 _session_running = False
 _camera_disconnected_event = asyncio.Event()
+_services_stopping = False
 
 
 class CameraSessionAborted(RuntimeError):
@@ -613,25 +615,27 @@ async def get_state(frontend: str = ""):
 @app.post("/api/shutdown")
 async def shutdown():
     """Full stop."""
-    if camera:
-        await asyncio.get_event_loop().run_in_executor(None, camera.stop)
+    await _shutdown_services()
     os._exit(0)
 
 
 async def _do_restart():
     log.info("Restart requested!")
-    if camera:
-        log.info("Stopping camera...")
-        await asyncio.get_event_loop().run_in_executor(None, camera.stop)
-        log.info("Camera stopped")
+    await _shutdown_services()
     import subprocess
     si = None
     if sys.platform == "win32":
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     log.info(f"Spawning: {sys.executable} {sys.argv}")
-    subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
-    await asyncio.sleep(1)
+    child_env = os.environ.copy()
+    child_env["PHOTOBOOTH_RESTART_PARENT_PID"] = str(os.getpid())
+    subprocess.Popen(
+        [sys.executable] + sys.argv,
+        startupinfo=si,
+        env=child_env,
+    )
+    await asyncio.sleep(0.1)
     os._exit(0)
 
 
@@ -750,11 +754,11 @@ async def handle_disk_command(command: dict) -> dict:
             if isinstance(disk_free, int):
                 status_lines.append(
                     f"Photo disk free: {disk_free / (1024 ** 3):.2f} GiB")
-            if snapshot.get("last_keepalive_result"):
+            if snapshot.get("last_shutdown_timer_extension_result"):
                 status_lines.append(
-                    "Camera keepalive: "
-                    f"{snapshot['last_keepalive_result']} at "
-                    f"{snapshot.get('last_keepalive_at') or 'unknown'}")
+                    "Camera shutdown timer extension: "
+                    f"{snapshot['last_shutdown_timer_extension_result']} at "
+                    f"{snapshot.get('last_shutdown_timer_extension_at') or 'unknown'}")
             if snapshot.get("last_disconnect_reason"):
                 status_lines.append(
                     "Last camera disconnect: "
@@ -818,6 +822,41 @@ async def _control_service():
     await yadisk_control.control_poll_loop(handle_disk_command)
 
 
+async def _shutdown_services() -> None:
+    """Stop EDSDK and all aiohttp owners before the process exits."""
+    global _services_stopping
+    if _services_stopping:
+        return
+    _services_stopping = True
+    log.info("Stopping backend services...")
+
+    for task in list(_service_tasks):
+        task.cancel()
+    if _service_tasks:
+        await asyncio.gather(*list(_service_tasks), return_exceptions=True)
+    _service_tasks.clear()
+
+    if _background_uploads:
+        _, pending = await asyncio.wait(
+            list(_background_uploads), timeout=5)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    await asyncio.gather(
+        yadisk_control.control_close(),
+        yadisk_cloud.yadisk_close(),
+        return_exceptions=True,
+    )
+    video_recorder.abort()
+    if camera:
+        log.info("Stopping camera...")
+        await asyncio.to_thread(camera.stop)
+        log.info("Camera stopped")
+    log.info("Backend services stopped")
+
+
 @app.post("/api/restart")
 async def restart():
     await _do_restart()
@@ -863,7 +902,8 @@ async def websocket_endpoint(ws: WebSocket):
 
 @app.on_event("startup")
 async def startup():
-    global _event_loop
+    global _event_loop, _services_stopping
+    _services_stopping = False
     _event_loop = asyncio.get_event_loop()
     yadisk_cloud.set_session_link_handler(_on_session_link)
     await asyncio.to_thread(_cleanup_stale_preview_dirs)
@@ -885,5 +925,10 @@ async def startup():
     else:
         log.info("Running without camera (not Windows or EDSDK not found)")
 
-    asyncio.create_task(_control_service())
-    asyncio.create_task(_yadisk_service())
+    _service_tasks.add(asyncio.create_task(_control_service()))
+    _service_tasks.add(asyncio.create_task(_yadisk_service()))
+
+
+@app.on_event("shutdown")
+async def app_shutdown():
+    await _shutdown_services()

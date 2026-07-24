@@ -79,7 +79,6 @@ PROPERTY_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, c
 
 RECONNECT_MIN_SECONDS = 2
 RECONNECT_MAX_SECONDS = 10
-CAMERA_KEEPALIVE_SECONDS = 60.0
 CAMERA_HEALTH_LOG_SECONDS = 10 * 60.0
 MIN_FREE_DISK_GIB = 2.0
 
@@ -131,6 +130,7 @@ class Camera:
         self._com_initialized = False
         self._camera = EdsBaseRef()
         self._session_open = False
+        self._transport_lost = False
         self._ui_locked = False
         self._mode_dial_locked = False
         self._evf_original_output: int | None = None
@@ -154,8 +154,8 @@ class Camera:
             "connected": False,
             "last_disconnect_reason": None,
             "last_disconnect_at": None,
-            "last_keepalive_at": None,
-            "last_keepalive_result": None,
+            "last_shutdown_timer_extension_at": None,
+            "last_shutdown_timer_extension_result": None,
         }
         self._pending_property_updates: set[int] = set()
 
@@ -190,7 +190,9 @@ class Camera:
         self._running = False
         self._retry_event.set()
         if self._thread:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=10)
+            if self._thread.is_alive():
+                log.error("EDSDK thread did not stop within 10 seconds")
 
     @property
     def is_connected(self) -> bool:
@@ -273,6 +275,13 @@ class Camera:
                     if self._connected_cb:
                         self._connected_cb()
                     self._run_connected()
+                except EDSDKError as exc:
+                    if self._running:
+                        log.warning("Camera EDSDK operation failed: %s", exc)
+                        self._mark_disconnected(
+                            str(exc),
+                            transport_lost=exc.code in FATAL_TRANSPORT_ERRORS,
+                        )
                 except RuntimeError as exc:
                     if self._running:
                         log.warning("Camera search failed: %s", exc)
@@ -280,7 +289,11 @@ class Camera:
                 except Exception as exc:
                     if self._running:
                         log.exception("Camera connection failed")
-                        self._mark_disconnected(str(exc))
+                        # ctypes access violations and other unexpected errors
+                        # while a session is active make further remote cleanup
+                        # unsafe. EdsRelease is still required for our ref.
+                        self._mark_disconnected(
+                            str(exc), transport_lost=self._session_open)
                 finally:
                     self._connected = False
                     self._update_health(connected=False)
@@ -334,11 +347,11 @@ class Camera:
 
     def _run_connected(self):
         evf_active = False
-        keepalive_seconds = self._camera_keepalive_seconds()
         now = time.monotonic()
-        next_keepalive = now + keepalive_seconds
         next_health_log = now + CAMERA_HEALTH_LOG_SECONDS
-        log.info("Camera keepalive active: every %.0fs", keepalive_seconds)
+        log.info(
+            "Camera auto-off protection active: Auto Power Off disabled; "
+            "shutdown timer is extended only after a Canon warning")
         while self._running and self._connected:
             _check("EdsGetEvent", self._sdk.EdsGetEvent())
             # The shutdown callback runs synchronously inside EdsGetEvent().
@@ -356,7 +369,8 @@ class Camera:
                         self._do_capture()
                     except EDSDKError as exc:
                         if exc.code in FATAL_TRANSPORT_ERRORS:
-                            self._mark_disconnected(str(exc))
+                            self._mark_disconnected(
+                                str(exc), transport_lost=True)
                         else:
                             log.exception("Capture exception")
                     except Exception:
@@ -378,46 +392,35 @@ class Camera:
                     self._evf_frame_cb(frame)
 
             now = time.monotonic()
-            if now >= next_keepalive:
-                self._extend_shutdown_timer("periodic keepalive")
-                next_keepalive = now + keepalive_seconds
             if now >= next_health_log:
                 self._log_camera_health()
                 next_health_log = now + CAMERA_HEALTH_LOG_SECONDS
 
             time.sleep(0.03)
 
-    def _camera_keepalive_seconds(self) -> float:
-        try:
-            configured = float(
-                self._cfg.get("keepalive_seconds", CAMERA_KEEPALIVE_SECONDS))
-        except (TypeError, ValueError):
-            log.warning(
-                "Invalid camera keepalive_seconds=%r; using %.0fs",
-                self._cfg.get("keepalive_seconds"), CAMERA_KEEPALIVE_SECONDS,
-            )
-            configured = CAMERA_KEEPALIVE_SECONDS
-        # Avoid hammering EDSDK if a bad value reaches the local config.
-        return min(max(configured, 15.0), 5 * 60.0)
-
     def _extend_shutdown_timer(self, reason: str) -> int:
         err = self._sdk.EdsSendCommand(
             self._camera, kEdsCameraCommand_ExtendShutDownTimer, 0)
         self._update_health(
-            last_keepalive_at=self._utc_now(),
-            last_keepalive_result=(
+            last_shutdown_timer_extension_at=self._utc_now(),
+            last_shutdown_timer_extension_result=(
                 "ok" if err == EDS_ERR_OK
                 else f"0x{err:08X} {edsdk_error_name(err)}"
             ),
         )
         if err == EDS_ERR_OK:
-            if reason != "periodic keepalive":
-                log.info("Camera shutdown timer extended: %s", reason)
+            log.info("Camera shutdown timer extended: %s", reason)
         else:
             log.warning(
-                "Camera keepalive failed (%s): 0x%08X %s",
+                "Camera shutdown timer extension failed (%s): 0x%08X %s",
                 reason, err, edsdk_error_name(err),
             )
+            if err in FATAL_TRANSPORT_ERRORS:
+                self._mark_disconnected(
+                    f"Shutdown timer transport failure: "
+                    f"0x{err:08X} {edsdk_error_name(err)}",
+                    transport_lost=True,
+                )
         return err
 
     def _discard_commands(self):
@@ -431,7 +434,9 @@ class Camera:
         if discarded:
             log.info("Camera: discarded %d stale commands", discarded)
 
-    def _mark_disconnected(self, reason: str):
+    def _mark_disconnected(self, reason: str, *, transport_lost: bool = False):
+        if transport_lost:
+            self._transport_lost = True
         was_connected = self._connected
         self._connected = False
         if was_connected:
@@ -513,6 +518,7 @@ class Camera:
 
     def _connect_camera(self):
         """Open a session using fresh camera refs without restarting EDSDK."""
+        self._transport_lost = False
         last_error = None
         for attempt in range(1, 6):
             self._camera = self._acquire_camera()
@@ -535,7 +541,12 @@ class Camera:
                     if camera:
                         self._sdk.EdsRelease(camera)
             if attempt < 5:
-                time.sleep(2)
+                # Make OpenSession backoff interruptible so application
+                # shutdown never waits through all five attempts.
+                self._retry_event.wait(timeout=2)
+                self._retry_event.clear()
+                if not self._running:
+                    raise RuntimeError("Camera worker is stopping")
 
         raise RuntimeError(
             "Failed to open camera session after 5 attempts"
@@ -610,20 +621,18 @@ class Camera:
         # Canon section 6.19: 0 disables/locks the physical mode dial and 1
         # cancels that state. Lock it before using AEModeSelect.
         if cfg.get("lock_mode_dial", True):
-            err = self._sdk.EdsSendCommand(
-                self._camera, kEdsCameraCommand_SetModeDialDisable, 0)
+            err = self._retry_optional_command(
+                "lock camera mode dial",
+                lambda: self._sdk.EdsSendCommand(
+                    self._camera, kEdsCameraCommand_SetModeDialDisable, 0),
+            )
             if err == EDS_ERR_OK:
                 self._mode_dial_locked = True
                 log.info("Camera mode dial locked")
-            else:
-                log.warning(
-                    "Could not lock camera mode dial: 0x%08X %s",
-                    err, edsdk_error_name(err),
-                )
 
         # This is the primary protection for an unattended booth. The
-        # periodic ExtendShutDownTimer command remains as a fallback for Canon
-        # models/firmware that do not persist this setting reliably.
+        # If Canon still emits WillSoonShutDown, its event handler extends the
+        # timer once in direct response to that warning.
         if cfg.get("disable_auto_power_off", True):
             err = self._disable_auto_power_off()
             if err == EDS_ERR_OK:
@@ -631,7 +640,7 @@ class Camera:
             else:
                 log.warning(
                     "Camera auto power-off could not be disabled; "
-                    "periodic keepalive will remain active")
+                    "Canon shutdown warnings will still be handled")
         else:
             log.warning("Camera auto power-off protection disabled by config")
 
@@ -704,7 +713,10 @@ class Camera:
             self._set_prop_u32(kEdsPropID_AFMode, af_mode)
 
         # EVF AF mode (face tracking, zone, etc.)
-        af_mode = EVF_AF_MODE_MAP.get(cfg.get("evf_af_mode", "face_tracking"), 0x02)
+        af_mode = EVF_AF_MODE_MAP.get(
+            cfg.get("evf_af_mode", "face_tracking"),
+            EVF_AF_MODE_MAP["face_tracking"],
+        )
         self._set_prop_u32(kEdsPropID_Evf_AFMode, af_mode)
 
         # Subject detection
@@ -727,20 +739,45 @@ class Camera:
 
         # Lock camera UI
         if cfg.get("lock_camera_ui", True):
-            err = self._sdk.EdsSendStatusCommand(
-                self._camera, kEdsCameraStatusCommand_UILock, 0)
+            err = self._retry_optional_command(
+                "lock camera UI",
+                lambda: self._sdk.EdsSendStatusCommand(
+                    self._camera, kEdsCameraStatusCommand_UILock, 0),
+            )
             if err == EDS_ERR_OK:
                 self._ui_locked = True
-            else:
-                log.warning(
-                    "Could not lock camera UI: 0x%08X %s",
-                    err, edsdk_error_name(err),
-                )
 
         self._read_camera_identity()
         log.info("Camera configured from config_camera.json")
         self._log_applied_config()
         self._log_camera_health()
+
+    def _retry_optional_command(self, label: str, operation, attempts: int = 3) -> int:
+        """Retry optional body locks while Canon finishes property updates."""
+        retryable = {
+            EDS_ERR_DEVICE_BUSY,
+            EDS_ERR_PTP_DEVICE_BUSY,
+            EDS_ERR_OBJECT_NOTREADY,
+            EDS_ERR_INTERNAL_ERROR,
+        }
+        err = EDS_ERR_OK
+        for attempt in range(1, attempts + 1):
+            err = operation()
+            if err == EDS_ERR_OK:
+                return err
+            if err in FATAL_TRANSPORT_ERRORS:
+                raise EDSDKError(label, err)
+            if err not in retryable or attempt == attempts:
+                break
+            event_err = self._sdk.EdsGetEvent()
+            if event_err in FATAL_TRANSPORT_ERRORS:
+                raise EDSDKError(f"{label}/EdsGetEvent", event_err)
+            time.sleep(0.15 * attempt)
+        log.warning(
+            "Could not %s after %d attempt(s): 0x%08X %s",
+            label, attempt, err, edsdk_error_name(err),
+        )
+        return err
 
     def _disable_auto_power_off(self) -> int:
         offered = self._get_property_desc(kEdsPropID_AutoPowerOffSetting)
@@ -1031,8 +1068,6 @@ class Camera:
             kEdsPropID_BatteryQuality,
             kEdsPropID_TempStatus,
             kEdsPropID_AutoPowerOffSetting,
-            kEdsPropID_AvailableShots,
-            kEdsPropID_AEMode,
         }:
             temperature = None
             if kEdsPropID_TempStatus in changed:
@@ -1060,7 +1095,9 @@ class Camera:
             except EDSDKError as exc:
                 if exc.code in FATAL_TRANSPORT_ERRORS:
                     self._mark_disconnected(
-                        f"Photo transfer transport failure: {exc}")
+                        f"Photo transfer transport failure: {exc}",
+                        transport_lost=True,
+                    )
                 log.exception("Download failed")
             except Exception:
                 log.exception("Download failed")
@@ -1085,22 +1122,33 @@ class Camera:
                 )
             elif event == kEdsStateEvent_InternalError:
                 log.critical("Camera reported EDSDK internal error; reconnecting")
-                self._mark_disconnected("EDSDK internal camera error")
+                self._mark_disconnected(
+                    "EDSDK internal camera error", transport_lost=True)
             elif event == kEdsStateEvent_Shutdown:
-                self._mark_disconnected("Camera shutdown/disconnected")
+                self._mark_disconnected(
+                    "Camera shutdown/disconnected", transport_lost=True)
             else:
                 log.info("StateEvent: 0x%08X data=%d", event, data)
             return 0
 
         def on_property_event(event, prop_id, param, context):
-            log.info(
+            log.debug(
                 "PropertyEvent: 0x%08X prop=0x%08X param=%d",
                 event, prop_id, param,
             )
             if event in (
                 kEdsPropertyEvent_PropertyChanged,
                 kEdsPropertyEvent_PropertyDescChanged,
-            ):
+            ) and prop_id in {
+                kEdsPropID_BatteryLevel,
+                kEdsPropID_BatteryQuality,
+                kEdsPropID_TempStatus,
+                kEdsPropID_AutoPowerOffSetting,
+                kEdsPropID_ProductName,
+                kEdsPropID_BodyIDEx,
+                kEdsPropID_FirmwareVersion,
+                kEdsPropID_LensName,
+            }:
                 self._pending_property_updates.add(prop_id)
             return 0
 
@@ -1195,7 +1243,9 @@ class Camera:
                     f"{edsdk_error_name(err)}")
                 if err in FATAL_TRANSPORT_ERRORS:
                     self._mark_disconnected(
-                        f"Capture transport failure: {edsdk_error_name(err)}")
+                        f"Capture transport failure: {edsdk_error_name(err)}",
+                        transport_lost=True,
+                    )
                     return
             end = time.monotonic() + focus_delay
             while time.monotonic() < end:
@@ -1203,7 +1253,9 @@ class Camera:
                 if event_err in FATAL_TRANSPORT_ERRORS:
                     self._mark_disconnected(
                         f"AF event transport failure: "
-                        f"0x{event_err:08X} {edsdk_error_name(event_err)}")
+                        f"0x{event_err:08X} {edsdk_error_name(event_err)}",
+                        transport_lost=True,
+                    )
                     return
                 if not self._connected:
                     return
@@ -1230,7 +1282,9 @@ class Camera:
                 f"err=0x{err:08X} {edsdk_error_name(err)}")
             if err in FATAL_TRANSPORT_ERRORS:
                 self._mark_disconnected(
-                    f"Capture transport failure: 0x{err:08X} {edsdk_error_name(err)}")
+                    f"Capture transport failure: 0x{err:08X} {edsdk_error_name(err)}",
+                    transport_lost=True,
+                )
                 return
             if err not in TRANSIENT_CAPTURE_ERRORS:
                 log.error(
@@ -1245,7 +1299,9 @@ class Camera:
                 if event_err in FATAL_TRANSPORT_ERRORS:
                     self._mark_disconnected(
                         f"Capture event transport failure: "
-                        f"0x{event_err:08X} {edsdk_error_name(event_err)}")
+                        f"0x{event_err:08X} {edsdk_error_name(event_err)}",
+                        transport_lost=True,
+                    )
                     return
                 if not self._connected:
                     return
@@ -1266,7 +1322,9 @@ class Camera:
             if off_err in FATAL_TRANSPORT_ERRORS:
                 self._mark_disconnected(
                     f"Shutter release transport failure: "
-                    f"0x{off_err:08X} {edsdk_error_name(off_err)}")
+                    f"0x{off_err:08X} {edsdk_error_name(off_err)}",
+                    transport_lost=True,
+                )
 
     def _download_photo(self, dir_item):
         stream = EdsBaseRef()
@@ -1327,19 +1385,24 @@ class Camera:
         self._camera = EdsBaseRef()
         session_open = self._session_open
         self._session_open = False
+        transport_lost = self._transport_lost
+        self._transport_lost = False
         if not camera or not self._sdk:
             return
 
         calls = []
-        if session_open and self._ui_locked:
+        if session_open and self._ui_locked and not transport_lost:
             calls.append(("UI unlock", True, lambda: self._sdk.EdsSendStatusCommand(
                 camera, kEdsCameraStatusCommand_UIUnLock, 0)))
-        if session_open and self._mode_dial_locked:
+        if session_open and self._mode_dial_locked and not transport_lost:
             # Canon section 6.19: 1 cancels the disabled/locked mode dial.
             calls.append(("mode dial unlock", True, lambda: self._sdk.EdsSendCommand(
                 camera, kEdsCameraCommand_SetModeDialDisable, 1)))
-        if session_open:
+        if session_open and not transport_lost:
             calls.append(("close session", True, lambda: self._sdk.EdsCloseSession(camera)))
+        if session_open and transport_lost:
+            log.info(
+                "Camera transport is gone; skipping remote unlock/close calls")
         # EdsRelease returns a reference count, not EdsError.
         calls.append(("release camera", False, lambda: self._sdk.EdsRelease(camera)))
 

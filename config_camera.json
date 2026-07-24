@@ -42,7 +42,7 @@
 
     "evf_af_mode": "face_tracking",
     "_evf_af_mode_options": [
-        "face_tracking", "whole_area", "zone", "large_zone_h", "large_zone_v",
+        "face_tracking", "whole_area", "live_face", "zone", "large_zone_h", "large_zone_v",
         "spot", "single_point", "expand_cross", "expand_around"
     ],
     "_evf_af_mode_comment": "AF area mode during live view. face_tracking = detect and track faces/eyes.",
@@ -71,9 +71,6 @@
 
     "disable_auto_power_off": true,
     "_disable_auto_power_off_comment": "true = force Canon Auto power off to Off whenever an EDSDK session opens.",
-
-    "keepalive_seconds": 60,
-    "_keepalive_seconds_comment": "Seconds between EDSDK shutdown-timer keepalives. Values are clamped to 15-300 seconds.",
 
     "min_free_disk_gib": 2.0,
     "_min_free_disk_gib_comment": "Do not start or download a session if the Windows photo disk has less free space than this.",

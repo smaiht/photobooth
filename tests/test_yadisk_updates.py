@@ -212,9 +212,12 @@ class FullUpdateSchedulingTests(unittest.TestCase):
             self.assertIn('Move-Item -LiteralPath $hashTempPath', script)
             self.assertIn('$relaunchArgumentLine += " --dev"', script)
             self.assertIn('if ($installed)', script)
-            self.assertIn('$relaunchArgumentLine += " --post-installer"', script)
-            self.assertIn('else {', script)
-            self.assertIn('$relaunchArgumentLine += " --skip-update-once"', script)
+            self.assertNotIn("--post-installer", script)
+            self.assertNotIn("--skip-update-once", script)
+            marker_removal = script.index(
+                "Remove-Item -LiteralPath $MarkerPath")
+            relaunch = script.index("Start-Process -FilePath $PythonExe")
+            self.assertLess(marker_removal, relaunch)
             self.assertIn('Start-Process -FilePath $PythonExe', script)
             self.assertIn("-ArgumentList $relaunchArgumentLine", script)
             self.assertIn("-PassThru", script)
@@ -265,7 +268,7 @@ class FullUpdateSchedulingTests(unittest.TestCase):
 
 class UpdateMarkerTests(unittest.TestCase):
     @staticmethod
-    def _run_main_immediately(argv):
+    def _run_main_immediately(argv, installer_active=False):
         class EventHook:
             def __iadd__(self, _callback):
                 return self
@@ -278,6 +281,12 @@ class UpdateMarkerTests(unittest.TestCase):
             def start(self):
                 self.target(*self.args)
 
+            def join(self, timeout=None):
+                return None
+
+            def is_alive(self):
+                return False
+
         window = SimpleNamespace(
             events=SimpleNamespace(loaded=EventHook()),
             evaluate_js=Mock(),
@@ -287,9 +296,9 @@ class UpdateMarkerTests(unittest.TestCase):
             start=Mock(),
         )
         with patch.object(app.sys, "argv", argv), \
-             patch.object(app, "_external_update_active", return_value=True), \
+             patch.object(app, "_external_update_active",
+                          return_value=installer_active), \
              patch.object(app, "_build_loading_html", return_value="loading"), \
-             patch.object(app, "kill_port"), \
              patch.object(app, "wait_and_load"), \
              patch.object(app.threading, "Thread", ImmediateThread), \
              patch.object(app, "auto_update") as auto_update, \
@@ -366,46 +375,51 @@ class UpdateMarkerTests(unittest.TestCase):
     def test_extra_app_launch_exits_before_loading_backend(self):
         with patch.object(app.sys, "argv", ["app.py", "--dev"]), \
              patch.object(app, "_external_update_active", return_value=True), \
-             patch.object(app, "kill_port") as kill_port:
+             patch.object(app, "_acquire_single_instance", return_value=True), \
+             patch.object(app, "_release_single_instance") as release:
             app.main()
 
-            kill_port.assert_not_called()
+            release.assert_called_once_with()
 
-    def test_successful_post_installer_launch_runs_normal_update_check(self):
+    def test_ordinary_launch_runs_normal_update_check(self):
         auto_update, start_server, argv = self._run_main_immediately(
-            ["app.py", "--dev", "--post-installer"])
+            ["app.py", "--dev"])
 
         auto_update.assert_called_once_with()
         start_server.assert_called_once_with()
         self.assertEqual(argv, ["app.py", "--dev"])
 
-    def test_failed_installer_recovery_skips_only_one_update_check(self):
-        auto_update, start_server, argv = self._run_main_immediately(
-            ["app.py", "--dev", "--skip-update-once"])
-
-        auto_update.assert_not_called()
-        start_server.assert_called_once_with()
-        self.assertEqual(argv, ["app.py", "--dev"])
-
-    def test_stale_legacy_and_unique_artifacts_are_cleaned(self):
+    def test_stale_current_artifacts_are_cleaned(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             for name in (
-                ".update_download.zip",
                 ".update_download.123.zip",
-                ".update_apply.ps1",
                 ".update_apply.123.ps1",
-                ".update_args.123.json",
                 ".update_in_progress.json.123.tmp",
                 ".update_hash.tmp",
             ):
                 (root / name).write_text("stale", encoding="utf-8")
-            (root / ".update_stage").mkdir()
             (root / ".update_stage.123").mkdir()
 
             app._cleanup_stale_update_artifacts(root)
 
             self.assertEqual(list(root.iterdir()), [])
+
+    def test_second_windows_instance_does_not_kill_or_replace_first(self):
+        create_mutex = Mock(return_value=1234)
+        get_last_error = Mock(return_value=app._ERROR_ALREADY_EXISTS)
+        close_handle = Mock(return_value=True)
+        kernel32 = SimpleNamespace(
+            CreateMutexW=create_mutex,
+            GetLastError=get_last_error,
+            CloseHandle=close_handle,
+        )
+        with patch.object(app.sys, "platform", "win32"), \
+             patch.object(ctypes, "windll",
+                          SimpleNamespace(kernel32=kernel32), create=True):
+            self.assertFalse(app._acquire_single_instance())
+
+        close_handle.assert_called_once_with(1234)
 
 
 class WindowsGitSyncTests(unittest.TestCase):

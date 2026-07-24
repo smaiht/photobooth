@@ -321,8 +321,11 @@ PICTURE_STYLE_MAP = {
 
 # --- EVF AF Mode ---
 EVF_AF_MODE_MAP = {
-    "face_tracking": 0x02,   # LiveFace - face/eye detect + tracking
+    # Current EOS R bodies (including R8) expose face/eye tracking through
+    # WholeArea. LiveFace is retained under an explicit legacy name.
+    "face_tracking": 0x0e,   # WholeArea + subject/eye tracking
     "whole_area": 0x0e,      # WholeArea
+    "live_face": 0x02,       # Legacy LiveFace
     "zone": 0x04,            # LiveZone
     "large_zone_h": 0x07,    # LiveZoneLargeH
     "large_zone_v": 0x08,    # LiveZoneLargeV
