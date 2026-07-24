@@ -5,6 +5,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend import main
@@ -30,24 +31,45 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
             edsdk.kEdsPropID_AutoPowerOffSetting,
         )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "config_camera.json"
-            config_path.write_text(json.dumps({
-                "disable_auto_power_off": True,
-                "lock_camera_ui": False,
-                "lock_mode_dial": False,
-            }), encoding="utf-8")
-            camera._sdk.EdsSetCapacity.return_value = edsdk.EDS_ERR_OK
-            with patch("backend.config.ROOT_DIR", Path(tmpdir)), \
-                 patch.object(camera, "_set_prop_u32", return_value=edsdk.EDS_ERR_OK) as set_prop, \
-                 patch.object(camera, "_log_applied_config"), \
-                 patch.object(camera, "_log_camera_health"):
-                camera._configure_for_photobooth()
+        with patch.object(
+            camera, "_get_property_desc", return_value=[0, 60]), \
+             patch.object(camera, "_set_prop_u32", return_value=edsdk.EDS_ERR_OK) as set_prop, \
+             patch.object(camera, "_get_prop_u32", return_value=0):
+            self.assertEqual(camera._disable_auto_power_off(), edsdk.EDS_ERR_OK)
 
-        set_prop.assert_any_call(
+        set_prop.assert_called_once_with(
             edsdk.kEdsPropID_AutoPowerOffSetting,
             edsdk.kEdsAutoPowerOff_Disable,
+            validate=False,
         )
+
+    def test_com_sta_is_balanced_even_when_already_initialized(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        ole32 = MagicMock()
+        ole32.CoInitializeEx.return_value = edsdk.S_FALSE
+        with patch.object(
+            edsdk.ctypes, "windll", SimpleNamespace(ole32=ole32), create=True,
+        ):
+            camera._initialize_com()
+            camera._uninitialize_com()
+
+        ole32.CoInitializeEx.assert_called_once_with(
+            None, edsdk.COINIT_APARTMENTTHREADED)
+        ole32.CoUninitialize.assert_called_once_with()
+
+    def test_com_changed_mode_is_reported_and_not_uninitialized(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        ole32 = MagicMock()
+        ole32.CoInitializeEx.return_value = ctypes.c_int32(
+            edsdk.RPC_E_CHANGED_MODE).value
+        with patch.object(
+            edsdk.ctypes, "windll", SimpleNamespace(ole32=ole32), create=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "another COM apartment"):
+                camera._initialize_com()
+            camera._uninitialize_com()
+
+        ole32.CoUninitialize.assert_not_called()
 
     def test_periodic_camera_keepalive_runs_on_edsdk_thread(self):
         camera = edsdk.Camera("fake-edSDK.dll")
@@ -93,6 +115,7 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         camera._sdk = MagicMock()
         camera._sdk.EdsSetObjectEventHandler.return_value = edsdk.EDS_ERR_OK
         camera._sdk.EdsSetCameraStateEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetPropertyEventHandler.return_value = edsdk.EDS_ERR_OK
 
         with patch.object(camera, "_extend_shutdown_timer") as extend:
             camera._register_handlers()
@@ -123,19 +146,24 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         with patch.object(edsdk, "RECONNECT_MIN_SECONDS", 0.01), \
              patch.object(edsdk, "RECONNECT_MAX_SECONDS", 0.02), \
              patch.object(edsdk.ctypes, "WinDLL", return_value=object(), create=True), \
+             patch.object(camera, "_initialize_com"), \
+             patch.object(camera, "_uninitialize_com"), \
              patch.object(camera, "_setup_sdk_functions"), \
-             patch.object(camera, "_init_sdk"), \
+             patch.object(camera, "_init_sdk") as init_sdk, \
+             patch.object(camera, "_terminate_sdk") as terminate_sdk, \
              patch.object(camera, "_connect_camera", side_effect=[RuntimeError("No camera"), None]) as connect, \
              patch.object(camera, "_configure_for_photobooth"), \
              patch.object(camera, "_register_handlers"), \
              patch.object(camera, "_run_connected", side_effect=stop_after_connect), \
-             patch.object(camera, "_cleanup"):
+             patch.object(camera, "_cleanup_camera"):
             camera.start()
             self.assertTrue(ready.wait(2), "automatic backoff did not find the camera")
             camera._thread.join(timeout=2)
 
         self.assertFalse(camera._thread.is_alive())
         self.assertEqual(connect.call_count, 2)
+        init_sdk.assert_called_once_with()
+        terminate_sdk.assert_called_once_with()
         self.assertEqual(errors, ["No camera"])
 
     def test_disconnect_reconnects_automatically_on_same_thread(self):
@@ -163,13 +191,16 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
 
         camera.set_callbacks(on_error=on_error, on_connected=on_connected)
         with patch.object(edsdk.ctypes, "WinDLL", return_value=object(), create=True), \
+             patch.object(camera, "_initialize_com"), \
+             patch.object(camera, "_uninitialize_com"), \
              patch.object(camera, "_setup_sdk_functions"), \
-             patch.object(camera, "_init_sdk"), \
+             patch.object(camera, "_init_sdk") as init_sdk, \
+             patch.object(camera, "_terminate_sdk") as terminate_sdk, \
              patch.object(camera, "_connect_camera") as connect, \
              patch.object(camera, "_configure_for_photobooth") as configure, \
              patch.object(camera, "_register_handlers"), \
              patch.object(camera, "_run_connected", side_effect=run_connected), \
-             patch.object(camera, "_cleanup"):
+             patch.object(camera, "_cleanup_camera"):
             camera.start()
             self.assertTrue(disconnected.wait(2), "disconnect callback was not called")
             self.assertTrue(reconnected.wait(2), "automatic reconnect did not run")
@@ -178,6 +209,8 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         self.assertFalse(camera._thread.is_alive())
         self.assertEqual(connect.call_count, 2)
         self.assertEqual(configure.call_count, 2)
+        init_sdk.assert_called_once_with()
+        terminate_sdk.assert_called_once_with()
         self.assertEqual(errors, ["USB disconnected"])
         self.assertEqual(len(connected_calls), 2)
         self.assertEqual(connected_calls[0], connected_calls[1])
@@ -186,8 +219,12 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
     def test_cleanup_releases_camera_even_if_unlock_fails(self):
         camera = edsdk.Camera("fake-edSDK.dll")
         camera._camera = ctypes.c_void_p(123)
+        camera._session_open = True
+        camera._ui_locked = True
         camera._sdk = MagicMock()
         camera._sdk.EdsSendStatusCommand.side_effect = RuntimeError("disconnected")
+        camera._sdk.EdsCloseSession.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsRelease.return_value = 0
 
         camera._cleanup_camera()
 
@@ -226,6 +263,332 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
             camera._download_evf_frame()
 
         self.assertEqual(raised.exception.code, edsdk.EDS_ERR_COMM_DISCONNECTED)
+
+    def test_open_session_retry_uses_fresh_refs_without_restarting_sdk(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsOpenSession.side_effect = [
+            edsdk.EDS_ERR_INTERNAL_ERROR,
+            edsdk.EDS_ERR_OK,
+        ]
+        camera._sdk.EdsRelease.return_value = 0
+        first = ctypes.c_void_p(101)
+        second = ctypes.c_void_p(102)
+        with patch.object(camera, "_acquire_camera", side_effect=[first, second]), \
+             patch.object(camera, "_enable_limited_properties"), \
+             patch.object(edsdk.time, "sleep"):
+            camera._connect_camera()
+
+        self.assertTrue(camera._session_open)
+        self.assertEqual(camera._camera.value, second.value)
+        camera._sdk.EdsRelease.assert_called_once_with(first)
+        camera._sdk.EdsCloseSession.assert_not_called()
+        camera._sdk.EdsInitializeSDK.assert_not_called()
+        camera._sdk.EdsTerminateSDK.assert_not_called()
+
+    def test_sdk_init_and_terminate_are_each_guarded(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsInitializeSDK.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsTerminateSDK.return_value = edsdk.EDS_ERR_OK
+
+        camera._init_sdk()
+        camera._init_sdk()
+        camera._terminate_sdk()
+        camera._terminate_sdk()
+
+        camera._sdk.EdsInitializeSDK.assert_called_once_with()
+        camera._sdk.EdsTerminateSDK.assert_called_once_with()
+
+    def test_ptp_busy_live_view_frame_is_transient(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._camera = ctypes.c_void_p(123)
+
+        def make_ref(_size, out_ref):
+            out_ref._obj.value = 201
+            return edsdk.EDS_ERR_OK
+
+        def make_evf(_stream, out_ref):
+            out_ref._obj.value = 202
+            return edsdk.EDS_ERR_OK
+
+        camera._sdk.EdsCreateMemoryStream.side_effect = make_ref
+        camera._sdk.EdsCreateEvfImageRef.side_effect = make_evf
+        camera._sdk.EdsDownloadEvfImage.return_value = edsdk.EDS_ERR_PTP_DEVICE_BUSY
+
+        self.assertIsNone(camera._download_evf_frame())
+        self.assertEqual(camera._sdk.EdsRelease.call_count, 2)
+
+    def test_mode_dial_is_locked_with_zero_and_unlocked_with_one(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSendCommand.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetCapacity.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsCloseSession.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsRelease.return_value = 0
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config_camera.json"
+            config_path.write_text(json.dumps({
+                "disable_auto_power_off": False,
+                "lock_camera_ui": False,
+                "lock_mode_dial": True,
+            }), encoding="utf-8")
+            with patch("backend.config.ROOT_DIR", Path(tmpdir)), \
+                 patch.object(camera, "storage_ready", return_value=(True, "")), \
+                 patch.object(camera, "_configure_ae_mode"), \
+                 patch.object(camera, "_set_prop_u32", return_value=edsdk.EDS_ERR_OK), \
+                 patch.object(camera, "_read_camera_identity"), \
+                 patch.object(camera, "_log_applied_config"), \
+                 patch.object(camera, "_log_camera_health"), \
+                 patch.object(edsdk.shutil, "disk_usage", return_value=SimpleNamespace(
+                     free=10 * 1024 ** 3)):
+                camera._configure_for_photobooth()
+
+        camera._sdk.EdsSendCommand.assert_called_with(
+            camera._camera,
+            edsdk.kEdsCameraCommand_SetModeDialDisable,
+            0,
+        )
+
+        camera._camera = ctypes.c_void_p(123)
+        camera._session_open = True
+        camera._mode_dial_locked = True
+        camera._cleanup_camera()
+        unlock_args = camera._sdk.EdsSendCommand.call_args_list[-1].args
+        self.assertEqual(unlock_args[0].value, 123)
+        self.assertEqual(
+            unlock_args[1:],
+            (edsdk.kEdsCameraCommand_SetModeDialDisable, 1),
+        )
+
+    def test_property_descriptor_blocks_an_unavailable_value(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+
+        def get_desc(_camera, _prop, out_desc):
+            out_desc._obj.numElements = 2
+            out_desc._obj.propDesc[0] = 100
+            out_desc._obj.propDesc[1] = 200
+            return edsdk.EDS_ERR_OK
+
+        camera._sdk.EdsGetPropertyDesc.side_effect = get_desc
+        result = camera._set_prop_u32(edsdk.kEdsPropID_ISOSpeed, 400)
+
+        self.assertEqual(result, edsdk.EDS_ERR_INVALID_DEVICEPROP_VALUE)
+        camera._sdk.EdsSetPropertyData.assert_not_called()
+
+    def test_object_event_ref_is_released_for_success_failure_and_ignore(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSetObjectEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetCameraStateEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetPropertyEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsRelease.return_value = 0
+        camera._register_handlers()
+
+        with patch.object(camera, "_download_photo") as download:
+            camera._obj_handler_ref(
+                edsdk.kEdsObjectEvent_DirItemRequestTransfer, 101, None)
+            download.side_effect = RuntimeError("download failed")
+            camera._obj_handler_ref(
+                edsdk.kEdsObjectEvent_DirItemRequestTransfer, 102, None)
+            camera._obj_handler_ref(0x00000209, 103, None)
+
+        self.assertEqual(camera._sdk.EdsRelease.call_count, 3)
+        self.assertEqual(
+            [call.args[0] for call in camera._sdk.EdsRelease.call_args_list],
+            [101, 102, 103],
+        )
+
+    def test_failed_download_is_cancelled_and_partial_file_removed(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsDownloadCancel.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsRelease.return_value = 0
+
+        def get_info(_item, out_info):
+            out_info._obj.size = 10
+            out_info._obj.szFileName = b"IMG_9999.JPG"
+            return edsdk.EDS_ERR_OK
+
+        def create_stream(_path, _disposition, _access, out_stream):
+            out_stream._obj.value = 456
+            return edsdk.EDS_ERR_OK
+
+        camera._sdk.EdsGetDirectoryItemInfo.side_effect = get_info
+        camera._sdk.EdsCreateFileStream.side_effect = create_stream
+        camera._sdk.EdsDownload.return_value = edsdk.EDS_ERR_INCOMPLETE_TRANSFER
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(camera, "storage_ready", return_value=(True, "")):
+            camera.set_download_dir(Path(tmpdir))
+            partial = Path(tmpdir) / "IMG_9999.JPG"
+            partial.write_bytes(b"partial")
+            with self.assertRaises(edsdk.EDSDKError):
+                camera._download_photo(ctypes.c_void_p(123))
+            self.assertFalse(partial.exists())
+
+        camera._sdk.EdsDownloadCancel.assert_called_once()
+        self.assertEqual(
+            camera._sdk.EdsDownloadCancel.call_args.args[0].value, 123)
+        camera._sdk.EdsDownloadComplete.assert_not_called()
+
+    def test_internal_error_event_forces_reconnect(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._running = True
+        camera._connected = True
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSetObjectEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetCameraStateEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetPropertyEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._register_handlers()
+
+        camera._state_handler_ref(edsdk.kEdsStateEvent_InternalError, 0, None)
+
+        self.assertFalse(camera._connected)
+        self.assertEqual(camera.connection_generation, 1)
+        self.assertEqual(
+            camera.status_snapshot()["last_disconnect_reason"],
+            "EDSDK internal camera error",
+        )
+
+    def test_state_event_diagnostics_use_their_own_semantics(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSetObjectEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetCameraStateEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetPropertyEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._register_handlers()
+
+        with self.assertLogs("backend.camera.edsdk", level="INFO") as logs:
+            camera._state_handler_ref(edsdk.kEdsStateEvent_CaptureError, 2, None)
+            camera._state_handler_ref(
+                edsdk.kEdsStateEvent_ShutDownTimerUpdate, 999, None)
+
+        output = "\n".join(logs.output)
+        self.assertIn("lens_closed", output)
+        self.assertIn("extension accepted", output)
+        self.assertNotIn("999s", output)
+
+    def test_capture_retries_only_transient_errors(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._camera = ctypes.c_void_p(123)
+        camera._cfg = {"focus_before_capture": False}
+        camera._running = True
+        camera._connected = True
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSendCommand.side_effect = [
+            edsdk.EDS_ERR_DEVICE_BUSY,
+            edsdk.EDS_ERR_PTP_DEVICE_BUSY,
+            edsdk.EDS_ERR_OK,
+            edsdk.EDS_ERR_OK,
+        ]
+        camera._sdk.EdsGetEvent.return_value = edsdk.EDS_ERR_OK
+
+        with patch.object(edsdk.time, "sleep"):
+            camera._do_capture()
+
+        self.assertEqual(camera._sdk.EdsSendCommand.call_count, 4)
+        self.assertTrue(camera._connected)
+
+        camera._sdk.reset_mock()
+        camera._sdk.EdsSendCommand.side_effect = [
+            edsdk.EDS_ERR_TAKE_PICTURE_AF_NG,
+            edsdk.EDS_ERR_OK,
+        ]
+        camera._do_capture()
+        self.assertEqual(camera._sdk.EdsSendCommand.call_count, 2)
+
+    def test_capture_transport_error_disconnects_without_retry(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._camera = ctypes.c_void_p(123)
+        camera._cfg = {"focus_before_capture": False}
+        camera._running = True
+        camera._connected = True
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSendCommand.return_value = edsdk.EDS_ERR_COMM_DISCONNECTED
+
+        camera._do_capture()
+
+        self.assertFalse(camera._connected)
+        camera._sdk.EdsSendCommand.assert_called_once()
+
+    def test_temperature_status_decodes_still_and_movie_words(self):
+        self.assertEqual(
+            edsdk.Camera._format_temperature_status(0x00020001),
+            "warning+movie_restricted",
+        )
+
+    def test_storage_guard_uses_configured_threshold(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._cfg = {"min_free_disk_gib": 2}
+        with patch.object(
+            edsdk.shutil, "disk_usage",
+            return_value=SimpleNamespace(free=1024 ** 3),
+        ):
+            ready, reason = camera.storage_ready()
+        self.assertFalse(ready)
+        self.assertIn("disk space is low", reason)
+
+    def test_temperature_property_event_is_reported_immediately(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSetObjectEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetCameraStateEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetPropertyEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._register_handlers()
+
+        camera._prop_handler_ref(
+            edsdk.kEdsPropertyEvent_PropertyChanged,
+            edsdk.kEdsPropID_TempStatus,
+            0,
+            None,
+        )
+        with patch.object(camera, "_get_prop_u32", return_value=0x00020001), \
+             patch.object(camera, "_log_camera_health"), \
+             self.assertLogs("backend.camera.edsdk", level="WARNING") as logs:
+            camera._process_property_updates()
+
+        self.assertIn("warning+movie_restricted", "\n".join(logs.output))
+        self.assertFalse(camera._pending_property_updates)
+
+
+class CameraStatusTests(unittest.IsolatedAsyncioTestCase):
+    async def test_remote_status_contains_camera_health_and_last_disconnect(self):
+        camera = MagicMock()
+        camera.is_connected = True
+        camera.status_snapshot.return_value = {
+            "product_name": "Canon EOS R8",
+            "battery": "AC",
+            "temperature": "normal",
+            "ae_mode": "manual",
+            "auto_power_off": "disabled",
+            "disk_free_bytes": 10 * 1024 ** 3,
+            "last_keepalive_result": "ok",
+            "last_keepalive_at": "2026-07-24T12:00:00+00:00",
+            "last_disconnect_reason": "Camera shutdown/disconnected",
+            "last_disconnect_at": "2026-07-24T11:00:00+00:00",
+        }
+        command = {
+            "command_id": "a" * 32,
+            "command": "status",
+            "data": None,
+        }
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "camera", camera), \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "STATE", "idle"), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="test_event"), \
+             patch("backend.main.yadisk_cloud.pending_count", return_value=0):
+            result = await main.handle_disk_command(command)
+
+        self.assertIn("Camera model: Canon EOS R8", result["message"])
+        self.assertIn("power=AC", result["message"])
+        self.assertIn("Photo disk free: 10.00 GiB", result["message"])
+        self.assertIn("Last camera disconnect", result["message"])
 
 
 class SessionDisconnectTests(unittest.IsolatedAsyncioTestCase):

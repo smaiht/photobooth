@@ -9,6 +9,8 @@ import ctypes.wintypes
 import threading
 import time
 import logging
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue, Empty
 
@@ -23,6 +25,11 @@ EdsUInt32 = ctypes.c_uint32
 EdsInt32 = ctypes.c_int32
 EdsUInt64 = ctypes.c_uint64
 EdsBool = ctypes.c_int32
+
+COINIT_APARTMENTTHREADED = 0x2
+S_OK = 0x00000000
+S_FALSE = 0x00000001
+RPC_E_CHANGED_MODE = 0x80010106
 
 
 class EdsCapacity(ctypes.Structure):
@@ -54,6 +61,15 @@ class EdsDirectoryItemInfo(ctypes.Structure):
     ]
 
 
+class EdsPropertyDesc(ctypes.Structure):
+    _fields_ = [
+        ("form", EdsInt32),
+        ("access", EdsInt32),
+        ("numElements", EdsInt32),
+        ("propDesc", EdsInt32 * 128),
+    ]
+
+
 # Callback function types (EDSCALLBACK = __stdcall on Windows).  CFUNCTYPE is
 # only a test/import fallback for non-Windows development machines.
 _CALLBACK = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
@@ -65,6 +81,32 @@ RECONNECT_MIN_SECONDS = 2
 RECONNECT_MAX_SECONDS = 10
 CAMERA_KEEPALIVE_SECONDS = 60.0
 CAMERA_HEALTH_LOG_SECONDS = 10 * 60.0
+MIN_FREE_DISK_GIB = 2.0
+
+TRANSIENT_CAPTURE_ERRORS = {
+    EDS_ERR_DEVICE_BUSY,
+    EDS_ERR_PTP_DEVICE_BUSY,
+    EDS_ERR_OBJECT_NOTREADY,
+    EDS_ERR_TAKE_PICTURE_STROBO_CHARGE_NG,
+}
+FATAL_TRANSPORT_ERRORS = {
+    EDS_ERR_INTERNAL_ERROR,
+    EDS_ERR_DEVICE_NOT_FOUND,
+    EDS_ERR_DEVICE_INVALID,
+    EDS_ERR_DEVICE_EMERGENCY,
+    EDS_ERR_DEVICE_INTERNAL_ERROR,
+    EDS_ERR_COMM_DISCONNECTED,
+    EDS_ERR_COMM_USB_BUS_ERR,
+    EDS_ERR_USB_DEVICE_LOCK_ERROR,
+    EDS_ERR_USB_DEVICE_UNLOCK_ERROR,
+    EDS_ERR_SESSION_NOT_OPEN,
+}
+OPTIONAL_PROPERTY_ERRORS = {
+    EDS_ERR_NOT_SUPPORTED,
+    EDS_ERR_PROPERTIES_UNAVAILABLE,
+    EDS_ERR_DEVICEPROP_NOT_SUPPORTED,
+    EDS_ERR_INVALID_ID,
+}
 
 
 class EDSDKError(Exception):
@@ -84,7 +126,14 @@ class Camera:
     def __init__(self, dll_path: str | Path):
         self._dll_path = str(dll_path)
         self._sdk = None
+        self._sdk_initialized = False
+        self._ole32 = None
+        self._com_initialized = False
         self._camera = EdsBaseRef()
+        self._session_open = False
+        self._ui_locked = False
+        self._mode_dial_locked = False
+        self._evf_original_output: int | None = None
         self._running = False
         self._connected = False
         self._connection_generation = 0
@@ -100,10 +149,20 @@ class Camera:
         self._error_cb = None  # callback(error_str)
         self._connected_cb = None  # callback()
         self._download_dir = Path("photos")
+        self._health_lock = threading.Lock()
+        self._health = {
+            "connected": False,
+            "last_disconnect_reason": None,
+            "last_disconnect_at": None,
+            "last_keepalive_at": None,
+            "last_keepalive_result": None,
+        }
+        self._pending_property_updates: set[int] = set()
 
         # Must keep references to prevent GC of ctypes callbacks
         self._obj_handler_ref = None
         self._state_handler_ref = None
+        self._prop_handler_ref = None
 
     def set_callbacks(self, on_evf_frame=None, on_photo=None, on_error=None, on_connected=None):
         self._evf_frame_cb = on_evf_frame
@@ -142,6 +201,31 @@ class Camera:
         """Changes on every disconnect so an old session cannot resume after reconnect."""
         return self._connection_generation
 
+    def status_snapshot(self) -> dict:
+        """Return a thread-safe camera/host health snapshot for remote status."""
+        with self._health_lock:
+            snapshot = dict(self._health)
+        snapshot["connected"] = self.is_connected
+        return snapshot
+
+    def storage_ready(self) -> tuple[bool, str]:
+        """Refuse a new session before host storage becomes dangerously full."""
+        try:
+            free_bytes = shutil.disk_usage(self._download_dir).free
+        except OSError as exc:
+            return False, f"cannot read photo disk free space: {exc}"
+        minimum = self._minimum_free_disk_bytes()
+        self._update_health(
+            disk_free_bytes=free_bytes,
+            disk_minimum_bytes=minimum,
+        )
+        if free_bytes < minimum:
+            return False, (
+                f"photo disk space is low: {self._format_gib(free_bytes)} free, "
+                f"minimum {self._format_gib(minimum)}"
+            )
+        return True, ""
+
     def take_picture(self, tag: str = ""):
         """Queue a capture command."""
         if self.is_connected:
@@ -158,56 +242,95 @@ class Camera:
     # --- Internal: runs on dedicated EDSDK thread ---
 
     def _run(self):
-        """Keep one EDSDK thread alive and reconnect automatically with backoff."""
+        """Own COM and one EDSDK lifetime while reconnecting camera sessions."""
         retry_delay = 0
-        while self._running:
-            if retry_delay:
-                log.info("Camera: next automatic search in %ds", retry_delay)
-                self._retry_event.wait(timeout=retry_delay)
-            self._retry_event.clear()
-            if not self._running:
-                break
+        try:
+            self._initialize_com()
+            self._sdk = ctypes.WinDLL(self._dll_path)
+            self._setup_sdk_functions()
+            self._init_sdk()
 
+            while self._running:
+                if retry_delay:
+                    log.info("Camera: next automatic search in %ds", retry_delay)
+                    self._retry_event.wait(timeout=retry_delay)
+                self._retry_event.clear()
+                if not self._running:
+                    break
+
+                self._discard_commands()
+                log.info("Camera: search started")
+                reached_ready = False
+                try:
+                    self._connect_camera()
+                    self._configure_for_photobooth()
+                    self._register_handlers()
+                    self._connected = True
+                    self._failure_notified = False
+                    self._update_health(connected=True)
+                    reached_ready = True
+                    log.info("Camera ready")
+                    if self._connected_cb:
+                        self._connected_cb()
+                    self._run_connected()
+                except RuntimeError as exc:
+                    if self._running:
+                        log.warning("Camera search failed: %s", exc)
+                        self._mark_disconnected(str(exc))
+                except Exception as exc:
+                    if self._running:
+                        log.exception("Camera connection failed")
+                        self._mark_disconnected(str(exc))
+                finally:
+                    self._connected = False
+                    self._update_health(connected=False)
+                    self._cleanup_camera()
+
+                if reached_ready:
+                    # A runtime USB disconnect gets one immediate retry.
+                    retry_delay = 0
+                elif retry_delay:
+                    retry_delay = min(retry_delay * 2, RECONNECT_MAX_SECONDS)
+                else:
+                    retry_delay = RECONNECT_MIN_SECONDS
+        except Exception as exc:
+            if self._running:
+                log.exception("EDSDK worker initialization failed")
+                self._mark_disconnected(str(exc))
+        finally:
+            self._connected = False
+            self._update_health(connected=False)
+            self._cleanup_camera()
+            self._terminate_sdk()
+            self._sdk = None
+            self._uninitialize_com()
             self._discard_commands()
-            log.info("Camera: search started")
-            reached_ready = False
-            try:
-                self._sdk = ctypes.WinDLL(self._dll_path)
-                self._setup_sdk_functions()
-                self._init_sdk()
-                self._connect_camera()
-                self._configure_for_photobooth()
-                self._register_handlers()
-                self._connected = True
-                self._failure_notified = False
-                reached_ready = True
-                log.info("Camera ready")
-                if self._connected_cb:
-                    self._connected_cb()
-                self._run_connected()
-            except RuntimeError as exc:
-                if self._running:
-                    log.warning("Camera search failed: %s", exc)
-                    self._mark_disconnected(str(exc))
-            except Exception as exc:
-                if self._running:
-                    log.exception("Camera connection failed")
-                    self._mark_disconnected(str(exc))
-            finally:
-                self._connected = False
-                self._cleanup()
-                self._sdk = None
-            if reached_ready:
-                # A runtime USB disconnect gets one immediate reconnect attempt.
-                retry_delay = 0
-            elif retry_delay:
-                retry_delay = min(retry_delay * 2, RECONNECT_MAX_SECONDS)
-            else:
-                retry_delay = RECONNECT_MIN_SECONDS
+            log.info("EDSDK thread stopped")
 
-        self._connected = False
-        self._discard_commands()
-        log.info("EDSDK thread stopped")
+    def _initialize_com(self):
+        """Initialize the dedicated EDSDK thread as a COM STA."""
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        ole32.CoInitializeEx.restype = ctypes.c_long
+        result = int(ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED))
+        code = result & 0xFFFFFFFF
+        if code not in (S_OK, S_FALSE):
+            detail = " (thread already uses another COM apartment)" \
+                if code == RPC_E_CHANGED_MODE else ""
+            raise RuntimeError(f"CoInitializeEx failed: 0x{code:08X}{detail}")
+        self._ole32 = ole32
+        self._com_initialized = True
+        log.info("Camera COM apartment initialized")
+
+    def _uninitialize_com(self):
+        if not self._com_initialized or not self._ole32:
+            return
+        try:
+            self._ole32.CoUninitialize()
+        finally:
+            self._com_initialized = False
+            self._ole32 = None
+        log.info("Camera COM apartment uninitialized")
 
     def _run_connected(self):
         evf_active = False
@@ -231,6 +354,11 @@ class Camera:
                     self._photo_tag = cmd[1] if len(cmd) > 1 else ""
                     try:
                         self._do_capture()
+                    except EDSDKError as exc:
+                        if exc.code in FATAL_TRANSPORT_ERRORS:
+                            self._mark_disconnected(str(exc))
+                        else:
+                            log.exception("Capture exception")
                     except Exception:
                         log.exception("Capture exception")
                 elif cmd[0] == "start_evf":
@@ -241,6 +369,8 @@ class Camera:
                     evf_active = False
             except Empty:
                 pass
+
+            self._process_property_updates()
 
             if evf_active and self._evf_frame_cb:
                 frame = self._download_evf_frame()
@@ -273,6 +403,13 @@ class Camera:
     def _extend_shutdown_timer(self, reason: str) -> int:
         err = self._sdk.EdsSendCommand(
             self._camera, kEdsCameraCommand_ExtendShutDownTimer, 0)
+        self._update_health(
+            last_keepalive_at=self._utc_now(),
+            last_keepalive_result=(
+                "ok" if err == EDS_ERR_OK
+                else f"0x{err:08X} {edsdk_error_name(err)}"
+            ),
+        )
         if err == EDS_ERR_OK:
             if reason != "periodic keepalive":
                 log.info("Camera shutdown timer extended: %s", reason)
@@ -300,6 +437,11 @@ class Camera:
         if was_connected:
             self._connection_generation += 1
         self._discard_commands()
+        self._update_health(
+            connected=False,
+            last_disconnect_reason=reason,
+            last_disconnect_at=self._utc_now(),
+        )
         if not self._failure_notified:
             self._failure_notified = True
             log.warning("Camera disconnected: %s", reason)
@@ -321,8 +463,10 @@ class Camera:
             ("EdsCloseSession", EdsError, [EdsBaseRef]),
             ("EdsSendCommand", EdsError, [EdsBaseRef, EdsUInt32, EdsInt32]),
             ("EdsSendStatusCommand", EdsError, [EdsBaseRef, EdsUInt32, EdsInt32]),
+            ("EdsGetPropertySize", EdsError, [EdsBaseRef, EdsUInt32, EdsInt32, ctypes.POINTER(EdsUInt32), ctypes.POINTER(EdsUInt32)]),
             ("EdsSetPropertyData", EdsError, [EdsBaseRef, EdsUInt32, EdsInt32, EdsUInt32, ctypes.c_void_p]),
             ("EdsGetPropertyData", EdsError, [EdsBaseRef, EdsUInt32, EdsInt32, EdsUInt32, ctypes.c_void_p]),
+            ("EdsGetPropertyDesc", EdsError, [EdsBaseRef, EdsUInt32, ctypes.POINTER(EdsPropertyDesc)]),
             ("EdsSetCapacity", EdsError, [EdsBaseRef, EdsCapacity]),
             ("EdsCreateMemoryStream", EdsError, [EdsUInt64, ctypes.POINTER(EdsBaseRef)]),
             ("EdsCreateFileStream", EdsError, [ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.POINTER(EdsBaseRef)]),
@@ -333,25 +477,73 @@ class Camera:
             ("EdsGetDirectoryItemInfo", EdsError, [EdsBaseRef, ctypes.POINTER(EdsDirectoryItemInfo)]),
             ("EdsDownload", EdsError, [EdsBaseRef, EdsUInt64, EdsBaseRef]),
             ("EdsDownloadComplete", EdsError, [EdsBaseRef]),
+            ("EdsDownloadCancel", EdsError, [EdsBaseRef]),
             ("EdsRelease", EdsUInt32, [EdsBaseRef]),
             ("EdsGetEvent", EdsError, []),
             ("EdsSetObjectEventHandler", EdsError, [EdsBaseRef, EdsUInt32, OBJECT_EVENT_HANDLER, ctypes.c_void_p]),
             ("EdsSetCameraStateEventHandler", EdsError, [EdsBaseRef, EdsUInt32, STATE_EVENT_HANDLER, ctypes.c_void_p]),
+            ("EdsSetPropertyEventHandler", EdsError, [EdsBaseRef, EdsUInt32, PROPERTY_EVENT_HANDLER, ctypes.c_void_p]),
         ]:
             fn = getattr(sdk, name)
             fn.restype = restype
             fn.argtypes = argtypes
 
     def _init_sdk(self):
-        # Terminate first to reset any leftover session from previous run
-        try:
-            self._sdk.EdsTerminateSDK()
-        except Exception:
-            pass
+        if self._sdk_initialized:
+            return
         _check("EdsInitializeSDK", self._sdk.EdsInitializeSDK())
+        self._sdk_initialized = True
         log.info("EDSDK initialized")
 
+    def _terminate_sdk(self):
+        if not self._sdk_initialized or not self._sdk:
+            return
+        try:
+            err = self._sdk.EdsTerminateSDK()
+            if err != EDS_ERR_OK:
+                log.warning(
+                    "EdsTerminateSDK failed: 0x%08X %s",
+                    err, edsdk_error_name(err),
+                )
+        except Exception:
+            log.exception("EdsTerminateSDK raised during worker shutdown")
+        finally:
+            self._sdk_initialized = False
+        log.info("EDSDK terminated")
+
     def _connect_camera(self):
+        """Open a session using fresh camera refs without restarting EDSDK."""
+        last_error = None
+        for attempt in range(1, 6):
+            self._camera = self._acquire_camera()
+            try:
+                self._enable_limited_properties()
+                err = self._sdk.EdsOpenSession(self._camera)
+                if err == EDS_ERR_OK:
+                    self._session_open = True
+                    log.info("Session opened")
+                    return
+                last_error = err
+                log.warning(
+                    "OpenSession attempt %d/5 failed: 0x%08X %s",
+                    attempt, err, edsdk_error_name(err),
+                )
+            finally:
+                if not self._session_open:
+                    camera = self._camera
+                    self._camera = EdsBaseRef()
+                    if camera:
+                        self._sdk.EdsRelease(camera)
+            if attempt < 5:
+                time.sleep(2)
+
+        raise RuntimeError(
+            "Failed to open camera session after 5 attempts"
+            + (f": 0x{last_error:08X} {edsdk_error_name(last_error)}"
+               if last_error is not None else "")
+        )
+
+    def _acquire_camera(self) -> EdsBaseRef:
         camera_list = EdsBaseRef()
         _check("EdsGetCameraList", self._sdk.EdsGetCameraList(ctypes.byref(camera_list)))
 
@@ -361,46 +553,25 @@ class Camera:
             if count.value == 0:
                 raise RuntimeError("No camera found")
 
+            camera = EdsBaseRef()
             _check("EdsGetChildAtIndex", self._sdk.EdsGetChildAtIndex(
-                camera_list, 0, ctypes.byref(self._camera)))
+                camera_list, 0, ctypes.byref(camera)))
         finally:
             if camera_list:
                 self._sdk.EdsRelease(camera_list)
 
         info = EdsDeviceInfo()
-        _check("EdsGetDeviceInfo", self._sdk.EdsGetDeviceInfo(self._camera, ctypes.byref(info)))
-        log.info(f"Camera: {info.szDeviceDescription.decode()}")
-
-        # Retry OpenSession - full reset cycle if stale session from previous crash
-        for attempt in range(5):
-            self._enable_limited_properties()
-            err = self._sdk.EdsOpenSession(self._camera)
-            if err == EDS_ERR_OK:
-                log.info("Session opened")
-                return
-            log.warning(f"OpenSession attempt {attempt+1}/5 failed: 0x{err:08X}")
-            # Full reset: close stale session, release ref, re-acquire camera
-            try:
-                self._sdk.EdsCloseSession(self._camera)
-            except Exception:
-                pass
-            try:
-                self._sdk.EdsRelease(self._camera)
-            except Exception:
-                pass
-            # Re-init SDK and get fresh camera reference
-            try:
-                self._sdk.EdsTerminateSDK()
-                self._sdk.EdsInitializeSDK()
-                camera_list = EdsBaseRef()
-                self._sdk.EdsGetCameraList(ctypes.byref(camera_list))
-                self._camera = EdsBaseRef()
-                self._sdk.EdsGetChildAtIndex(camera_list, 0, ctypes.byref(self._camera))
-                self._sdk.EdsRelease(camera_list)
-            except Exception:
-                pass
-            time.sleep(2)
-        raise RuntimeError(f"Failed to open camera session after 5 attempts")
+        try:
+            _check("EdsGetDeviceInfo", self._sdk.EdsGetDeviceInfo(
+                camera, ctypes.byref(info)))
+        except Exception:
+            self._sdk.EdsRelease(camera)
+            raise
+        model = self._decode_c_string(info.szDeviceDescription)
+        port = self._decode_c_string(info.szPortName)
+        self._update_health(model=model, port=port)
+        log.info("Camera: %s (port=%s)", model or "unknown", port or "unknown")
+        return camera
 
     def _enable_limited_properties(self):
         """Enable EOS R limited properties that Canon requires before OpenSession."""
@@ -432,12 +603,29 @@ class Camera:
             log.warning("config_camera.json not found, using defaults")
         self._cfg = cfg
 
+        storage_ok, storage_error = self.storage_ready()
+        if not storage_ok:
+            raise RuntimeError(storage_error)
+
+        # Canon section 6.19: 0 disables/locks the physical mode dial and 1
+        # cancels that state. Lock it before using AEModeSelect.
+        if cfg.get("lock_mode_dial", True):
+            err = self._sdk.EdsSendCommand(
+                self._camera, kEdsCameraCommand_SetModeDialDisable, 0)
+            if err == EDS_ERR_OK:
+                self._mode_dial_locked = True
+                log.info("Camera mode dial locked")
+            else:
+                log.warning(
+                    "Could not lock camera mode dial: 0x%08X %s",
+                    err, edsdk_error_name(err),
+                )
+
         # This is the primary protection for an unattended booth. The
         # periodic ExtendShutDownTimer command remains as a fallback for Canon
         # models/firmware that do not persist this setting reliably.
         if cfg.get("disable_auto_power_off", True):
-            err = self._set_prop_u32(
-                kEdsPropID_AutoPowerOffSetting, kEdsAutoPowerOff_Disable)
+            err = self._disable_auto_power_off()
             if err == EDS_ERR_OK:
                 log.info("Camera auto power-off disabled")
             else:
@@ -449,8 +637,18 @@ class Camera:
 
         # Save photos to host PC
         self._set_prop_u32(kEdsPropID_SaveTo, kEdsSaveTo_Host)
-        capacity = EdsCapacity(numberOfFreeClusters=0x7FFFFFFF, bytesPerSector=0x1000, reset=1)
+        free_bytes = shutil.disk_usage(self._download_dir).free
+        bytes_per_sector = 0x1000
+        free_clusters = min(free_bytes // bytes_per_sector, 0x7FFFFFFF)
+        capacity = EdsCapacity(
+            numberOfFreeClusters=max(1, free_clusters),
+            bytesPerSector=bytes_per_sector,
+            reset=1,
+        )
         _check("EdsSetCapacity", self._sdk.EdsSetCapacity(self._camera, capacity))
+        log.info("Camera host capacity set from disk free=%s", self._format_gib(free_bytes))
+
+        self._configure_ae_mode(cfg)
 
         # Shutter type - required for flash sync on EOS R8. Avoid electronic/silent shutter.
         shutter_type = SHUTTER_TYPE_MAP.get(cfg.get("shutter_type", "electronic_first_curtain"))
@@ -529,22 +727,100 @@ class Camera:
 
         # Lock camera UI
         if cfg.get("lock_camera_ui", True):
-            self._sdk.EdsSendStatusCommand(self._camera, kEdsCameraStatusCommand_UILock, 0)
+            err = self._sdk.EdsSendStatusCommand(
+                self._camera, kEdsCameraStatusCommand_UILock, 0)
+            if err == EDS_ERR_OK:
+                self._ui_locked = True
+            else:
+                log.warning(
+                    "Could not lock camera UI: 0x%08X %s",
+                    err, edsdk_error_name(err),
+                )
 
-        # Lock mode dial
-        if cfg.get("lock_mode_dial", True):
-            self._sdk.EdsSendCommand(self._camera, kEdsCameraCommand_SetModeDialDisable, 1)
-
+        self._read_camera_identity()
         log.info("Camera configured from config_camera.json")
         self._log_applied_config()
         self._log_camera_health()
 
-    def _set_prop_u32(self, prop_id: int, value: int):
+    def _disable_auto_power_off(self) -> int:
+        offered = self._get_property_desc(kEdsPropID_AutoPowerOffSetting)
+        if offered is not None and kEdsAutoPowerOff_Disable not in offered:
+            log.warning(
+                "Camera does not offer AutoPowerOff=Off; available=%s", offered)
+            return EDS_ERR_INVALID_DEVICEPROP_VALUE
+        err = self._set_prop_u32(
+            kEdsPropID_AutoPowerOffSetting,
+            kEdsAutoPowerOff_Disable,
+            validate=False,
+        )
+        if err == EDS_ERR_OK:
+            actual = self._get_prop_u32(kEdsPropID_AutoPowerOffSetting)
+            if actual != kEdsAutoPowerOff_Disable:
+                log.warning(
+                    "Camera AutoPowerOff readback mismatch: requested=off actual=%s",
+                    self._format_auto_power_off(actual),
+                )
+                return EDS_ERR_PROPERTIES_MISMATCH
+        return err
+
+    def _configure_ae_mode(self, cfg: dict) -> None:
+        requested_name = str(cfg.get("ae_mode", "manual"))
+        requested = AE_MODE_MAP.get(requested_name)
+        actual = self._get_prop_u32(kEdsPropID_AEMode)
+        if requested is None:
+            log.warning("Unknown ae_mode=%r; camera reports 0x%X", requested_name, actual or 0)
+            return
+        if actual != requested and self._mode_dial_locked:
+            offered = self._get_property_desc(kEdsPropID_AEModeSelect)
+            if offered is not None and requested in offered:
+                self._set_prop_u32(
+                    kEdsPropID_AEModeSelect, requested, validate=False)
+                actual = self._get_prop_u32(kEdsPropID_AEMode)
+        self._update_health(ae_mode=(
+            self._name_from_map(AE_MODE_MAP, actual) if actual is not None
+            else "unavailable"
+        ))
+        if actual != requested:
+            log.error(
+                "Camera AE mode mismatch: requested=%s actual=%s. "
+                "Set the physical dial to %s before the event.",
+                requested_name,
+                self._name_from_map(AE_MODE_MAP, actual) if actual is not None else "unavailable",
+                requested_name.upper(),
+            )
+
+    def _get_property_desc(self, prop_id: int) -> list[int] | None:
+        desc = EdsPropertyDesc()
+        err = self._sdk.EdsGetPropertyDesc(
+            self._camera, prop_id, ctypes.byref(desc))
+        if err != EDS_ERR_OK:
+            if err not in OPTIONAL_PROPERTY_ERRORS:
+                log.warning(
+                    "GetPropertyDesc(0x%08X) failed: 0x%08X %s",
+                    prop_id, err, edsdk_error_name(err),
+                )
+            return None
+        count = min(max(desc.numElements, 0), len(desc.propDesc))
+        return [ctypes.c_uint32(desc.propDesc[index]).value
+                for index in range(count)]
+
+    def _set_prop_u32(self, prop_id: int, value: int, *, validate: bool = True):
+        if validate:
+            offered = self._get_property_desc(prop_id)
+            if offered is not None and offered and value not in offered:
+                log.warning(
+                    "SetProp(0x%08X) skipped: requested=0x%X available=%s",
+                    prop_id, value, [f"0x{item:X}" for item in offered],
+                )
+                return EDS_ERR_INVALID_DEVICEPROP_VALUE
         val = EdsUInt32(value)
         err = self._sdk.EdsSetPropertyData(
             self._camera, prop_id, 0, ctypes.sizeof(val), ctypes.byref(val))
         if err != EDS_ERR_OK:
-            log.warning(f"SetProp(0x{prop_id:04X})=0x{value:X} failed: 0x{err:08X} (skipping)")
+            log.warning(
+                "SetProp(0x%08X)=0x%X failed: 0x%08X %s (skipping)",
+                prop_id, value, err, edsdk_error_name(err),
+            )
         return err
 
     def _get_prop_u32(self, prop_id: int) -> int | None:
@@ -552,9 +828,47 @@ class Camera:
         err = self._sdk.EdsGetPropertyData(
             self._camera, prop_id, 0, ctypes.sizeof(val), ctypes.byref(val))
         if err != EDS_ERR_OK:
-            log.warning(f"GetProp(0x{prop_id:04X}) failed: 0x{err:08X}")
+            if err not in OPTIONAL_PROPERTY_ERRORS:
+                log.warning(
+                    "GetProp(0x%08X) failed: 0x%08X %s",
+                    prop_id, err, edsdk_error_name(err),
+                )
             return None
         return val.value
+
+    def _get_prop_string(self, prop_id: int) -> str | None:
+        data_type = EdsUInt32()
+        size = EdsUInt32()
+        err = self._sdk.EdsGetPropertySize(
+            self._camera, prop_id, 0,
+            ctypes.byref(data_type), ctypes.byref(size),
+        )
+        if err != EDS_ERR_OK or not 0 < size.value <= 4096:
+            return None
+        value = ctypes.create_string_buffer(size.value)
+        err = self._sdk.EdsGetPropertyData(
+            self._camera, prop_id, 0, size.value, ctypes.byref(value))
+        if err != EDS_ERR_OK:
+            return None
+        return self._decode_c_string(value.raw)
+
+    def _read_camera_identity(self) -> None:
+        identity = {
+            "product_name": self._get_prop_string(kEdsPropID_ProductName),
+            "serial": self._get_prop_string(kEdsPropID_BodyIDEx),
+            "firmware": self._get_prop_string(kEdsPropID_FirmwareVersion),
+            "lens": self._get_prop_string(kEdsPropID_LensName),
+        }
+        self._update_health(**{
+            key: value for key, value in identity.items() if value
+        })
+        log.info(
+            "Camera identity: product=%s serial=%s firmware=%s lens=%s",
+            identity["product_name"] or "unavailable",
+            identity["serial"] or "unavailable",
+            identity["firmware"] or "unavailable",
+            identity["lens"] or "unavailable",
+        )
 
     @staticmethod
     def _name_from_map(mapping: dict, value: int) -> str:
@@ -565,21 +879,40 @@ class Camera:
 
     def _log_applied_config(self):
         """Read back important camera values so config/apply issues are visible in logs."""
+        iso_raw = self._cfg.get("iso", 400)
+        iso_key = iso_raw if isinstance(iso_raw, str) else int(iso_raw)
         checks = [
-            ("Tv", kEdsPropID_Tv, TV_MAP),
-            ("Av", kEdsPropID_Av, AV_MAP),
-            ("ISO", kEdsPropID_ISOSpeed, ISO_MAP),
-            ("AFMode", kEdsPropID_AFMode, AF_MODE_MAP),
-            ("EvfAFMode", kEdsPropID_Evf_AFMode, EVF_AF_MODE_MAP),
-            ("Subject", kEdsPropID_AFTrackingObject, AF_TRACKING_OBJECT_MAP),
-            ("EvfViewType", kEdsPropID_Evf_ViewType, EVF_VIEW_TYPE_MAP),
-            ("ShutterType", kEdsPropID_ShutterType, SHUTTER_TYPE_MAP),
+            ("AE", kEdsPropID_AEMode, AE_MODE_MAP,
+             AE_MODE_MAP.get(self._cfg.get("ae_mode", "manual"))),
+            ("Tv", kEdsPropID_Tv, TV_MAP,
+             TV_MAP.get(str(self._cfg.get("tv", "1/125")))),
+            ("Av", kEdsPropID_Av, AV_MAP,
+             AV_MAP.get(str(self._cfg.get("av", "5.6")))),
+            ("ISO", kEdsPropID_ISOSpeed, ISO_MAP, ISO_MAP.get(iso_key)),
+            ("AFMode", kEdsPropID_AFMode, AF_MODE_MAP,
+             AF_MODE_MAP.get(self._cfg.get("af_mode", "servo"))),
+            ("EvfAFMode", kEdsPropID_Evf_AFMode, EVF_AF_MODE_MAP,
+             EVF_AF_MODE_MAP.get(self._cfg.get("evf_af_mode", "face_tracking"))),
+            ("Subject", kEdsPropID_AFTrackingObject, AF_TRACKING_OBJECT_MAP,
+             AF_TRACKING_OBJECT_MAP.get(self._cfg.get("subject_tracking", "people"))),
+            ("EvfViewType", kEdsPropID_Evf_ViewType, EVF_VIEW_TYPE_MAP,
+             EVF_VIEW_TYPE_MAP.get(self._cfg.get("evf_view_type", "disable"))),
+            ("ShutterType", kEdsPropID_ShutterType, SHUTTER_TYPE_MAP,
+             SHUTTER_TYPE_MAP.get(self._cfg.get(
+                 "shutter_type", "electronic_first_curtain"))),
         ]
         applied = []
-        for label, prop_id, mapping in checks:
+        for label, prop_id, mapping, requested in checks:
             value = self._get_prop_u32(prop_id)
             if value is not None:
                 applied.append(f"{label}={self._name_from_map(mapping, value)}")
+                if requested is not None and value != requested:
+                    log.warning(
+                        "Camera config mismatch %s: requested=%s actual=%s",
+                        label,
+                        self._name_from_map(mapping, requested),
+                        self._name_from_map(mapping, value),
+                    )
         log.info("Camera applied config: " + ", ".join(applied))
 
     @staticmethod
@@ -606,8 +939,6 @@ class Camera:
     def _format_temperature_status(value: int | None) -> str:
         if value is None:
             return "unavailable"
-        if (value & 0xFFFF0000) == 0x00020000:
-            return f"movie_restriction(0x{value:08X})"
         names = {
             0: "normal",
             1: "warning",
@@ -616,69 +947,204 @@ class Camera:
             4: "capture_disabled",
             5: "still_quality_warning",
         }
-        return names.get(value, f"unknown(0x{value:08X})")
+        still_status = value & 0xFFFF
+        movie_status = (value >> 16) & 0xFFFF
+        still_name = names.get(still_status, f"unknown_0x{still_status:04X}")
+        if movie_status == 0:
+            return still_name
+        movie_name = "movie_restricted" if movie_status == 2 \
+            else f"movie_unknown_0x{movie_status:04X}"
+        return f"{still_name}+{movie_name}"
+
+    @staticmethod
+    def _decode_c_string(value) -> str:
+        raw = bytes(value).split(b"\0", 1)[0]
+        for encoding in ("utf-8", "mbcs", "latin-1"):
+            try:
+                return raw.decode(encoding).strip()
+            except (LookupError, UnicodeDecodeError):
+                continue
+        return raw.decode("utf-8", errors="replace").strip()
+
+    @staticmethod
+    def _utc_now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _format_gib(value: int) -> str:
+        return f"{value / (1024 ** 3):.2f} GiB"
+
+    def _minimum_free_disk_bytes(self) -> int:
+        try:
+            minimum_gib = float(
+                self._cfg.get("min_free_disk_gib", MIN_FREE_DISK_GIB))
+        except (TypeError, ValueError):
+            minimum_gib = MIN_FREE_DISK_GIB
+        return int(max(minimum_gib, 0.25) * (1024 ** 3))
+
+    def _update_health(self, **values) -> None:
+        with self._health_lock:
+            self._health.update(values)
 
     def _log_camera_health(self):
         battery = self._get_prop_u32(kEdsPropID_BatteryLevel)
+        battery_quality = self._get_prop_u32(kEdsPropID_BatteryQuality)
         auto_power_off = self._get_prop_u32(kEdsPropID_AutoPowerOffSetting)
         temperature = self._get_prop_u32(kEdsPropID_TempStatus)
+        available_shots = self._get_prop_u32(kEdsPropID_AvailableShots)
+        ae_mode = self._get_prop_u32(kEdsPropID_AEMode)
+        try:
+            disk_free = shutil.disk_usage(self._download_dir).free
+        except OSError:
+            disk_free = None
+        self._update_health(
+            battery=self._format_battery_level(battery),
+            battery_quality=battery_quality,
+            auto_power_off=self._format_auto_power_off(auto_power_off),
+            temperature=self._format_temperature_status(temperature),
+            available_shots=available_shots,
+            ae_mode=(self._name_from_map(AE_MODE_MAP, ae_mode)
+                     if ae_mode is not None else "unavailable"),
+            disk_free_bytes=disk_free,
+            last_health_at=self._utc_now(),
+        )
         log.info(
-            "Camera health: power=%s, auto_power_off=%s, temperature=%s",
+            "Camera health: power=%s, quality=%s, auto_power_off=%s, "
+            "temperature=%s, AE=%s, available_shots=%s, disk_free=%s",
             self._format_battery_level(battery),
+            battery_quality if battery_quality is not None else "unavailable",
             self._format_auto_power_off(auto_power_off),
             self._format_temperature_status(temperature),
+            self._name_from_map(AE_MODE_MAP, ae_mode)
+            if ae_mode is not None else "unavailable",
+            available_shots if available_shots is not None else "unavailable",
+            self._format_gib(disk_free) if disk_free is not None else "unavailable",
         )
+
+    def _process_property_updates(self) -> None:
+        if not self._pending_property_updates:
+            return
+        changed = set(self._pending_property_updates)
+        self._pending_property_updates.clear()
+        if changed & {
+            kEdsPropID_BatteryLevel,
+            kEdsPropID_BatteryQuality,
+            kEdsPropID_TempStatus,
+            kEdsPropID_AutoPowerOffSetting,
+            kEdsPropID_AvailableShots,
+            kEdsPropID_AEMode,
+        }:
+            temperature = None
+            if kEdsPropID_TempStatus in changed:
+                temperature = self._get_prop_u32(kEdsPropID_TempStatus)
+                formatted = self._format_temperature_status(temperature)
+                if formatted != "normal":
+                    log.warning("Camera temperature restriction changed: %s", formatted)
+                else:
+                    log.info("Camera temperature status returned to normal")
+            self._log_camera_health()
+        if changed & {
+            kEdsPropID_ProductName,
+            kEdsPropID_BodyIDEx,
+            kEdsPropID_FirmwareVersion,
+            kEdsPropID_LensName,
+        }:
+            self._read_camera_identity()
 
     def _register_handlers(self):
         def on_object_event(event, ref, context):
             log.info(f"ObjectEvent: 0x{event:08X}")
-            if event == kEdsObjectEvent_DirItemRequestTransfer:
-                try:
+            try:
+                if event == kEdsObjectEvent_DirItemRequestTransfer:
                     self._download_photo(ref)
-                except Exception as e:
-                    log.exception("Download failed")
+            except EDSDKError as exc:
+                if exc.code in FATAL_TRANSPORT_ERRORS:
+                    self._mark_disconnected(
+                        f"Photo transfer transport failure: {exc}")
+                log.exception("Download failed")
+            except Exception:
+                log.exception("Download failed")
+            finally:
+                if ref:
+                    self._sdk.EdsRelease(ref)
             return 0
 
         def on_state_event(event, data, context):
-            log.info(f"StateEvent: 0x{event:08X} data={data}")
             if event == kEdsStateEvent_WillSoonShutDown:
+                log.warning("Camera will soon shut down: %ss remaining", data)
                 self._extend_shutdown_timer(
                     f"Canon warning, {data}s remaining")
             elif event == kEdsStateEvent_ShutDownTimerUpdate:
-                log.info("Camera shutdown timer updated: %ss remaining", data)
+                log.info("Camera shutdown timer extension accepted")
             elif event == kEdsStateEvent_CaptureError:
-                log.warning(f"CaptureError: 0x{data:08X} {edsdk_error_name(data)}")
+                log.warning("CaptureError: %d %s", data, capture_error_name(data))
+            elif event == kEdsStateEvent_JobStatusChanged:
+                log.info(
+                    "Camera transfer jobs: %s",
+                    "pending" if data == 1 else "none" if data == 0 else f"unknown({data})",
+                )
+            elif event == kEdsStateEvent_InternalError:
+                log.critical("Camera reported EDSDK internal error; reconnecting")
+                self._mark_disconnected("EDSDK internal camera error")
             elif event == kEdsStateEvent_Shutdown:
                 self._mark_disconnected("Camera shutdown/disconnected")
+            else:
+                log.info("StateEvent: 0x%08X data=%d", event, data)
+            return 0
+
+        def on_property_event(event, prop_id, param, context):
+            log.info(
+                "PropertyEvent: 0x%08X prop=0x%08X param=%d",
+                event, prop_id, param,
+            )
+            if event in (
+                kEdsPropertyEvent_PropertyChanged,
+                kEdsPropertyEvent_PropertyDescChanged,
+            ):
+                self._pending_property_updates.add(prop_id)
             return 0
 
         self._obj_handler_ref = OBJECT_EVENT_HANDLER(on_object_event)
         self._state_handler_ref = STATE_EVENT_HANDLER(on_state_event)
+        self._prop_handler_ref = PROPERTY_EVENT_HANDLER(on_property_event)
 
         _check("SetObjectEventHandler", self._sdk.EdsSetObjectEventHandler(
             self._camera, kEdsObjectEvent_All, self._obj_handler_ref, None))
         _check("SetStateEventHandler", self._sdk.EdsSetCameraStateEventHandler(
             self._camera, kEdsStateEvent_All, self._state_handler_ref, None))
+        _check("SetPropertyEventHandler", self._sdk.EdsSetPropertyEventHandler(
+            self._camera, kEdsPropertyEvent_All, self._prop_handler_ref, None))
 
     def _do_start_evf(self):
         # Enable EVF mode
         evf_mode = EdsUInt32(1)
-        self._sdk.EdsSetPropertyData(
+        _check("SetEvfMode", self._sdk.EdsSetPropertyData(
             self._camera, kEdsPropID_Evf_Mode, 0,
-            ctypes.sizeof(evf_mode), ctypes.byref(evf_mode))
+            ctypes.sizeof(evf_mode), ctypes.byref(evf_mode)))
 
-        # Output to PC
-        device = EdsUInt32(kEdsEvfOutputDevice_PC)
+        original = self._get_prop_u32(kEdsPropID_Evf_OutputDevice)
+        self._evf_original_output = original if original is not None else 0
+        keep_camera_screen = bool(self._cfg.get("evf_keep_camera_screen", False))
+        output = kEdsEvfOutputDevice_PC
+        if keep_camera_screen:
+            output |= self._evf_original_output
+        device = EdsUInt32(output)
         _check("SetEvfOutput", self._sdk.EdsSetPropertyData(
             self._camera, kEdsPropID_Evf_OutputDevice, 0,
             ctypes.sizeof(device), ctypes.byref(device)))
         log.info("Live view started")
 
     def _do_stop_evf(self):
-        device = EdsUInt32(0)
-        self._sdk.EdsSetPropertyData(
+        device = EdsUInt32(self._evf_original_output or 0)
+        err = self._sdk.EdsSetPropertyData(
             self._camera, kEdsPropID_Evf_OutputDevice, 0,
             ctypes.sizeof(device), ctypes.byref(device))
+        self._evf_original_output = None
+        if err != EDS_ERR_OK:
+            log.warning(
+                "Stop live view output restore failed: 0x%08X %s",
+                err, edsdk_error_name(err),
+            )
         log.info("Live view stopped")
 
     def _download_evf_frame(self) -> bytes | None:
@@ -690,7 +1156,11 @@ class Camera:
             _check("CreateEvfRef", self._sdk.EdsCreateEvfImageRef(stream, ctypes.byref(evf_image)))
 
             err = self._sdk.EdsDownloadEvfImage(self._camera, evf_image)
-            if err in (EDS_ERR_OBJECT_NOTREADY, EDS_ERR_DEVICE_BUSY):
+            if err in (
+                EDS_ERR_OBJECT_NOTREADY,
+                EDS_ERR_DEVICE_BUSY,
+                EDS_ERR_PTP_DEVICE_BUSY,
+            ):
                 return None  # Normal while the next frame is not ready yet.
             _check("DownloadEvfImage", err)
 
@@ -720,10 +1190,21 @@ class Camera:
                 self._camera, kEdsCameraCommand_PressShutterButton,
                 kEdsCameraCommand_ShutterButton_Halfway)
             if err != EDS_ERR_OK:
-                log.warning(f"{t} Capture: half-press err=0x{err:08X} {edsdk_error_name(err)}")
+                log.warning(
+                    f"{t} Capture: half-press err=0x{err:08X} "
+                    f"{edsdk_error_name(err)}")
+                if err in FATAL_TRANSPORT_ERRORS:
+                    self._mark_disconnected(
+                        f"Capture transport failure: {edsdk_error_name(err)}")
+                    return
             end = time.monotonic() + focus_delay
             while time.monotonic() < end:
-                self._sdk.EdsGetEvent()
+                event_err = self._sdk.EdsGetEvent()
+                if event_err in FATAL_TRANSPORT_ERRORS:
+                    self._mark_disconnected(
+                        f"AF event transport failure: "
+                        f"0x{event_err:08X} {edsdk_error_name(event_err)}")
+                    return
                 if not self._connected:
                     return
                 time.sleep(0.05)
@@ -733,7 +1214,8 @@ class Camera:
             shutter_button = kEdsCameraCommand_ShutterButton_Completely_NonAF
             log.info(f"{t} Capture: sending ShutterButton_Completely_NonAF")
 
-        for attempt in range(3):
+        capture_succeeded = False
+        for attempt in range(1, 4):
             if not self._connected:
                 return
             err = self._sdk.EdsSendCommand(
@@ -741,74 +1223,145 @@ class Camera:
                 shutter_button)
             if err == EDS_ERR_OK:
                 log.info(f"{t} Capture: shutter OK")
+                capture_succeeded = True
                 break
             log.warning(
-                f"{t} Capture: attempt {attempt+1}/3 "
+                f"{t} Capture: attempt {attempt}/3 "
                 f"err=0x{err:08X} {edsdk_error_name(err)}")
+            if err in FATAL_TRANSPORT_ERRORS:
+                self._mark_disconnected(
+                    f"Capture transport failure: 0x{err:08X} {edsdk_error_name(err)}")
+                return
+            if err not in TRANSIENT_CAPTURE_ERRORS:
+                log.error(
+                    "%s Capture: permanent shooting/configuration error; not retrying",
+                    t,
+                )
+                break
+            if attempt == 3:
+                break
             for _ in range(10):
-                self._sdk.EdsGetEvent()
+                event_err = self._sdk.EdsGetEvent()
+                if event_err in FATAL_TRANSPORT_ERRORS:
+                    self._mark_disconnected(
+                        f"Capture event transport failure: "
+                        f"0x{event_err:08X} {edsdk_error_name(event_err)}")
+                    return
                 if not self._connected:
                     return
                 time.sleep(0.1)
-        else:
-            log.error(f"{t} Capture: FAILED after 3 attempts")
+        if not capture_succeeded:
+            log.error(f"{t} Capture: FAILED")
         if not self._connected:
             return
         log.info(f"{t} Capture: sending ShutterButton_OFF")
-        self._sdk.EdsSendCommand(
+        off_err = self._sdk.EdsSendCommand(
             self._camera, kEdsCameraCommand_PressShutterButton,
             kEdsCameraCommand_ShutterButton_OFF)
+        if off_err != EDS_ERR_OK:
+            log.warning(
+                "%s Capture: ShutterButton_OFF failed: 0x%08X %s",
+                t, off_err, edsdk_error_name(off_err),
+            )
+            if off_err in FATAL_TRANSPORT_ERRORS:
+                self._mark_disconnected(
+                    f"Shutter release transport failure: "
+                    f"0x{off_err:08X} {edsdk_error_name(off_err)}")
 
     def _download_photo(self, dir_item):
-        info = EdsDirectoryItemInfo()
-        _check("GetDirItemInfo", self._sdk.EdsGetDirectoryItemInfo(dir_item, ctypes.byref(info)))
-
-        file_name = info.szFileName.decode()
-        file_path = self._download_dir / file_name
-        t = self._photo_tag
-        log.info(f"{t} Photo download: {file_name} ({info.size} bytes)")
-
         stream = EdsBaseRef()
-        _check("CreateFileStream", self._sdk.EdsCreateFileStream(
-            str(file_path).encode(), kEdsFileCreateDisposition_CreateAlways,
-            kEdsAccess_ReadWrite, ctypes.byref(stream)))
-
+        file_path = None
+        completed = False
         try:
+            storage_ok, storage_error = self.storage_ready()
+            if not storage_ok:
+                raise RuntimeError(storage_error)
+            info = EdsDirectoryItemInfo()
+            _check("GetDirItemInfo", self._sdk.EdsGetDirectoryItemInfo(
+                dir_item, ctypes.byref(info)))
+
+            file_name = Path(self._decode_c_string(info.szFileName)).name
+            if not file_name:
+                raise RuntimeError("camera supplied an empty photo filename")
+            file_path = self._download_dir / file_name
+            t = self._photo_tag
+            log.info(f"{t} Photo download: {file_name} ({info.size} bytes)")
+
+            _check("CreateFileStream", self._sdk.EdsCreateFileStream(
+                str(file_path).encode(), kEdsFileCreateDisposition_CreateAlways,
+                kEdsAccess_ReadWrite, ctypes.byref(stream)))
             _check("EdsDownload", self._sdk.EdsDownload(dir_item, info.size, stream))
             _check("EdsDownloadComplete", self._sdk.EdsDownloadComplete(dir_item))
+            completed = True
             log.info(f"{t} Photo saved: {file_path}")
             if self._photo_cb:
                 self._photo_cb(str(file_path))
+        except Exception:
+            if not completed:
+                try:
+                    cancel_err = self._sdk.EdsDownloadCancel(dir_item)
+                    if cancel_err != EDS_ERR_OK:
+                        log.warning(
+                            "EdsDownloadCancel failed: 0x%08X %s",
+                            cancel_err, edsdk_error_name(cancel_err),
+                        )
+                except Exception:
+                    log.exception("EdsDownloadCancel raised")
+                # Windows cannot remove an EDSDK-backed file while the stream
+                # still owns its handle. Release it before deleting a partial.
+                if stream:
+                    self._sdk.EdsRelease(stream)
+                    stream = EdsBaseRef()
+                if file_path is not None:
+                    try:
+                        file_path.unlink(missing_ok=True)
+                    except OSError:
+                        log.exception("Could not remove partial photo: %s", file_path)
+            raise
         finally:
-            self._sdk.EdsRelease(stream)
+            if stream:
+                self._sdk.EdsRelease(stream)
 
     def _cleanup_camera(self):
         camera = self._camera
         self._camera = EdsBaseRef()
+        session_open = self._session_open
+        self._session_open = False
         if not camera or not self._sdk:
             return
-        # A disconnected camera commonly rejects the first cleanup call.  Keep
-        # trying the remaining calls so its SDK reference is still released.
-        for cleanup_call in (
-            lambda: self._sdk.EdsSendStatusCommand(
-                camera, kEdsCameraStatusCommand_UIUnLock, 0),
-            lambda: self._sdk.EdsSendCommand(
-                camera, kEdsCameraCommand_SetModeDialDisable, 0),
-            lambda: self._sdk.EdsCloseSession(camera),
-            lambda: self._sdk.EdsRelease(camera),
-        ):
-            try:
-                cleanup_call()
-            except Exception:
-                pass
 
-    def _cleanup(self):
-        self._cleanup_camera()
-        try:
-            if self._sdk:
-                self._sdk.EdsTerminateSDK()
-        except Exception:
-            pass
+        calls = []
+        if session_open and self._ui_locked:
+            calls.append(("UI unlock", True, lambda: self._sdk.EdsSendStatusCommand(
+                camera, kEdsCameraStatusCommand_UIUnLock, 0)))
+        if session_open and self._mode_dial_locked:
+            # Canon section 6.19: 1 cancels the disabled/locked mode dial.
+            calls.append(("mode dial unlock", True, lambda: self._sdk.EdsSendCommand(
+                camera, kEdsCameraCommand_SetModeDialDisable, 1)))
+        if session_open:
+            calls.append(("close session", True, lambda: self._sdk.EdsCloseSession(camera)))
+        # EdsRelease returns a reference count, not EdsError.
+        calls.append(("release camera", False, lambda: self._sdk.EdsRelease(camera)))
+
+        for label, returns_error, cleanup_call in calls:
+            try:
+                err = cleanup_call()
+                if returns_error and isinstance(err, int) and err != EDS_ERR_OK:
+                    log.debug(
+                        "Camera cleanup %s failed: 0x%08X %s",
+                        label, err, edsdk_error_name(err),
+                    )
+            except Exception:
+                log.debug("Camera cleanup %s raised", label, exc_info=True)
+        self._ui_locked = False
+        self._mode_dial_locked = False
+        self._evf_original_output = None
+        self._pending_property_updates.clear()
         self._obj_handler_ref = None
         self._state_handler_ref = None
-        log.info("EDSDK cleaned up")
+        self._prop_handler_ref = None
+        log.info("Camera session cleaned up")
+
+    def _cleanup(self):
+        """Backward-compatible per-camera cleanup; SDK lifetime is worker-wide."""
+        self._cleanup_camera()

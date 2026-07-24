@@ -286,6 +286,11 @@ async def _run_session():
     if not camera or not camera.is_connected:
         await set_state("camera_searching" if camera else "no_camera")
         return
+    storage_check = getattr(camera, "storage_ready", None)
+    if storage_check:
+        storage_ok, storage_error = storage_check()
+        if not storage_ok:
+            raise RuntimeError(storage_error)
     camera_generation = camera.connection_generation
     _camera_disconnected_event.clear()
     _require_session_camera(camera_generation)
@@ -700,6 +705,11 @@ async def handle_disk_command(command: dict) -> dict:
         if not camera or not camera.is_connected:
             await set_state("camera_searching" if camera else "no_camera")
             return {"status": "error", "message": "Камера не подключена"}
+        storage_check = getattr(camera, "storage_ready", None)
+        if storage_check:
+            storage_ok, storage_error = storage_check()
+            if not storage_ok:
+                return {"status": "error", "message": storage_error}
 
         async def start_session_after_ack() -> None:
             asyncio.create_task(run_session())
@@ -715,13 +725,49 @@ async def handle_disk_command(command: dict) -> dict:
         version = hash_path.read_text(encoding="utf-8").strip() if hash_path.exists() else "unknown"
         connected = bool(camera and camera.is_connected)
         event = yadisk_cloud.current_event_folder() or str(CONFIG.get("yadisk_folder", ""))
+        status_lines = [
+            f"State: {STATE}",
+            f"Camera: {'online' if connected else 'offline'}",
+        ]
+        snapshot_method = getattr(camera, "status_snapshot", None) if camera else None
+        if snapshot_method:
+            snapshot = snapshot_method()
+            identity = snapshot.get("product_name") or snapshot.get("model")
+            if identity:
+                status_lines.append(f"Camera model: {identity}")
+            health = []
+            for label, key in (
+                ("power", "battery"),
+                ("temp", "temperature"),
+                ("AE", "ae_mode"),
+                ("auto-off", "auto_power_off"),
+            ):
+                if snapshot.get(key) is not None:
+                    health.append(f"{label}={snapshot[key]}")
+            if health:
+                status_lines.append("Camera health: " + ", ".join(health))
+            disk_free = snapshot.get("disk_free_bytes")
+            if isinstance(disk_free, int):
+                status_lines.append(
+                    f"Photo disk free: {disk_free / (1024 ** 3):.2f} GiB")
+            if snapshot.get("last_keepalive_result"):
+                status_lines.append(
+                    "Camera keepalive: "
+                    f"{snapshot['last_keepalive_result']} at "
+                    f"{snapshot.get('last_keepalive_at') or 'unknown'}")
+            if snapshot.get("last_disconnect_reason"):
+                status_lines.append(
+                    "Last camera disconnect: "
+                    f"{snapshot['last_disconnect_reason']} at "
+                    f"{snapshot.get('last_disconnect_at') or 'unknown'}")
+        status_lines.extend([
+            f"Event: {event}",
+            f"Upload queue: {yadisk_cloud.pending_count()}",
+            f"Version: {version}",
+        ])
         return {
             "status": "ok",
-            "message": (
-                f"State: {STATE}\nCamera: {'online' if connected else 'offline'}\n"
-                f"Event: {event}\nUpload queue: {yadisk_cloud.pending_count()}\n"
-                f"Version: {version}"
-            ),
+            "message": "\n".join(status_lines),
             "event_folder": event,
         }
 

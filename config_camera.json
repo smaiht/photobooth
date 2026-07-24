@@ -75,6 +75,12 @@
     "keepalive_seconds": 60,
     "_keepalive_seconds_comment": "Seconds between EDSDK shutdown-timer keepalives. Values are clamped to 15-300 seconds.",
 
+    "min_free_disk_gib": 2.0,
+    "_min_free_disk_gib_comment": "Do not start or download a session if the Windows photo disk has less free space than this.",
+
+    "evf_keep_camera_screen": false,
+    "_evf_keep_camera_screen_comment": "false keeps the camera screen off during PC live view; the original output state is restored afterwards. true keeps the camera screen active too.",
+
     "drive_mode": "single",
     "_drive_mode_options": ["single"],
 
