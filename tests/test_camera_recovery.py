@@ -370,6 +370,10 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         )
         self.assertEqual(edsdk.EVF_AF_MODE_MAP["face_tracking"], 0x0E)
         self.assertEqual(edsdk.EVF_AF_MODE_MAP["live_face"], 0x02)
+        self.assertEqual(
+            edsdk.Camera._name_from_map(edsdk.EVF_AF_MODE_MAP, 0x0E),
+            "whole_area",
+        )
 
     def test_optional_camera_lock_retries_busy_then_succeeds(self):
         camera = edsdk.Camera("fake-edSDK.dll")

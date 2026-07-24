@@ -729,13 +729,19 @@ class Camera:
         if evf_view_type is not None:
             self._set_prop_u32(kEdsPropID_Evf_ViewType, evf_view_type)
 
-        # Continuous AF (Servo) - keeps focus during live view, instant capture
-        if cfg.get("continuous_af", True):
-            self._set_prop_u32(kEdsPropID_ContinuousAfMode, 1)  # 1 = enable
+        # Continuous preview AF keeps tracking the selected person/eye during
+        # live view, including while the countdown is running.
+        self._set_prop_u32(
+            kEdsPropID_ContinuousAfMode,
+            1 if cfg.get("continuous_af", True) else 0,
+        )
 
-        # Eye detection AF
-        if cfg.get("eye_detection_af", True):
-            self._set_prop_u32(kEdsPropID_AFEyeDetect, 1)  # 1 = enable
+        # Eye detection is independent from the AF area on current EOS R
+        # bodies. WholeArea + People + EyeDetect is the R8 tracking setup.
+        self._set_prop_u32(
+            kEdsPropID_AFEyeDetect,
+            1 if cfg.get("eye_detection_af", True) else 0,
+        )
 
         # Lock camera UI
         if cfg.get("lock_camera_ui", True):
@@ -932,6 +938,10 @@ class Camera:
              EVF_AF_MODE_MAP.get(self._cfg.get("evf_af_mode", "face_tracking"))),
             ("Subject", kEdsPropID_AFTrackingObject, AF_TRACKING_OBJECT_MAP,
              AF_TRACKING_OBJECT_MAP.get(self._cfg.get("subject_tracking", "people"))),
+            ("EyeDetect", kEdsPropID_AFEyeDetect, ENABLE_DISABLE_MAP,
+             1 if self._cfg.get("eye_detection_af", True) else 0),
+            ("ContinuousAF", kEdsPropID_ContinuousAfMode, ENABLE_DISABLE_MAP,
+             1 if self._cfg.get("continuous_af", True) else 0),
             ("EvfViewType", kEdsPropID_Evf_ViewType, EVF_VIEW_TYPE_MAP,
              EVF_VIEW_TYPE_MAP.get(self._cfg.get("evf_view_type", "disable"))),
             ("ShutterType", kEdsPropID_ShutterType, SHUTTER_TYPE_MAP,

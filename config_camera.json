@@ -40,12 +40,12 @@
         "faithful", "monochrome", "auto", "fine_detail"
     ],
 
-    "evf_af_mode": "face_tracking",
+    "evf_af_mode": "whole_area",
     "_evf_af_mode_options": [
         "face_tracking", "whole_area", "live_face", "zone", "large_zone_h", "large_zone_v",
         "spot", "single_point", "expand_cross", "expand_around"
     ],
-    "_evf_af_mode_comment": "AF area mode during live view. face_tracking = detect and track faces/eyes.",
+    "_evf_af_mode_comment": "EOS R8 AF area. whole_area combined with subject_tracking=people and eye_detection_af=true enables full-frame person/eye tracking.",
 
     "af_mode": "servo",
     "_af_mode_options": ["one_shot", "servo", "ai_focus", "manual"],
