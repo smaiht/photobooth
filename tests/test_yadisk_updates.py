@@ -1,3 +1,4 @@
+import ctypes
 import hashlib
 import io
 import json
@@ -6,7 +7,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import app
 from backend import yadisk_updates
@@ -85,11 +87,17 @@ class DiskUpdateDownloadTests(unittest.TestCase):
                 }},
             }
             destinations = []
+            scheduled_stages = []
 
             def download(_artifact, destination):
                 destinations.append(destination)
                 destination.write_bytes(payload)
                 return len(payload), digest
+
+            def schedule(stage, _app_dir, _version):
+                scheduled_stages.append(stage)
+                self.assertEqual((stage / "app.py").read_text(), "updated")
+                return False
 
             with patch.object(app, "__file__", str(fake_app)), \
                  patch.object(app, "_HASH_FILE", str(root / ".update_hash")), \
@@ -97,13 +105,15 @@ class DiskUpdateDownloadTests(unittest.TestCase):
                  patch.object(app.os, "getpid", return_value=4242), \
                  patch("backend.yadisk_updates.read_status", return_value=status), \
                  patch("backend.yadisk_updates.download_artifact", side_effect=download), \
-                 patch.object(app, "_schedule_full_update", return_value=False) as schedule:
+                 patch.object(app, "_schedule_full_update", side_effect=schedule):
                 self.assertEqual(app._update_from_disk(), "external")
 
             expected_download = root.resolve() / ".update_download.4242.zip"
+            expected_stage = root.resolve() / ".update_stage.4242"
             self.assertEqual(destinations, [expected_download])
+            self.assertEqual(scheduled_stages, [expected_stage])
             self.assertFalse(destinations[0].exists())
-            schedule.assert_called_once_with(destinations[0], root.resolve(), digest)
+            self.assertFalse(expected_stage.exists())
 
 
 class UpdateExtractionTests(unittest.TestCase):
@@ -138,6 +148,38 @@ class UpdateExtractionTests(unittest.TestCase):
                 app._extract_update(str(archive), str(target))
             self.assertFalse((root / "outside.txt").exists())
 
+    def test_prepares_complete_release_before_application_exit(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            archive = root / "update.zip"
+            stage = root / ".update_stage.4242"
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("app.py", "updated")
+                zf.writestr("config_app.json", "release default")
+                zf.writestr("python/runtime.dll", b"new runtime")
+
+            extracted = app._prepare_update_stage(archive, stage)
+
+            self.assertEqual(extracted, 3)
+            self.assertEqual((stage / "app.py").read_text(), "updated")
+            self.assertEqual(
+                (stage / "python/runtime.dll").read_bytes(), b"new runtime")
+
+    def test_failed_stage_preparation_is_removed(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            archive = root / "update.zip"
+            stage = root / ".update_stage.4242"
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("app.py", "updated")
+                zf.writestr("../outside.txt", "bad")
+
+            with self.assertRaisesRegex(ValueError, "escapes update stage"):
+                app._prepare_update_stage(archive, stage)
+
+            self.assertFalse(stage.exists())
+            self.assertFalse((root / "outside.txt").exists())
+
 
 class FullUpdateSchedulingTests(unittest.TestCase):
     def test_creates_one_shot_windows_apply_script(self):
@@ -148,31 +190,32 @@ class FullUpdateSchedulingTests(unittest.TestCase):
              patch.object(app.sys, "executable", r"C:\photobooth\python\pythonw.exe"):
             popen.return_value.pid = 9876
             root = Path(tmpdir)
-            archive = root / ".update_download.4242.zip"
-            archive.write_bytes(b"zip")
+            stage = root / ".update_stage.4242"
+            stage.mkdir()
+            (stage / "app.py").write_text("updated", encoding="utf-8")
             self.assertTrue(app._claim_update_marker(
                 root / ".update_in_progress.json"))
 
-            scheduled = app._schedule_full_update(archive, root, "a" * 64)
+            scheduled = app._schedule_full_update(stage, root, "a" * 64)
 
             self.assertTrue(scheduled)
             script = (root / ".update_apply.4242.ps1").read_text(encoding="utf-8")
             self.assertIn("Wait-Process -Id $ParentPid", script)
-            self.assertIn("Expand-Archive -LiteralPath $ZipPath", script)
+            self.assertNotIn("Expand-Archive", script)
+            self.assertIn('Write-UpdateLog "Prepared full release found"', script)
             self.assertIn('"config_app.json"', script)
             self.assertIn('".git"', script)
             self.assertIn("Get-PhotoboothProcesses", script)
             self.assertIn("robocopy.exe", script)
             self.assertIn("if ($copyExitCode -ge 8)", script)
             self.assertIn('Move-Item -LiteralPath $hashTempPath', script)
-            self.assertIn("foreach ($argument in $parsed)", script)
-            self.assertIn("[string[]]$relaunchArguments", script)
-            self.assertIn('"--skip-update-once"', script)
+            self.assertIn('$relaunchArgumentLine += " --dev"', script)
+            self.assertIn('$relaunchArgumentLine += " --skip-update-once"', script)
             self.assertIn('Start-Process -FilePath $PythonExe', script)
+            self.assertIn("-ArgumentList $relaunchArgumentLine", script)
+            self.assertIn("-PassThru", script)
+            self.assertIn("$launched.HasExited", script)
 
-            saved_args = json.loads(
-                (root / ".update_args.4242.json").read_text(encoding="utf-8"))
-            self.assertEqual(saved_args, ["app.py", "--dev"])
             marker = json.loads(
                 (root / ".update_in_progress.json").read_text(encoding="utf-8"))
             self.assertEqual(marker["owner_pid"], 4242)
@@ -181,23 +224,24 @@ class FullUpdateSchedulingTests(unittest.TestCase):
             args = popen.call_args.args[0]
             self.assertEqual(args[0], "powershell.exe")
             self.assertIn("-ParentPid", args)
-            self.assertIn("-ArgsPath", args)
+            self.assertIn("-StagePath", args)
+            self.assertEqual(args[args.index("-StagePath") + 1], str(stage.resolve()))
+            self.assertEqual(args[args.index("-Mode") + 1], "dev")
             self.assertIn("-MarkerPath", args)
-            self.assertNotIn("-ArgsJson", args)
+            self.assertNotIn("-ArgsPath", args)
 
     def test_existing_marker_prevents_a_second_installer(self):
         with TemporaryDirectory() as tmpdir, \
              patch("subprocess.Popen") as popen, \
              patch.object(app.os, "getpid", return_value=4242):
             root = Path(tmpdir)
-            archive = root / ".update_download.4242.zip"
-            archive.write_bytes(b"zip")
+            stage = root / ".update_stage.4242"
+            stage.mkdir()
             (root / ".update_in_progress.json").write_text("{}", encoding="utf-8")
 
-            self.assertFalse(app._schedule_full_update(archive, root, "a" * 64))
+            self.assertFalse(app._schedule_full_update(stage, root, "a" * 64))
             popen.assert_not_called()
             self.assertFalse((root / ".update_apply.4242.ps1").exists())
-            self.assertFalse((root / ".update_args.4242.json").exists())
 
     def test_failed_powershell_launch_cleans_ownership_files(self):
         with TemporaryDirectory() as tmpdir, \
@@ -205,18 +249,37 @@ class FullUpdateSchedulingTests(unittest.TestCase):
              patch.object(app.os, "getpid", return_value=4242), \
              patch.object(app.sys, "argv", ["app.py", "--dev"]):
             root = Path(tmpdir)
-            archive = root / ".update_download.4242.zip"
-            archive.write_bytes(b"zip")
+            stage = root / ".update_stage.4242"
+            stage.mkdir()
 
             with self.assertRaisesRegex(OSError, "no PowerShell"):
-                app._schedule_full_update(archive, root, "a" * 64)
+                app._schedule_full_update(stage, root, "a" * 64)
 
             self.assertFalse((root / ".update_in_progress.json").exists())
             self.assertFalse((root / ".update_apply.4242.ps1").exists())
-            self.assertFalse((root / ".update_args.4242.json").exists())
 
 
 class UpdateMarkerTests(unittest.TestCase):
+    def test_windows_process_check_uses_pointer_sized_handle(self):
+        large_handle = 0x1234567887654321
+        open_process = Mock(return_value=large_handle)
+        wait_for_single_object = Mock(return_value=0x00000102)
+        close_handle = Mock(return_value=True)
+        kernel32 = SimpleNamespace(
+            OpenProcess=open_process,
+            WaitForSingleObject=wait_for_single_object,
+            CloseHandle=close_handle,
+        )
+        fake_windll = SimpleNamespace(kernel32=kernel32)
+
+        with patch.object(app.sys, "platform", "win32"), \
+             patch.object(ctypes, "windll", fake_windll, create=True):
+            self.assertTrue(app._windows_process_is_running(9876))
+
+        self.assertIs(open_process.restype, ctypes.wintypes.HANDLE)
+        wait_for_single_object.assert_called_once_with(large_handle, 0)
+        close_handle.assert_called_once_with(large_handle)
+
     def test_running_installer_marker_is_active(self):
         with TemporaryDirectory() as tmpdir, patch.object(app.time, "time", return_value=100):
             marker = Path(tmpdir) / ".update_in_progress.json"

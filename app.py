@@ -139,15 +139,31 @@ def _windows_process_is_running(pid: int) -> bool:
         return False
     try:
         import ctypes
+        from ctypes import wintypes
+
         synchronize = 0x00100000
         wait_timeout = 0x00000102
-        handle = ctypes.windll.kernel32.OpenProcess(synchronize, False, pid)
+        kernel32 = ctypes.windll.kernel32
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+        wait_for_single_object = kernel32.WaitForSingleObject
+        wait_for_single_object.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        wait_for_single_object.restype = wintypes.DWORD
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+
+        # HANDLE is pointer-sized. Without the explicit ctypes signatures it
+        # is truncated to a 32-bit int on 64-bit Windows, making a live
+        # installer look dead and allowing a second update to start over it.
+        handle = open_process(synchronize, False, pid)
         if not handle:
             return False
         try:
-            return ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+            return wait_for_single_object(handle, 0) == wait_timeout
         finally:
-            ctypes.windll.kernel32.CloseHandle(handle)
+            close_handle(handle)
     except Exception:
         return False
 
@@ -297,16 +313,49 @@ def _extract_update(zip_path: str, app_dir: str) -> None:
                 dst.write(src.read())
 
 
-def _schedule_full_update(zip_path: Path, app_dir: Path, version: str) -> bool:
+def _prepare_update_stage(zip_path: Path, stage_path: Path) -> int:
+    """Extract a full release before the visible application is closed."""
+    import shutil
+    import zipfile
+
+    stage_path = stage_path.resolve()
+    if stage_path.exists():
+        shutil.rmtree(stage_path)
+    stage_path.mkdir(parents=True)
+    stage_root = os.path.realpath(stage_path)
+    extracted_files = 0
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            for info in archive.infolist():
+                member = info.filename.replace("\\", "/")
+                target = os.path.realpath(os.path.join(stage_path, member))
+                if os.path.commonpath((stage_root, target)) != stage_root:
+                    raise ValueError(
+                        f"ZIP path escapes update stage: {info.filename}")
+                if info.is_dir():
+                    os.makedirs(target, exist_ok=True)
+                    continue
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with archive.open(info) as source, open(target, "wb") as destination:
+                    shutil.copyfileobj(source, destination, length=1024 * 1024)
+                extracted_files += 1
+        if not (stage_path / "app.py").is_file():
+            raise ValueError("full update does not contain app.py at ZIP root")
+        return extracted_files
+    except Exception:
+        shutil.rmtree(stage_path, ignore_errors=True)
+        raise
+
+
+def _schedule_full_update(stage_path: Path, app_dir: Path, version: str) -> bool:
     """Start the one external installer; return False if one already owns it."""
     import json
     import subprocess
 
     app_dir = app_dir.resolve()
-    zip_path = zip_path.resolve()
+    stage_path = stage_path.resolve()
     suffix = str(os.getpid())
     script_path = app_dir / f".update_apply.{suffix}.ps1"
-    args_path = app_dir / f".update_args.{suffix}.json"
     marker_path = app_dir / ".update_in_progress.json"
     marker_temp_path = app_dir / f".update_in_progress.json.{suffix}.tmp"
 
@@ -336,18 +385,18 @@ def _schedule_full_update(zip_path: Path, app_dir: Path, version: str) -> bool:
         if marker_fd is not None:
             with os.fdopen(marker_fd, "w", encoding="utf-8") as marker_file:
                 json.dump(marker, marker_file)
-        args_path.write_text(json.dumps(sys.argv, ensure_ascii=False), encoding="utf-8")
         script_path.write_text(r'''param(
     [int]$ParentPid,
     [string]$AppDir,
-    [string]$ZipPath,
+    [string]$StagePath,
     [string]$Version,
     [string]$PythonExe,
-    [string]$ArgsPath,
+    [ValidateSet("kiosk", "dev")]
+    [string]$Mode,
     [string]$MarkerPath
 )
 $ErrorActionPreference = "Stop"
-$stage = Join-Path $AppDir (".update_stage." + $ParentPid)
+$stage = $StagePath
 $logPath = Join-Path $AppDir "photobooth.log"
 $installed = $false
 
@@ -372,25 +421,6 @@ function Get-PhotoboothProcesses {
     })
 }
 
-function Get-RelaunchArguments {
-    $parsed = Get-Content -LiteralPath $ArgsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    [string[]]$launchArguments = @()
-    foreach ($argument in $parsed) {
-        $launchArguments += [string]$argument
-    }
-    if ($launchArguments.Count -eq 0) {
-        $launchArguments = @("app.py")
-    }
-    return $launchArguments
-}
-
-try {
-    [string[]]$relaunchArguments = Get-RelaunchArguments
-} catch {
-    [string[]]$relaunchArguments = @("app.py")
-    Write-UpdateLog ("Could not read relaunch arguments: " + $_.Exception.Message)
-}
-
 try {
     Write-UpdateLog ("Full installer started for " + $Version.Substring(0, 16))
     Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue
@@ -409,10 +439,10 @@ try {
             (($otherProcesses | ForEach-Object { $_.ProcessId }) -join ", "))
     }
 
-    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-    Write-UpdateLog "Extracting full release"
-    Expand-Archive -LiteralPath $ZipPath -DestinationPath $stage -Force
-    Write-UpdateLog "Full release extracted"
+    if (-not (Test-Path -LiteralPath (Join-Path $stage "app.py") -PathType Leaf)) {
+        throw "Prepared update stage does not contain app.py"
+    }
+    Write-UpdateLog "Prepared full release found"
     $preserve = @(
         ".git", ".env", ".ENV", "config_app.json", "config_camera.json",
         "photos", "yadisk_queue.json", "photobooth.log", ".update_hash"
@@ -445,32 +475,39 @@ try {
 } catch {
     Write-UpdateLog ("Full update failed: " + $_.Exception.Message) "ERROR"
 } finally {
-    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Join-Path $AppDir ".update_hash.tmp") `
         -Force -ErrorAction SilentlyContinue
 }
 
-if (-not $installed -and $relaunchArguments -notcontains "--skip-update-once") {
-    $relaunchArguments += "--skip-update-once"
+$appScript = Join-Path $AppDir "app.py"
+$relaunchArgumentLine = '"' + $appScript + '"'
+if ($Mode -eq "dev") {
+    $relaunchArgumentLine += " --dev"
 }
-
-# Remove the marker before launching. A concurrently started app must exit while
-# files are changing, but the intended replacement must be allowed to start.
-Remove-Item -LiteralPath $ArgsPath -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+$relaunchArgumentLine += " --skip-update-once"
 
 try {
-    Start-Process -FilePath $PythonExe `
-        -ArgumentList ([string[]]$relaunchArguments) -WorkingDirectory $AppDir
+    $launched = Start-Process -FilePath $PythonExe `
+        -ArgumentList $relaunchArgumentLine -WorkingDirectory $AppDir -PassThru
     if ($installed) {
-        Write-UpdateLog "Updated application restarted"
+        Write-UpdateLog ("Updated application restarted, PID " + $launched.Id)
     } else {
-        Write-UpdateLog "Application restarted without one update check"
+        Write-UpdateLog ("Application restarted without one update check, PID " + `
+            $launched.Id)
+    }
+    Start-Sleep -Seconds 2
+    if ($launched.HasExited) {
+        Write-UpdateLog ("Relaunched application exited immediately with code " + `
+            $launched.ExitCode) "ERROR"
     }
 } catch {
     Write-UpdateLog ("Application relaunch failed: " + $_.Exception.Message) "ERROR"
+} finally {
+    # The recovery launch carries --skip-update-once, so it may start while
+    # this marker still protects the copy/cleanup window from manual launches.
+    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 }
 ''', encoding="utf-8")
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -480,10 +517,10 @@ try {
                 "-File", str(script_path),
                 "-ParentPid", str(os.getpid()),
                 "-AppDir", str(app_dir),
-                "-ZipPath", str(zip_path),
+                "-StagePath", str(stage_path),
                 "-Version", version,
                 "-PythonExe", sys.executable,
-                "-ArgsPath", str(args_path),
+                "-Mode", "dev" if "--dev" in sys.argv else "kiosk",
                 "-MarkerPath", str(marker_path),
             ],
             cwd=str(app_dir),
@@ -499,7 +536,7 @@ try {
                 process.terminate()
             except Exception:
                 pass
-        for path in (marker_temp_path, marker_path, args_path, script_path):
+        for path in (marker_temp_path, marker_path, script_path):
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -551,7 +588,8 @@ def _update_from_disk() -> str | None:
     _ui_log(f"Новая полная версия на Диске: {version[:16]}")
     app_dir = Path(__file__).resolve().parent
     temp_path = app_dir / f".update_download.{os.getpid()}.zip"
-    keep_download = False
+    stage_path = app_dir / f".update_stage.{os.getpid()}"
+    external_owns_stage = False
     try:
         _ui_log("Скачивание с Яндекс Диска...")
         expected_size = int(artifact.get("size") or 0)
@@ -580,8 +618,16 @@ def _update_from_disk() -> str | None:
                         raise ValueError(
                             f"ZIP path escapes application directory: {info.filename}")
                 log.info("Disk update: ZIP valid, %d entries", len(archive.infolist()))
-            if _schedule_full_update(temp_path, app_dir, version):
-                keep_download = True
+            _ui_log("Подготовка файлов обновления...")
+            log.info("Disk update: preparing full release before application exit")
+            prepare_started = time.monotonic()
+            extracted_files = _prepare_update_stage(temp_path, stage_path)
+            log.info(
+                "Disk update: full release prepared, %d files in %.1fs",
+                extracted_files, time.monotonic() - prepare_started,
+            )
+            if _schedule_full_update(stage_path, app_dir, version):
+                external_owns_stage = True
                 log.info(f"Disk update: scheduled full {version[:16]}")
                 _ui_log("Приложение сейчас закроется и откроется автоматически")
             else:
@@ -596,12 +642,20 @@ def _update_from_disk() -> str | None:
         _ui_log("Обновление установлено!")
         return "restart"
     finally:
-        if not keep_download:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("Disk update: could not remove temporary download %s: %s",
+                        temp_path, exc)
+        if not external_owns_stage:
+            import shutil
             try:
-                temp_path.unlink(missing_ok=True)
+                shutil.rmtree(stage_path)
+            except FileNotFoundError:
+                pass
             except OSError as exc:
-                log.warning("Disk update: could not remove temporary download %s: %s",
-                            temp_path, exc)
+                log.warning("Disk update: could not remove prepared stage %s: %s",
+                            stage_path, exc)
 
 
 def auto_update():
