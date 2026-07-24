@@ -2,6 +2,7 @@ import ctypes
 import hashlib
 import io
 import json
+import sys
 import unittest
 import urllib.request
 import zipfile
@@ -210,6 +211,9 @@ class FullUpdateSchedulingTests(unittest.TestCase):
             self.assertIn("if ($copyExitCode -ge 8)", script)
             self.assertIn('Move-Item -LiteralPath $hashTempPath', script)
             self.assertIn('$relaunchArgumentLine += " --dev"', script)
+            self.assertIn('if ($installed)', script)
+            self.assertIn('$relaunchArgumentLine += " --post-installer"', script)
+            self.assertIn('else {', script)
             self.assertIn('$relaunchArgumentLine += " --skip-update-once"', script)
             self.assertIn('Start-Process -FilePath $PythonExe', script)
             self.assertIn("-ArgumentList $relaunchArgumentLine", script)
@@ -260,6 +264,40 @@ class FullUpdateSchedulingTests(unittest.TestCase):
 
 
 class UpdateMarkerTests(unittest.TestCase):
+    @staticmethod
+    def _run_main_immediately(argv):
+        class EventHook:
+            def __iadd__(self, _callback):
+                return self
+
+        class ImmediateThread:
+            def __init__(self, target, args=(), **_kwargs):
+                self.target = target
+                self.args = args
+
+            def start(self):
+                self.target(*self.args)
+
+        window = SimpleNamespace(
+            events=SimpleNamespace(loaded=EventHook()),
+            evaluate_js=Mock(),
+        )
+        webview = SimpleNamespace(
+            create_window=Mock(return_value=window),
+            start=Mock(),
+        )
+        with patch.object(app.sys, "argv", argv), \
+             patch.object(app, "_external_update_active", return_value=True), \
+             patch.object(app, "_build_loading_html", return_value="loading"), \
+             patch.object(app, "kill_port"), \
+             patch.object(app, "wait_and_load"), \
+             patch.object(app.threading, "Thread", ImmediateThread), \
+             patch.object(app, "auto_update") as auto_update, \
+             patch.object(app, "start_server") as start_server, \
+             patch.dict(sys.modules, {"webview": webview}):
+            app.main()
+            return auto_update, start_server, list(app.sys.argv)
+
     def test_windows_process_check_uses_pointer_sized_handle(self):
         large_handle = 0x1234567887654321
         open_process = Mock(return_value=large_handle)
@@ -333,6 +371,22 @@ class UpdateMarkerTests(unittest.TestCase):
 
             kill_port.assert_not_called()
 
+    def test_successful_post_installer_launch_runs_normal_update_check(self):
+        auto_update, start_server, argv = self._run_main_immediately(
+            ["app.py", "--dev", "--post-installer"])
+
+        auto_update.assert_called_once_with()
+        start_server.assert_called_once_with()
+        self.assertEqual(argv, ["app.py", "--dev"])
+
+    def test_failed_installer_recovery_skips_only_one_update_check(self):
+        auto_update, start_server, argv = self._run_main_immediately(
+            ["app.py", "--dev", "--skip-update-once"])
+
+        auto_update.assert_not_called()
+        start_server.assert_called_once_with()
+        self.assertEqual(argv, ["app.py", "--dev"])
+
     def test_stale_legacy_and_unique_artifacts_are_cleaned(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -372,6 +426,32 @@ class WindowsGitSyncTests(unittest.TestCase):
         self.assertNotIn("CommandLine", sync)
         self.assertIn('_sync_from_git.bat', dev_start)
         self.assertIn('_sync_from_git.bat', git_pull)
+
+
+class WindowsPowerTests(unittest.TestCase):
+    def test_app_prevents_system_sleep_and_display_timeout(self):
+        set_execution_state = Mock(return_value=1)
+        kernel32 = SimpleNamespace(SetThreadExecutionState=set_execution_state)
+        fake_windll = SimpleNamespace(kernel32=kernel32)
+
+        with patch.object(app.sys, "platform", "win32"), \
+             patch.object(ctypes, "windll", fake_windll, create=True):
+            self.assertTrue(app._prevent_windows_sleep())
+            app._restore_windows_sleep(True)
+
+        expected_flags = (
+            app._ES_CONTINUOUS
+            | app._ES_SYSTEM_REQUIRED
+            | app._ES_DISPLAY_REQUIRED
+        )
+        self.assertEqual(
+            set_execution_state.call_args_list[0].args,
+            (expected_flags,),
+        )
+        self.assertEqual(
+            set_execution_state.call_args_list[1].args,
+            (app._ES_CONTINUOUS,),
+        )
 
 
 if __name__ == "__main__":

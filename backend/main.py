@@ -645,20 +645,33 @@ def _clear_local_logs() -> None:
     from logging.handlers import RotatingFileHandler
 
     log_path = ROOT_DIR / "photobooth.log"
-    for rotated in ROOT_DIR.glob("photobooth.log.*"):
-        if rotated.is_file():
-            rotated.unlink(missing_ok=True)
-    if log_path.exists() and log_path.stat().st_size:
-        for handler in logging.getLogger().handlers:
-            if (isinstance(handler, RotatingFileHandler)
-                    and Path(handler.baseFilename).resolve() == log_path.resolve()):
-                handler.doRollover()
-                break
+    handler = next((
+        candidate
+        for candidate in logging.getLogger().handlers
+        if (isinstance(candidate, RotatingFileHandler)
+            and Path(candidate.baseFilename).resolve() == log_path.resolve())
+    ), None)
+
+    # On Windows the active log cannot be replaced while its handler keeps the
+    # file open.  Truncate that same stream under the handler lock so concurrent
+    # log records cannot slip across the clear boundary or trigger a rollover.
+    if handler:
+        handler.acquire()
+    try:
+        if handler and handler.stream:
+            handler.flush()
+            handler.stream.seek(0)
+            handler.stream.truncate(0)
+            handler.stream.flush()
         else:
-            log_path.replace(log_path.with_name("photobooth.log.1"))
             log_path.write_text("", encoding="utf-8")
-    else:
-        log_path.write_text("", encoding="utf-8")
+
+        for rotated in ROOT_DIR.glob("photobooth.log.*"):
+            if rotated.is_file():
+                rotated.unlink(missing_ok=True)
+    finally:
+        if handler:
+            handler.release()
 
 
 async def handle_disk_command(command: dict) -> dict:

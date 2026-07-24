@@ -26,18 +26,48 @@ class LogSnapshotTests(unittest.TestCase):
             b"oldest line\nolder line\ncurrent line\n",
         )
 
-    def test_clear_replaces_old_backup_with_current_log(self):
+    def test_clear_removes_active_history_and_all_backups(self):
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch.object(main, "ROOT_DIR", Path(tmpdir)):
             active = Path(tmpdir) / "photobooth.log"
             backup = Path(tmpdir) / "photobooth.log.1"
+            legacy_backup = Path(tmpdir) / "photobooth.log.2"
             backup.write_bytes(b"old backup\n")
+            legacy_backup.write_bytes(b"even older backup\n")
             active.write_bytes(b"current history\n")
 
             main._clear_local_logs()
 
             self.assertEqual(active.read_bytes(), b"")
-            self.assertEqual(backup.read_bytes(), b"current history\n")
+            self.assertFalse(backup.exists())
+            self.assertFalse(legacy_backup.exists())
+
+    def test_clear_truncates_the_open_rotating_log_stream(self):
+        import logging
+        from logging.handlers import RotatingFileHandler
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)):
+            active = Path(tmpdir) / "photobooth.log"
+            backup = Path(tmpdir) / "photobooth.log.1"
+            handler = RotatingFileHandler(
+                active, encoding="utf-8", maxBytes=200_000, backupCount=1)
+            root = logging.getLogger()
+            root.addHandler(handler)
+            try:
+                handler.stream.write("current history\n")
+                handler.flush()
+                backup.write_text("old backup\n", encoding="utf-8")
+
+                main._clear_local_logs()
+                handler.stream.write("after clear\n")
+                handler.flush()
+
+                self.assertEqual(active.read_text(encoding="utf-8"), "after clear\n")
+                self.assertFalse(backup.exists())
+            finally:
+                root.removeHandler(handler)
+                handler.close()
 
 
 class LogCommandTests(unittest.IsolatedAsyncioTestCase):

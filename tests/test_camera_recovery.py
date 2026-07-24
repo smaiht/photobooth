@@ -1,5 +1,6 @@
 import asyncio
 import ctypes
+import json
 import tempfile
 import threading
 import unittest
@@ -12,6 +13,101 @@ from backend.video import VideoRecorder
 
 
 class CameraWorkerRecoveryTests(unittest.TestCase):
+    def test_enables_and_disables_auto_power_off_for_eos_r(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSetPropertyData.return_value = edsdk.EDS_ERR_OK
+
+        camera._enable_limited_properties()
+
+        auto_power_enable = [
+            call for call in camera._sdk.EdsSetPropertyData.call_args_list
+            if call.args[2] == 0x1C31565B
+        ]
+        self.assertEqual(len(auto_power_enable), 1)
+        self.assertEqual(
+            auto_power_enable[0].args[4]._obj.value,
+            edsdk.kEdsPropID_AutoPowerOffSetting,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config_camera.json"
+            config_path.write_text(json.dumps({
+                "disable_auto_power_off": True,
+                "lock_camera_ui": False,
+                "lock_mode_dial": False,
+            }), encoding="utf-8")
+            camera._sdk.EdsSetCapacity.return_value = edsdk.EDS_ERR_OK
+            with patch("backend.config.ROOT_DIR", Path(tmpdir)), \
+                 patch.object(camera, "_set_prop_u32", return_value=edsdk.EDS_ERR_OK) as set_prop, \
+                 patch.object(camera, "_log_applied_config"), \
+                 patch.object(camera, "_log_camera_health"):
+                camera._configure_for_photobooth()
+
+        set_prop.assert_any_call(
+            edsdk.kEdsPropID_AutoPowerOffSetting,
+            edsdk.kEdsAutoPowerOff_Disable,
+        )
+
+    def test_periodic_camera_keepalive_runs_on_edsdk_thread(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._running = True
+        camera._connected = True
+        camera._cfg = {"keepalive_seconds": 15}
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSendCommand.return_value = edsdk.EDS_ERR_OK
+        event_calls = 0
+
+        def get_event():
+            nonlocal event_calls
+            event_calls += 1
+            if event_calls == 2:
+                camera._connected = False
+            return edsdk.EDS_ERR_OK
+
+        camera._sdk.EdsGetEvent.side_effect = get_event
+        with patch.object(edsdk.time, "monotonic", side_effect=[0, 16]), \
+             patch.object(edsdk.time, "sleep"):
+            camera._run_connected()
+
+        camera._sdk.EdsSendCommand.assert_called_once_with(
+            camera._camera,
+            edsdk.kEdsCameraCommand_ExtendShutDownTimer,
+            0,
+        )
+
+    def test_camera_keepalive_interval_is_safely_clamped(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._cfg = {"keepalive_seconds": 0}
+        self.assertEqual(camera._camera_keepalive_seconds(), 15)
+        camera._cfg = {"keepalive_seconds": 9999}
+        self.assertEqual(camera._camera_keepalive_seconds(), 300)
+        camera._cfg = {"keepalive_seconds": "bad"}
+        self.assertEqual(
+            camera._camera_keepalive_seconds(),
+            edsdk.CAMERA_KEEPALIVE_SECONDS,
+        )
+
+    def test_shutdown_warning_extends_timer_and_logs_timer_update(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSetObjectEventHandler.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsSetCameraStateEventHandler.return_value = edsdk.EDS_ERR_OK
+
+        with patch.object(camera, "_extend_shutdown_timer") as extend:
+            camera._register_handlers()
+            camera._state_handler_ref(
+                edsdk.kEdsStateEvent_WillSoonShutDown, 30, None)
+
+        extend.assert_called_once_with("Canon warning, 30s remaining")
+
+    def test_camera_health_values_are_human_readable(self):
+        self.assertEqual(edsdk.Camera._format_battery_level(0xFFFFFFFF), "AC")
+        self.assertEqual(edsdk.Camera._format_auto_power_off(0), "disabled")
+        self.assertEqual(edsdk.Camera._format_temperature_status(0), "normal")
+        self.assertEqual(
+            edsdk.Camera._format_temperature_status(4), "capture_disabled")
+
     def test_initially_missing_camera_is_found_by_automatic_backoff(self):
         camera = edsdk.Camera("fake-edSDK.dll")
         ready = threading.Event()

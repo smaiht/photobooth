@@ -69,6 +69,12 @@
     "focus_delay": 0.4,
     "_focus_delay_comment": "Seconds to hold half-press AF before taking each photo.",
 
+    "disable_auto_power_off": true,
+    "_disable_auto_power_off_comment": "true = force Canon Auto power off to Off whenever an EDSDK session opens.",
+
+    "keepalive_seconds": 60,
+    "_keepalive_seconds_comment": "Seconds between EDSDK shutdown-timer keepalives. Values are clamped to 15-300 seconds.",
+
     "drive_mode": "single",
     "_drive_mode_options": ["single"],
 

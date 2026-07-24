@@ -63,6 +63,8 @@ PROPERTY_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, c
 
 RECONNECT_MIN_SECONDS = 2
 RECONNECT_MAX_SECONDS = 10
+CAMERA_KEEPALIVE_SECONDS = 60.0
+CAMERA_HEALTH_LOG_SECONDS = 10 * 60.0
 
 
 class EDSDKError(Exception):
@@ -209,6 +211,11 @@ class Camera:
 
     def _run_connected(self):
         evf_active = False
+        keepalive_seconds = self._camera_keepalive_seconds()
+        now = time.monotonic()
+        next_keepalive = now + keepalive_seconds
+        next_health_log = now + CAMERA_HEALTH_LOG_SECONDS
+        log.info("Camera keepalive active: every %.0fs", keepalive_seconds)
         while self._running and self._connected:
             _check("EdsGetEvent", self._sdk.EdsGetEvent())
             # The shutdown callback runs synchronously inside EdsGetEvent().
@@ -240,7 +247,41 @@ class Camera:
                 if frame:
                     self._evf_frame_cb(frame)
 
+            now = time.monotonic()
+            if now >= next_keepalive:
+                self._extend_shutdown_timer("periodic keepalive")
+                next_keepalive = now + keepalive_seconds
+            if now >= next_health_log:
+                self._log_camera_health()
+                next_health_log = now + CAMERA_HEALTH_LOG_SECONDS
+
             time.sleep(0.03)
+
+    def _camera_keepalive_seconds(self) -> float:
+        try:
+            configured = float(
+                self._cfg.get("keepalive_seconds", CAMERA_KEEPALIVE_SECONDS))
+        except (TypeError, ValueError):
+            log.warning(
+                "Invalid camera keepalive_seconds=%r; using %.0fs",
+                self._cfg.get("keepalive_seconds"), CAMERA_KEEPALIVE_SECONDS,
+            )
+            configured = CAMERA_KEEPALIVE_SECONDS
+        # Avoid hammering EDSDK if a bad value reaches the local config.
+        return min(max(configured, 15.0), 5 * 60.0)
+
+    def _extend_shutdown_timer(self, reason: str) -> int:
+        err = self._sdk.EdsSendCommand(
+            self._camera, kEdsCameraCommand_ExtendShutDownTimer, 0)
+        if err == EDS_ERR_OK:
+            if reason != "periodic keepalive":
+                log.info("Camera shutdown timer extended: %s", reason)
+        else:
+            log.warning(
+                "Camera keepalive failed (%s): 0x%08X %s",
+                reason, err, edsdk_error_name(err),
+            )
+        return err
 
     def _discard_commands(self):
         discarded = 0
@@ -364,7 +405,9 @@ class Camera:
     def _enable_limited_properties(self):
         """Enable EOS R limited properties that Canon requires before OpenSession."""
         for prop_id, key in [
+            (kEdsPropID_TempStatus, 0x14840DF1),
             (kEdsPropID_ContinuousAfMode, 0x32F87FF6),
+            (kEdsPropID_AutoPowerOffSetting, 0x1C31565B),
             (kEdsPropID_AFEyeDetect, 0x7C89405C),
             (kEdsPropID_Evf_ViewType, 0x7CBD2BB7),
             (kEdsPropID_ShutterType, 0x4C157D57),
@@ -388,6 +431,21 @@ class Camera:
             cfg = {}
             log.warning("config_camera.json not found, using defaults")
         self._cfg = cfg
+
+        # This is the primary protection for an unattended booth. The
+        # periodic ExtendShutDownTimer command remains as a fallback for Canon
+        # models/firmware that do not persist this setting reliably.
+        if cfg.get("disable_auto_power_off", True):
+            err = self._set_prop_u32(
+                kEdsPropID_AutoPowerOffSetting, kEdsAutoPowerOff_Disable)
+            if err == EDS_ERR_OK:
+                log.info("Camera auto power-off disabled")
+            else:
+                log.warning(
+                    "Camera auto power-off could not be disabled; "
+                    "periodic keepalive will remain active")
+        else:
+            log.warning("Camera auto power-off protection disabled by config")
 
         # Save photos to host PC
         self._set_prop_u32(kEdsPropID_SaveTo, kEdsSaveTo_Host)
@@ -479,6 +537,7 @@ class Camera:
 
         log.info("Camera configured from config_camera.json")
         self._log_applied_config()
+        self._log_camera_health()
 
     def _set_prop_u32(self, prop_id: int, value: int):
         val = EdsUInt32(value)
@@ -523,6 +582,53 @@ class Camera:
                 applied.append(f"{label}={self._name_from_map(mapping, value)}")
         log.info("Camera applied config: " + ", ".join(applied))
 
+    @staticmethod
+    def _format_battery_level(value: int | None) -> str:
+        if value is None:
+            return "unavailable"
+        if value == 0xFFFFFFFF:
+            return "AC"
+        if value == 0xFFFFFFFE:
+            return "unknown"
+        return str(value)
+
+    @staticmethod
+    def _format_auto_power_off(value: int | None) -> str:
+        if value is None:
+            return "unavailable"
+        if value == kEdsAutoPowerOff_Disable:
+            return "disabled"
+        if value == 0xFFFFFFFF:
+            return "shutdown"
+        return f"{value}s"
+
+    @staticmethod
+    def _format_temperature_status(value: int | None) -> str:
+        if value is None:
+            return "unavailable"
+        if (value & 0xFFFF0000) == 0x00020000:
+            return f"movie_restriction(0x{value:08X})"
+        names = {
+            0: "normal",
+            1: "warning",
+            2: "framerate_down",
+            3: "liveview_disabled",
+            4: "capture_disabled",
+            5: "still_quality_warning",
+        }
+        return names.get(value, f"unknown(0x{value:08X})")
+
+    def _log_camera_health(self):
+        battery = self._get_prop_u32(kEdsPropID_BatteryLevel)
+        auto_power_off = self._get_prop_u32(kEdsPropID_AutoPowerOffSetting)
+        temperature = self._get_prop_u32(kEdsPropID_TempStatus)
+        log.info(
+            "Camera health: power=%s, auto_power_off=%s, temperature=%s",
+            self._format_battery_level(battery),
+            self._format_auto_power_off(auto_power_off),
+            self._format_temperature_status(temperature),
+        )
+
     def _register_handlers(self):
         def on_object_event(event, ref, context):
             log.info(f"ObjectEvent: 0x{event:08X}")
@@ -536,8 +642,10 @@ class Camera:
         def on_state_event(event, data, context):
             log.info(f"StateEvent: 0x{event:08X} data={data}")
             if event == kEdsStateEvent_WillSoonShutDown:
-                self._sdk.EdsSendCommand(
-                    self._camera, kEdsCameraCommand_ExtendShutDownTimer, 0)
+                self._extend_shutdown_timer(
+                    f"Canon warning, {data}s remaining")
+            elif event == kEdsStateEvent_ShutDownTimerUpdate:
+                log.info("Camera shutdown timer updated: %ss remaining", data)
             elif event == kEdsStateEvent_CaptureError:
                 log.warning(f"CaptureError: 0x{data:08X} {edsdk_error_name(data)}")
             elif event == kEdsStateEvent_Shutdown:

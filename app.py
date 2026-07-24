@@ -132,6 +132,49 @@ _APP_DIR = Path(__file__).resolve().parent
 _HASH_FILE = str(_APP_DIR / ".update_hash")
 _UPDATE_MARKER = _APP_DIR / ".update_in_progress.json"
 
+_ES_SYSTEM_REQUIRED = 0x00000001
+_ES_DISPLAY_REQUIRED = 0x00000002
+_ES_CONTINUOUS = 0x80000000
+
+
+def _prevent_windows_sleep() -> bool:
+    """Keep an active booth and its display awake until this process exits."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        set_execution_state = ctypes.windll.kernel32.SetThreadExecutionState
+        set_execution_state.argtypes = (wintypes.DWORD,)
+        set_execution_state.restype = wintypes.DWORD
+        flags = _ES_CONTINUOUS | _ES_SYSTEM_REQUIRED | _ES_DISPLAY_REQUIRED
+        if not set_execution_state(flags):
+            log.warning("Windows sleep prevention could not be enabled")
+            return False
+        log.info("Windows system sleep and display timeout prevention enabled")
+        return True
+    except Exception:
+        log.exception("Windows sleep prevention failed")
+        return False
+
+
+def _restore_windows_sleep(enabled: bool) -> None:
+    """Release the process-scoped execution-state request on a normal exit."""
+    if not enabled or sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        set_execution_state = ctypes.windll.kernel32.SetThreadExecutionState
+        set_execution_state.argtypes = (wintypes.DWORD,)
+        set_execution_state.restype = wintypes.DWORD
+        set_execution_state(_ES_CONTINUOUS)
+        log.info("Windows sleep prevention released")
+    except Exception:
+        log.exception("Windows sleep prevention release failed")
+
 
 def _windows_process_is_running(pid: int) -> bool:
     """Return whether a Windows process still exists without opening a shell."""
@@ -484,7 +527,11 @@ $relaunchArgumentLine = '"' + $appScript + '"'
 if ($Mode -eq "dev") {
     $relaunchArgumentLine += " --dev"
 }
-$relaunchArgumentLine += " --skip-update-once"
+if ($installed) {
+    $relaunchArgumentLine += " --post-installer"
+} else {
+    $relaunchArgumentLine += " --skip-update-once"
+}
 
 try {
     $launched = Start-Process -FilePath $PythonExe `
@@ -503,8 +550,8 @@ try {
 } catch {
     Write-UpdateLog ("Application relaunch failed: " + $_.Exception.Message) "ERROR"
 } finally {
-    # The recovery launch carries --skip-update-once, so it may start while
-    # this marker still protects the copy/cleanup window from manual launches.
+    # An internal post-installer/recovery launch may start while this marker
+    # still protects the copy/cleanup window from unrelated manual launches.
     Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
@@ -683,12 +730,16 @@ def auto_update():
 
 def main():
     skip_update_once = "--skip-update-once" in sys.argv
-    if skip_update_once:
-        # Internal recovery flag: never propagate it to later normal restarts.
-        sys.argv[:] = [arg for arg in sys.argv if arg != "--skip-update-once"]
+    post_installer = "--post-installer" in sys.argv
+    if skip_update_once or post_installer:
+        # Internal one-shot flags: never propagate them to later restarts.
+        sys.argv[:] = [
+            arg for arg in sys.argv
+            if arg not in {"--skip-update-once", "--post-installer"}
+        ]
 
     installer_active = _external_update_active()
-    if installer_active and not skip_update_once:
+    if installer_active and not (skip_update_once or post_installer):
         # Do not load FastAPI or EDSDK while PowerShell is replacing files. The
         # installer waits for this short-lived Python process before copying.
         log.info("Disk update: installer is active; this extra launch will exit")
@@ -705,6 +756,7 @@ def main():
         _cleanup_stale_update_artifacts()
 
     dev = "--dev" in sys.argv
+    sleep_prevention_enabled = _prevent_windows_sleep()
     # Load .env
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(env_path):
@@ -742,8 +794,8 @@ def main():
     def update_then_start():
         # Auto-update while Loading is shown
         if skip_update_once:
-            log.info("Disk update: post-installer launch; one check skipped")
-            _ui_log("Запуск приложения после установщика")
+            log.info("Disk update: installer recovery launch; one check skipped")
+            _ui_log("Восстановление после ошибки обновления")
         else:
             try:
                 auto_update()
@@ -759,7 +811,10 @@ def main():
     # Wait for server in background, then load app
     threading.Thread(target=wait_and_load, args=(window,), daemon=True).start()
 
-    webview.start()
+    try:
+        webview.start()
+    finally:
+        _restore_windows_sleep(sleep_prevention_enabled)
 
 
 if __name__ == "__main__":
