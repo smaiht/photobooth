@@ -24,6 +24,7 @@ from .config import (
     EDSDK_DLL,
     FRONTEND_DIR,
     PHOTOS_DIR,
+    PRINT_JOBS_DIR,
     ROOT_DIR,
     TEMPLATES_DIR,
     load_event_config,
@@ -729,7 +730,7 @@ async def handle_disk_command(command: dict) -> dict:
             artifact_path, data.get("source_size"),
         )
         keep_print_files = bool(CONFIG.get("keep_custom_print_files", True))
-        job_dir = PHOTOS_DIR / "print_jobs" / job_id
+        job_dir = PRINT_JOBS_DIR / job_id
         original_path: Path | None = None
         output_path = job_dir / "print_4x6.jpg"
         try:
@@ -803,7 +804,7 @@ async def handle_disk_command(command: dict) -> dict:
                 f"Фото от {sender_label} принято: ориентация {orientation}, "
                 "4×6 без обрезки; поставлено в очередь печати"
                 + (
-                    f"; локальные файлы: photos/print_jobs/{job_id}"
+                    f"; локальные файлы: photos_print_jobs/{job_id}"
                     if keep_print_files else ""
                 )
             ),

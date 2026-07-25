@@ -158,7 +158,8 @@ print handler, а тот — установленному DNP-драйверу. 
 очередь, а две полоски нужно разрезать вручную.
 
 Telegram print jobs сохраняют исходник и подготовленный горизонтальный JPEG в
-`photos/print_jobs/<job_id>/original.<ext>` и `print_4x6.jpg`. Параметр
+`photos_print_jobs/<job_id>/original.<ext>` и `print_4x6.jpg`. Эта runtime-папка
+лежит рядом с `photos/`, добавлена в `.gitignore` и не попадает в релизы. Параметр
 `keep_custom_print_files` управляет их хранением после попытки печати. При
 `true` оба файла остаются для проверки; при `false` они удаляются после успеха
 или ошибки драйвера.
@@ -266,6 +267,7 @@ execution-state request; после выхода приложения запро
     ...
     20260722_143205_<session>_video.mp4
   /<event>_by_sessions/
+    /0000_print_jobs/
     /2026-07-22_14-32-05_<session>/
       photo_01.jpg ... photo_04.jpg
       video.mp4

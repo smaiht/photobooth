@@ -223,7 +223,7 @@ def _validate_print_artifact_path(
             or any(ord(char) < 32 for char in event_name)
             or len(event_name) > 160):
         raise ValueError("invalid print artifact event")
-    prefix = f"/{event_name}_by_sessions/___print_jobs/"
+    prefix = f"/{event_name}_by_sessions/0000_print_jobs/"
     if (not isinstance(remote_path, str)
             or not remote_path.startswith(prefix)
             or "/" in remote_path[len(prefix):]

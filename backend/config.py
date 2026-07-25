@@ -12,6 +12,9 @@ EDSDK_DLL = ROOT_DIR / "EDSDK_Win" / "EDSDK_64" / "Dll" / "EDSDK.dll"
 PHOTOS_DIR = ROOT_DIR / "photos"
 PHOTOS_DIR.mkdir(exist_ok=True)
 
+PRINT_JOBS_DIR = ROOT_DIR / "photos_print_jobs"
+PRINT_JOBS_DIR.mkdir(exist_ok=True)
+
 CAMERA_CONFIG_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _TRUE_VALUES = {"1", "true", "yes", "on", "да", "вкл"}
 _FALSE_VALUES = {"0", "false", "no", "off", "нет", "выкл"}

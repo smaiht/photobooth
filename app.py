@@ -362,7 +362,8 @@ def _should_skip(name: str) -> bool:
     # Runtime state belongs to this installation. config_app.json and
     # config_camera.json intentionally come from the release for now.
     if top in {
-        ".git", ".env", ".ENV", "photos", "yadisk_queue.json", "photobooth.log",
+        ".git", ".env", ".ENV", "photos", "photos_print_jobs",
+        "yadisk_queue.json", "photobooth.log",
     } or top.startswith("photobooth.log."):
         return True
     return False
@@ -522,7 +523,7 @@ try {
     }
     Write-UpdateLog "Prepared full release found"
     $preserve = @(
-        ".git", ".env", ".ENV", "photos", "yadisk_queue.json",
+        ".git", ".env", ".ENV", "photos", "photos_print_jobs", "yadisk_queue.json",
         "photobooth.log", ".update_hash"
     )
     foreach ($name in $preserve) {

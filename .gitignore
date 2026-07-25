@@ -2,6 +2,7 @@ python/
 __pycache__/
 *.pyc
 photos/
+photos_print_jobs/
 .DS_Store
 .env
 .stop
