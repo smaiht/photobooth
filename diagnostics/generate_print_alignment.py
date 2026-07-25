@@ -122,9 +122,10 @@ def main() -> None:
         )
     draw.text(
         (1900, 1970),
-        "WHITE DASH = current template margin: 61 px\n"
+        "EXPECTED BORDERLESS TRIM: ~48 px L/R, ~47 px T/B\n"
+        "WHITE DASH = template raster margin: 61 px (~13 px survives)\n"
         "BLACK DASH = driver Border=Enable inset: 120 px\n"
-        "With Border=Disable the full colored edge should be addressable.",
+        "Border=Disable removes that border, not the physical trim.",
         font=small_font,
         fill="black",
         spacing=16,

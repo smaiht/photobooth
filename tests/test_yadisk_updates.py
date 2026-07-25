@@ -118,7 +118,7 @@ class DiskUpdateDownloadTests(unittest.TestCase):
 
 
 class UpdateExtractionTests(unittest.TestCase):
-    def test_extracts_code_and_preserves_local_state(self):
+    def test_extracts_code_and_replaces_repository_config(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             archive = root / "update.zip"
@@ -133,7 +133,7 @@ class UpdateExtractionTests(unittest.TestCase):
             app._extract_update(str(archive), str(target))
 
             self.assertEqual((target / "backend/main.py").read_text(), "updated")
-            self.assertEqual((target / "config_app.json").read_text(), "local")
+            self.assertEqual((target / "config_app.json").read_text(), "release")
             self.assertFalse((target / "python/runtime.dll").exists())
 
     def test_rejects_path_traversal(self):
@@ -204,7 +204,7 @@ class FullUpdateSchedulingTests(unittest.TestCase):
             self.assertIn("Wait-Process -Id $ParentPid", script)
             self.assertNotIn("Expand-Archive", script)
             self.assertIn('Write-UpdateLog "Prepared full release found"', script)
-            self.assertIn('"config_app.json"', script)
+            self.assertNotIn('"config_app.json"', script)
             self.assertIn('".git"', script)
             self.assertIn("Get-PhotoboothProcesses", script)
             self.assertIn("robocopy.exe", script)

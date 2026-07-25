@@ -4,6 +4,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: photobooth-release-main
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
@@ -11,6 +15,23 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check deployment secrets
+        shell: pwsh
+        env:
+          YADISK_TOKEN: ${{ secrets.YADISK_TOKEN }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_ADMIN_ID: ${{ secrets.TG_ADMIN_ID }}
+        run: |
+          $missing = @()
+          foreach ($name in @("YADISK_TOKEN", "TG_BOT_TOKEN", "TG_ADMIN_ID")) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              $missing += $name
+            }
+          }
+          if ($missing.Count -gt 0) {
+            throw "Missing required GitHub Secrets: $($missing -join ', ')"
+          }
 
       - uses: actions/setup-python@v5
         with:
@@ -39,6 +60,10 @@ jobs:
           python/python.exe -m pip install -r requirements.txt --no-warn-script-location
           Remove-Item get-pip.py
 
+      - name: Run tests
+        shell: pwsh
+        run: python/python.exe -m unittest discover -s tests -v
+
       # ZIP the entire repo (with .git and python/)
       - name: Create ZIP
         shell: pwsh
@@ -59,3 +84,62 @@ jobs:
           body: "Auto-built from main branch"
           prerelease: true
           files: photobooth-win.zip
+
+      - name: Publish release to Yandex.Disk
+        id: publish
+        timeout-minutes: 45
+        shell: pwsh
+        env:
+          YADISK_TOKEN: ${{ secrets.YADISK_TOKEN }}
+          RELEASE_URL: https://github.com/${{ github.repository }}/releases/download/latest/photobooth-win.zip
+        run: |
+          python/python.exe .github/scripts/publish_release.py `
+            --file photobooth-win.zip `
+            --source-url $env:RELEASE_URL `
+            --folder photobooth_system/updates
+
+      - name: Notify Telegram about successful release
+        continue-on-error: true
+        shell: pwsh
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_ADMIN_ID: ${{ secrets.TG_ADMIN_ID }}
+          RELEASE_SHA: ${{ steps.publish.outputs.sha256 }}
+          RELEASE_SIZE: ${{ steps.publish.outputs.size_mib }}
+          PUBLISH_METHOD: ${{ steps.publish.outputs.method }}
+        run: |
+          $shortSha = $env:RELEASE_SHA.Substring(0, 16)
+          $method = if ($env:PUBLISH_METHOD -eq "server-side-import") {
+            "импорт по GitHub-ссылке"
+          } else {
+            "прямая загрузка с GitHub Actions"
+          }
+          $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          $text = "✅ Новый релиз фотобудки опубликован на Яндекс.Диск`n" +
+                  "ZIP: $env:RELEASE_SIZE MiB`n" +
+                  "SHA: $shortSha`n" +
+                  "Способ: $method`n`n" +
+                  "Для установки отправь /restart`n$runUrl"
+          $body = @{ chat_id = $env:TG_ADMIN_ID; text = $text } | ConvertTo-Json -Compress
+          Invoke-RestMethod `
+            -Uri "https://api.telegram.org/bot$env:TG_BOT_TOKEN/sendMessage" `
+            -Method Post `
+            -ContentType "application/json; charset=utf-8" `
+            -Body $body
+
+      - name: Notify Telegram about failed release
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_ADMIN_ID: ${{ secrets.TG_ADMIN_ID }}
+        run: |
+          $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          $text = "❌ Сборка или публикация релиза фотобудки не удалась.`n$runUrl"
+          $body = @{ chat_id = $env:TG_ADMIN_ID; text = $text } | ConvertTo-Json -Compress
+          Invoke-RestMethod `
+            -Uri "https://api.telegram.org/bot$env:TG_BOT_TOKEN/sendMessage" `
+            -Method Post `
+            -ContentType "application/json; charset=utf-8" `
+            -Body $body
