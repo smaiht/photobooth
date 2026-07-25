@@ -1,17 +1,17 @@
 import asyncio
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from PIL import Image, ImageChops
 
 from backend.composer import compose, generate_template_previews
 from backend import main
-from backend.printer import _prepare_for_page, _printer_name, _set_devmode
+from backend.printer import _print_driver, _printer_name
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -279,71 +279,49 @@ class FrontendPreviewTests(unittest.TestCase):
         self.assertIn('processing: "processing"', script)
 
 
-class PrinterPreparationTests(unittest.TestCase):
-    def test_rotates_landscape_sheet_for_portrait_driver(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            source = Path(tmpdir) / "sheet.jpg"
-            Image.new("RGB", (3688, 2480), "red").save(source)
-            prepared = _prepare_for_page(str(source), (2480, 3688), (600, 600))
-            try:
-                self.assertEqual(prepared.size, (2480, 3688))
-            finally:
-                prepared.close()
-
-    def test_asymmetric_dpi_uses_physical_page_orientation(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            source = Path(tmpdir) / "sheet.png"
-            image = Image.new("RGB", (1800, 1200), "red")
-            image.paste("blue", (900, 0, 1800, 1200))
-            image.save(source)
-            prepared = _prepare_for_page(str(source), (1844, 2480), (300, 600))
-            try:
-                self.assertEqual(prepared.size, (1844, 2480))
-                self.assertGreater(prepared.getpixel((200, 1240))[0], 200)
-                self.assertGreater(prepared.getpixel((1644, 1240))[2], 200)
-            finally:
-                prepared.close()
-
-
-class DevModeTests(unittest.TestCase):
-    @staticmethod
-    def _constants():
-        names = [
-            "DM_PAPERSIZE", "DM_ORIENTATION", "DM_COPIES", "DM_PRINTQUALITY",
-            "DM_YRESOLUTION", "DM_COLOR", "DM_SCALE", "DM_ICMMETHOD",
-            "DM_ICMINTENT",
-        ]
-        values = {name: 1 << index for index, name in enumerate(names)}
-        values.update({
-            "DMORIENT_PORTRAIT": 1,
-            "DMORIENT_LANDSCAPE": 2,
-            "DMCOLOR_COLOR": 2,
-            "DMICMMETHOD_SYSTEM": 2,
-            "DMICM_CONTRAST": 2,
-        })
-        return SimpleNamespace(**values)
-
-    def test_sets_dnp_high_quality_4x6(self):
-        devmode = SimpleNamespace(Fields=0)
-        constants = self._constants()
-        _set_devmode(devmode, {
-            "print_dpi": 600,
-            "print_paper_size": 202,
-            "print_orientation": "portrait",
-            "print_copies": 1,
-        }, constants)
-
-        self.assertEqual(devmode.PaperSize, 202)
-        self.assertEqual(devmode.Orientation, constants.DMORIENT_PORTRAIT)
-        self.assertEqual(devmode.PrintQuality, 600)
-        self.assertEqual(devmode.YResolution, 600)
-        self.assertEqual(devmode.Copies, 1)
-        self.assertEqual(devmode.Scale, 100)
-
+class PrinterQueueTests(unittest.TestCase):
     def test_selects_optional_strips_queue(self):
         config = {"printer_name": "DNP Cards", "printer_name_strips": "DNP Strips"}
         self.assertEqual(_printer_name(config, "grid"), "DNP Cards")
         self.assertEqual(_printer_name(config, "strips"), "DNP Strips")
+
+    def test_submits_jpeg_through_windows_image_handler(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            system32 = root / "System32"
+            system32.mkdir()
+            (system32 / "rundll32.exe").write_bytes(b"exe")
+            (system32 / "shimgvw.dll").write_bytes(b"dll")
+            source = root / "print grid.jpg"
+            Image.new("RGB", (60, 40), "red").save(source)
+
+            win32print = Mock()
+            win32print.OpenPrinter.return_value = "handle"
+            win32print.GetPrinter.return_value = {
+                "pDriverName": "DNP DS-RX1 Driver",
+                "pPortName": "USB001",
+            }
+            completed = Mock(returncode=0, stdout="", stderr="")
+            with patch.dict(sys.modules, {"win32print": win32print}), \
+                 patch.dict(os.environ, {"SystemRoot": str(root)}), \
+                 patch("backend.printer.subprocess.run", return_value=completed) as run:
+                _print_driver(str(source), {"printer_name": "DS-RX1"}, "grid")
+
+            win32print.OpenPrinter.assert_called_once_with("DS-RX1")
+            win32print.ClosePrinter.assert_called_once_with("handle")
+            command = run.call_args.args[0]
+            self.assertEqual(command[0], str(system32 / "rundll32.exe"))
+            self.assertEqual(
+                command[1], f"{system32 / 'shimgvw.dll'},ImageView_PrintTo")
+            self.assertEqual(
+                command[2:], [
+                    "/pt",
+                    str(source.resolve()),
+                    "DS-RX1",
+                    "DNP DS-RX1 Driver",
+                    "USB001",
+                ],
+            )
 
 
 class SessionGuardTests(unittest.IsolatedAsyncioTestCase):
