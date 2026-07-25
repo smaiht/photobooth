@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import time
@@ -705,6 +706,57 @@ async def handle_disk_command(command: dict) -> dict:
     cmd = command["command"]
     data = command.get("data")
     command_id = command["command_id"]
+
+    if cmd == "print_image":
+        if not CONFIG.get("print_enabled"):
+            return {"status": "error", "message": "Печать на фотобудке отключена"}
+        if not isinstance(data, dict):
+            return {"status": "error", "message": "Задание печати не содержит данных"}
+
+        artifact_path = data.get("artifact_path")
+        event_folder = data.get("event_folder")
+        job_id = str(data.get("job_id") or "")
+        if not re.fullmatch(r"[a-f0-9]{32}", job_id):
+            return {"status": "error", "message": "Некорректный ID задания печати"}
+
+        try:
+            payload = await yadisk_control.download_print_artifact(
+                artifact_path, event_folder)
+            template_dir = TEMPLATES_DIR / CONFIG["template_pack"]
+            template_config = json.loads(
+                (template_dir / "config.json").read_text(encoding="utf-8"))
+            raw_print_size = template_config.get("print_size", [3688, 2480])
+            print_size = tuple(int(value) for value in raw_print_size)
+            output_path = PHOTOS_DIR / ".print_queue" / f"{job_id}.jpg"
+            from .printer import prepare_custom_print
+            orientation = await asyncio.to_thread(
+                prepare_custom_print,
+                payload,
+                output_path,
+                print_size,
+                int(CONFIG.get("print_dpi", 600)),
+            )
+        except Exception as exc:
+            return {"status": "error", "message": f"Фото не поставлено на печать: {exc}"}
+
+        username = str(data.get("username") or "").strip()
+        sender_name = str(data.get("sender_name") or "").strip()
+        sender_id = data.get("sender_id")
+        sender_label = f"@{username}" if username else sender_name
+        sender_label = sender_label or str(sender_id or "неизвестный пользователь")
+
+        async def enqueue_custom_print_after_ack() -> None:
+            from .printer import enqueue_print
+            await enqueue_print(str(output_path), CONFIG, delete_after=True)
+
+        return {
+            "status": "ok",
+            "message": (
+                f"Фото от {sender_label} принято: ориентация {orientation}, "
+                "4×6 без обрезки; поставлено в очередь печати"
+            ),
+            "_post_action": enqueue_custom_print_after_ack,
+        }
 
     if cmd == "restart":
         if STATE not in ("idle", "no_camera", "camera_searching"):

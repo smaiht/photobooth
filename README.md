@@ -260,12 +260,14 @@ QR.
 5. Последним загружается типизированное `session_ready` в стабильный
    `photobooth_system/control/to_vps`; оно содержит точный `event_folder`.
 6. VPS скачивает плоские копии, проверяет их размер и отправляет в Telegram.
-7. После успеха VPS переносит сообщение в `control/done/to_vps`; медиа не удаляются.
+7. После успешной доставки VPS удаляет служебный JSON из `control/to_vps`;
+   медиа не удаляются.
 
 Приватная шина не зависит от активного event: будка раз в 10 секунд поллит
 только `control/to_booth`, а VPS — только `control/to_vps`. В `to_vps` вместе
 лежат `session_ready` и `command_response`, которые VPS разводит по независимым
-asyncio workers. Обработанные сообщения архивируются в `control/done`.
+asyncio workers. После успешной обработки служебные JSON удаляются, а результат
+остаётся в логах и постоянных медиа.
 Логи используют `control/logs`, обновления — `photobooth_system/updates`.
 
 ## Telegram-команды

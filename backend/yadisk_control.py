@@ -23,7 +23,11 @@ PAGE_SIZE = 100
 # 1 MB segment to be delivered immediately after upgrading the rotation size.
 MAX_LOG_ARTIFACT_SIZE = 2 * 1024 * 1024
 MAX_CONFIG_EXPORT_SIZE = 512 * 1024
+MAX_PRINT_ARTIFACT_SIZE = 20 * 1024 * 1024
 COMMAND_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+PRINT_ARTIFACT_NAME_RE = re.compile(
+    r"^[0-9]{1,20}_[0-9]{8}T[0-9]{6}Z_[a-f0-9]{32}"
+    r"\.(?:jpe?g|png|webp|bmp|tiff?)$")
 
 _session: aiohttp.ClientSession | None = None
 _transfer_session: aiohttp.ClientSession | None = None
@@ -104,8 +108,7 @@ async def _connect() -> bool:
         for part in _root.strip("/").split("/"):
             current += "/" + part
             await _ensure_directory(current)
-        for suffix in ("to_booth", "to_vps", "done", "done/to_booth",
-                       "done/to_vps", "logs", "configs"):
+        for suffix in ("to_booth", "to_vps", "logs", "configs"):
             await _ensure_directory(f"{_root}/{suffix}")
         return True
     except Exception as exc:
@@ -210,6 +213,37 @@ async def upload_config_export(command_id: str, payload: bytes) -> str:
     return remote_path
 
 
+def _validate_print_artifact_path(
+    remote_path: str,
+    event_folder: str,
+) -> str:
+    event_name = str(event_folder or "").strip().strip("/")
+    if (not event_name or event_name in (".", "..")
+            or "/" in event_name or "\\" in event_name
+            or any(ord(char) < 32 for char in event_name)
+            or len(event_name) > 160):
+        raise ValueError("invalid print artifact event")
+    prefix = f"/{event_name}_by_sessions/___print_jobs/"
+    if (not isinstance(remote_path, str)
+            or not remote_path.startswith(prefix)
+            or "/" in remote_path[len(prefix):]
+            or not PRINT_ARTIFACT_NAME_RE.fullmatch(remote_path[len(prefix):])):
+        raise ValueError("invalid print artifact path")
+    return remote_path
+
+
+async def download_print_artifact(
+    remote_path: str,
+    event_folder: str,
+) -> bytes:
+    if not await _connect():
+        raise RuntimeError("Yandex.Disk control is unavailable")
+    return await _download_bytes(
+        _validate_print_artifact_path(remote_path, event_folder),
+        MAX_PRINT_ARTIFACT_SIZE,
+    )
+
+
 async def _wait_operation(href: str) -> bool:
     for _ in range(30):
         async with _session.get(href) as response:
@@ -224,19 +258,21 @@ async def _wait_operation(href: str) -> bool:
     return False
 
 
-async def _move_done(filename: str) -> bool:
-    params = {
-        "from": f"{_root}/to_booth/{filename}",
-        "path": f"{_root}/done/to_booth/{filename}",
-        "overwrite": "true",
-    }
-    async with _session.post(f"{API}/resources/move", params=params) as response:
-        if response.status == 201:
+async def _delete_command(filename: str) -> bool:
+    path = f"{_root}/to_booth/{filename}"
+    async with _session.delete(
+        f"{API}/resources",
+        params={"path": path, "permanently": "true"},
+    ) as response:
+        if response.status in (204, 404):
             return True
         if response.status == 202:
             href = (await response.json()).get("href")
             return bool(href and await _wait_operation(href))
-        log.warning(f"Control: move command: {response.status} {await response.text()}")
+        log.warning(
+            "Control: delete command %s: %s %s",
+            filename, response.status, await response.text(),
+        )
         return False
 
 
@@ -269,7 +305,7 @@ async def _process_command(
         # A downloaded artifact that violates the size limit is permanently
         # invalid and must not block the queue forever.
         log.warning(f"Control: invalid command {filename}: {exc}")
-        return await _move_done(filename)
+        return await _delete_command(filename)
     except Exception as exc:
         # Network/download failures are transient. Keep the command in
         # to_booth so the next polling cycle retries it.
@@ -281,7 +317,7 @@ async def _process_command(
             json.loads(body.decode("utf-8")), filename)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         log.warning(f"Control: invalid command {filename}: {exc}")
-        return await _move_done(filename)
+        return await _delete_command(filename)
 
     try:
         result = await handler(command)
@@ -295,7 +331,7 @@ async def _process_command(
     payload = json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     await _upload_bytes(
         payload, f"{_root}/to_vps/response_{command['command_id']}.json")
-    if not await _move_done(filename):
+    if not await _delete_command(filename):
         return False
     log.info(f"Control: completed {command['command']} ({command['command_id']})")
     if post_action:

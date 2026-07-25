@@ -5,6 +5,7 @@ context.  No shell association or hot-folder watcher is involved.
 """
 
 import asyncio
+import io
 import logging
 from collections import deque
 from pathlib import Path
@@ -15,14 +16,102 @@ log = logging.getLogger(__name__)
 
 _print_queue: deque[dict] = deque()
 _printing = False
+DEFAULT_CUSTOM_PRINT_SIZE = (3688, 2480)
+MAX_CUSTOM_PRINT_PIXELS = 100_000_000
 
 
-async def enqueue_print(image_path: str, config: dict, template_name: str = ""):
+def prepare_custom_print(
+    payload: bytes,
+    output_path: str | Path,
+    print_size: tuple[int, int] = DEFAULT_CUSTOM_PRINT_SIZE,
+    dpi: int = 600,
+) -> str:
+    """Render one arbitrary image onto a horizontal 4x6 page without cropping."""
+    if not isinstance(payload, bytes) or not payload:
+        raise ValueError("empty print image")
+    if (len(print_size) != 2
+            or not all(isinstance(value, int) and value > 0 for value in print_size)):
+        raise ValueError("invalid custom print size")
+
+    with Image.open(io.BytesIO(payload)) as source:
+        if source.width * source.height > MAX_CUSTOM_PRINT_PIXELS:
+            raise ValueError("изображение слишком большое: максимум 100 Мп")
+        oriented = ImageOps.exif_transpose(source)
+        try:
+            if oriented.mode in ("RGBA", "LA") or "transparency" in oriented.info:
+                rgba = oriented.convert("RGBA")
+                image = Image.new("RGB", rgba.size, "white")
+                image.paste(rgba, mask=rgba.getchannel("A"))
+                rgba.close()
+            else:
+                image = oriented.convert("RGB")
+        finally:
+            if oriented is not source:
+                oriented.close()
+
+    source_size = image.size
+    landscape = image.width > image.height
+    if not landscape:
+        rotated = image.transpose(Image.Transpose.ROTATE_90)
+        image.close()
+        image = rotated
+
+    long_side = max(print_size)
+    short_side = min(print_size)
+    canvas_size = (long_side, short_side)
+    canvas = Image.new("RGB", canvas_size, "white")
+    try:
+        scale = min(canvas.width / image.width, canvas.height / image.height)
+        fitted_size = (
+            max(1, round(image.width * scale)),
+            max(1, round(image.height * scale)),
+        )
+        if fitted_size != image.size:
+            fitted = image.resize(fitted_size, Image.Resampling.LANCZOS)
+            image.close()
+            image = fitted
+        x = (canvas.width - image.width) // 2
+        y = (canvas.height - image.height) // 2
+        canvas.paste(image, (x, y))
+
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(destination.name + ".tmp")
+        canvas.save(
+            temporary,
+            "JPEG",
+            quality=95,
+            subsampling=0,
+            dpi=(int(dpi), int(dpi)),
+        )
+        temporary.replace(destination)
+        log.info(
+            "Custom print prepared: source=%sx%s orientation=%s rotated_ccw=%s "
+            "output=%sx%s path=%s",
+            source_size[0], source_size[1],
+            "landscape" if landscape else "portrait",
+            not landscape,
+            canvas.width, canvas.height,
+            destination,
+        )
+    finally:
+        image.close()
+        canvas.close()
+    return "горизонтальная" if landscape else "вертикальная"
+
+
+async def enqueue_print(
+    image_path: str,
+    config: dict,
+    template_name: str = "",
+    delete_after: bool = False,
+):
     """Add one print job to the serial printer queue."""
     _print_queue.append({
         "path": image_path,
         "config": dict(config),
         "template": template_name,
+        "delete_after": bool(delete_after),
     })
     asyncio.create_task(_process_queue())
 
@@ -45,6 +134,12 @@ async def _process_queue():
             log.info(f"Printed: {job['path']}")
         except Exception as exc:
             log.error(f"Print failed: {exc}")
+        finally:
+            if job["delete_after"]:
+                try:
+                    Path(job["path"]).unlink(missing_ok=True)
+                except OSError as exc:
+                    log.warning("Could not remove custom print cache %s: %s", job["path"], exc)
         _printing = False
 
 

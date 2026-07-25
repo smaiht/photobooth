@@ -48,7 +48,7 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(remote_path, f"/control/configs/{command_id}.txt")
         upload.assert_awaited_once_with(b"configs", remote_path)
 
-    async def test_writes_response_and_moves_done_before_restart(self):
+    async def test_writes_response_and_deletes_command_before_restart(self):
         command_id = "a" * 32
         body = json.dumps({
             "schema_version": 2,
@@ -75,8 +75,8 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response["message_type"], "command_response")
             self.assertEqual(path, f"/control/to_vps/response_{command_id}.json")
 
-        async def move(filename):
-            calls.append("done")
+        async def delete(filename):
+            calls.append("delete")
             return True
 
         item = {
@@ -86,11 +86,11 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(yadisk_control, "_root", "/control"), \
              patch("backend.yadisk_control._download_bytes", AsyncMock(return_value=body)), \
              patch("backend.yadisk_control._upload_bytes", side_effect=upload), \
-             patch("backend.yadisk_control._move_done", side_effect=move):
+             patch("backend.yadisk_control._delete_command", side_effect=delete):
             self.assertTrue(await yadisk_control._process_command(item, handler))
             await __import__("asyncio").sleep(0)
 
-        self.assertEqual(calls, ["handler", "response", "done", "restart"])
+        self.assertEqual(calls, ["handler", "response", "delete", "restart"])
 
     async def test_transient_download_failure_keeps_command_for_retry(self):
         command_id = "b" * 32
@@ -103,15 +103,15 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
             "backend.yadisk_control._download_bytes",
             AsyncMock(side_effect=OSError("network unavailable")),
         ), patch(
-            "backend.yadisk_control._move_done", AsyncMock()
-        ) as move_done:
+            "backend.yadisk_control._delete_command", AsyncMock()
+        ) as delete_command:
             self.assertFalse(
                 await yadisk_control._process_command(item, handler))
 
         handler.assert_not_awaited()
-        move_done.assert_not_awaited()
+        delete_command.assert_not_awaited()
 
-    async def test_downloaded_invalid_json_is_archived(self):
+    async def test_downloaded_invalid_json_is_deleted(self):
         command_id = "c" * 32
         item = {
             "name": f"{command_id}.json",
@@ -121,13 +121,13 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
             "backend.yadisk_control._download_bytes",
             AsyncMock(return_value=b"not-json"),
         ), patch(
-            "backend.yadisk_control._move_done",
+            "backend.yadisk_control._delete_command",
             AsyncMock(return_value=True),
-        ) as move_done:
+        ) as delete_command:
             self.assertTrue(await yadisk_control._process_command(
                 item, AsyncMock()))
 
-        move_done.assert_awaited_once_with(item["name"])
+        delete_command.assert_awaited_once_with(item["name"])
 
 
 class EventCommandTests(unittest.IsolatedAsyncioTestCase):
