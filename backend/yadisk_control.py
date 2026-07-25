@@ -27,7 +27,7 @@ MAX_PRINT_ARTIFACT_SIZE = 20 * 1024 * 1024
 COMMAND_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 PRINT_ARTIFACT_NAME_RE = re.compile(
     r"^[0-9]{1,20}_[0-9]{8}T[0-9]{6}Z_[a-f0-9]{32}"
-    r"\.(?:jpe?g|png|webp|bmp|tiff?)$")
+    r"\.[a-z0-9]{1,10}$")
 
 _session: aiohttp.ClientSession | None = None
 _transfer_session: aiohttp.ClientSession | None = None
@@ -333,7 +333,13 @@ async def _process_command(
         payload, f"{_root}/to_vps/response_{command['command_id']}.json")
     if not await _delete_command(filename):
         return False
-    log.info(f"Control: completed {command['command']} ({command['command_id']})")
+    response_message = response["message"].replace("\n", " | ")[:500]
+    completed_log = log.info if response["status"] == "ok" else log.warning
+    completed_log(
+        "Control: completed %s (%s) status=%s message=%s",
+        command["command"], command["command_id"],
+        response["status"], response_message,
+    )
     if post_action:
         asyncio.create_task(post_action())
     return True

@@ -277,8 +277,9 @@ asyncio workers. После успешной обработки служебны
   event, очередь и версия будки;
 - `/run` — запустить фотосессию;
 - `/logs`, `/clear_logs` — получить или очистить лог;
-- `/get_config` — получить одним `photobooth_configs.txt` текущие
-  `config_app.json` и `config_camera.json` без перезапуска будки;
+- `/get_config` — получить `photobooth_configs.txt` с текущими
+  `config_app.json` и `config_camera.json`, а также отдельный `config_vps.json`
+  напрямую с VPS, без перезапуска будки;
 - `/restart` — подтверждённый перезапуск;
 - `/update` — опубликовать полное обновление; установка после `/restart`;
 - `/link` — опубликовать активную event-папку и вернуть публичную ссылку;

@@ -719,9 +719,22 @@ async def handle_disk_command(command: dict) -> dict:
         if not re.fullmatch(r"[a-f0-9]{32}", job_id):
             return {"status": "error", "message": "Некорректный ID задания печати"}
 
+        source_filename = str(data.get("source_filename") or "")
+        source_kind = str(data.get("telegram_source_kind") or "")
+        source_mime = str(data.get("telegram_mime_type") or "")
+        log.info(
+            "Custom print received: job=%s kind=%s filename=%s mime=%s "
+            "artifact=%s expected_size=%s",
+            job_id, source_kind, source_filename, source_mime,
+            artifact_path, data.get("source_size"),
+        )
         try:
             payload = await yadisk_control.download_print_artifact(
                 artifact_path, event_folder)
+            log.info(
+                "Custom print downloaded: job=%s bytes=%s artifact=%s",
+                job_id, len(payload), artifact_path,
+            )
             template_dir = TEMPLATES_DIR / CONFIG["template_pack"]
             template_config = json.loads(
                 (template_dir / "config.json").read_text(encoding="utf-8"))
@@ -737,6 +750,11 @@ async def handle_disk_command(command: dict) -> dict:
                 int(CONFIG.get("print_dpi", 600)),
             )
         except Exception as exc:
+            log.exception(
+                "Custom print preparation failed: job=%s kind=%s filename=%s "
+                "mime=%s artifact=%s",
+                job_id, source_kind, source_filename, source_mime, artifact_path,
+            )
             return {"status": "error", "message": f"Фото не поставлено на печать: {exc}"}
 
         username = str(data.get("username") or "").strip()

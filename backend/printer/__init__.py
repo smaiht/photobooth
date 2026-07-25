@@ -14,6 +14,12 @@ from PIL import Image, ImageOps
 
 log = logging.getLogger(__name__)
 
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except Exception as exc:
+    log.warning("HEIC/HEIF image decoder is unavailable: %s", exc)
+
 _print_queue: deque[dict] = deque()
 _printing = False
 DEFAULT_CUSTOM_PRINT_SIZE = (3688, 2480)
@@ -85,13 +91,20 @@ def prepare_custom_print(
             dpi=(int(dpi), int(dpi)),
         )
         temporary.replace(destination)
+        output_bytes = destination.stat().st_size
         log.info(
             "Custom print prepared: source=%sx%s orientation=%s rotated_ccw=%s "
-            "output=%sx%s path=%s",
+            "scale=%.3fx fitted=%sx%s margins=%s,%s,%s,%s "
+            "output=%sx%s jpeg=%s bytes path=%s",
             source_size[0], source_size[1],
             "landscape" if landscape else "portrait",
             not landscape,
+            scale,
+            image.width, image.height,
+            x, canvas.width - image.width - x,
+            y, canvas.height - image.height - y,
             canvas.width, canvas.height,
+            output_bytes,
             destination,
         )
     finally:
