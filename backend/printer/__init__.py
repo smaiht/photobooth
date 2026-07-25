@@ -118,6 +118,7 @@ async def enqueue_print(
     config: dict,
     template_name: str = "",
     delete_after: bool = False,
+    delete_paths: list[str] | None = None,
 ):
     """Add one print job to the serial printer queue."""
     _print_queue.append({
@@ -125,6 +126,7 @@ async def enqueue_print(
         "config": dict(config),
         "template": template_name,
         "delete_after": bool(delete_after),
+        "delete_paths": list(delete_paths or []),
     })
     asyncio.create_task(_process_queue())
 
@@ -148,11 +150,25 @@ async def _process_queue():
         except Exception as exc:
             log.error(f"Print failed: {exc}")
         finally:
+            cleanup_paths = list(job["delete_paths"])
             if job["delete_after"]:
+                cleanup_paths.insert(0, job["path"])
+            cleanup_parents: set[Path] = set()
+            for cleanup_path in dict.fromkeys(cleanup_paths):
                 try:
-                    Path(job["path"]).unlink(missing_ok=True)
+                    path = Path(cleanup_path)
+                    path.unlink(missing_ok=True)
+                    cleanup_parents.add(path.parent)
                 except OSError as exc:
-                    log.warning("Could not remove custom print cache %s: %s", job["path"], exc)
+                    log.warning(
+                        "Could not remove custom print file %s: %s",
+                        cleanup_path, exc,
+                    )
+            for parent in cleanup_parents:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    pass
         _printing = False
 
 

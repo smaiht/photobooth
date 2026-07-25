@@ -728,6 +728,10 @@ async def handle_disk_command(command: dict) -> dict:
             job_id, source_kind, source_filename, source_mime,
             artifact_path, data.get("source_size"),
         )
+        keep_print_files = bool(CONFIG.get("keep_custom_print_files", True))
+        job_dir = PHOTOS_DIR / "print_jobs" / job_id
+        original_path: Path | None = None
+        output_path = job_dir / "print_4x6.jpg"
         try:
             payload = await yadisk_control.download_print_artifact(
                 artifact_path, event_folder)
@@ -735,12 +739,21 @@ async def handle_disk_command(command: dict) -> dict:
                 "Custom print downloaded: job=%s bytes=%s artifact=%s",
                 job_id, len(payload), artifact_path,
             )
+            source_suffix = Path(str(artifact_path)).suffix.lower() or ".img"
+            original_path = job_dir / f"original{source_suffix}"
+            job_dir.mkdir(parents=True, exist_ok=True)
+            original_temporary = original_path.with_name(original_path.name + ".tmp")
+            original_temporary.write_bytes(payload)
+            original_temporary.replace(original_path)
+            log.info(
+                "Custom print source saved: job=%s path=%s keep=%s",
+                job_id, original_path, keep_print_files,
+            )
             template_dir = TEMPLATES_DIR / CONFIG["template_pack"]
             template_config = json.loads(
                 (template_dir / "config.json").read_text(encoding="utf-8"))
             raw_print_size = template_config.get("print_size", [3688, 2480])
             print_size = tuple(int(value) for value in raw_print_size)
-            output_path = PHOTOS_DIR / ".print_queue" / f"{job_id}.jpg"
             from .printer import prepare_custom_print
             orientation = await asyncio.to_thread(
                 prepare_custom_print,
@@ -755,6 +768,14 @@ async def handle_disk_command(command: dict) -> dict:
                 "mime=%s artifact=%s",
                 job_id, source_kind, source_filename, source_mime, artifact_path,
             )
+            if not keep_print_files:
+                for local_path in (original_path, output_path):
+                    if local_path is not None:
+                        local_path.unlink(missing_ok=True)
+                try:
+                    job_dir.rmdir()
+                except OSError:
+                    pass
             return {"status": "error", "message": f"Фото не поставлено на печать: {exc}"}
 
         username = str(data.get("username") or "").strip()
@@ -765,13 +786,26 @@ async def handle_disk_command(command: dict) -> dict:
 
         async def enqueue_custom_print_after_ack() -> None:
             from .printer import enqueue_print
-            await enqueue_print(str(output_path), CONFIG, delete_after=True)
+            await enqueue_print(
+                str(output_path),
+                CONFIG,
+                delete_after=not keep_print_files,
+                delete_paths=(
+                    [str(original_path)]
+                    if not keep_print_files and original_path is not None
+                    else []
+                ),
+            )
 
         return {
             "status": "ok",
             "message": (
                 f"Фото от {sender_label} принято: ориентация {orientation}, "
                 "4×6 без обрезки; поставлено в очередь печати"
+                + (
+                    f"; локальные файлы: photos/print_jobs/{job_id}"
+                    if keep_print_files else ""
+                )
             ),
             "_post_action": enqueue_custom_print_after_ack,
         }

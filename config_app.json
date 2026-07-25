@@ -17,6 +17,8 @@
     "show_qr": true,
     "_show_qr_comment": "Show a direct Yandex.Disk link to the current <event>_by_sessions folder while media uploads.",
     "print_enabled": true,
+    "keep_custom_print_files": true,
+    "_keep_custom_print_files_comment": "Keep Telegram source images and prepared 4x6 JPEGs under photos/print_jobs/<job_id> after printing.",
     "printer_name": "DS-RX1",
     "printer_name_strips": "DS-RX1 Strips",
     "_printer_name_comment": "Exact Windows printer queue name. Empty uses Photobooth user's default printer.",
@@ -33,5 +35,5 @@
     "yadisk_updates_folder": "photobooth_system/updates",
     "_yadisk_updates_folder_comment": "Private Disk folder with the full update artifact and status.json. Must match VPS.",
     "yadisk_control_folder": "photobooth_system/control",
-    "_yadisk_control_folder_comment": "Stable private bus: to_booth, to_vps, done and logs. Must match VPS."
+    "_yadisk_control_folder_comment": "Stable private bus: to_booth, to_vps and logs. Processed command and response JSON files are deleted. Must match VPS."
 }

@@ -359,11 +359,10 @@ def _should_skip(name: str) -> bool:
     if n.startswith("python/") and n.rsplit(".", 1)[-1] in ("exe", "dll", "pyd"):
         return True
     top = n.split("/", 1)[0]
-    # Event configuration and runtime state belong to this installation, not
-    # to a release artifact built on CI.
+    # Runtime state belongs to this installation. config_app.json and
+    # config_camera.json intentionally come from the release for now.
     if top in {
-        ".git", ".env", ".ENV", "config_app.json", "config_camera.json", "photos",
-        "yadisk_queue.json", "photobooth.log",
+        ".git", ".env", ".ENV", "photos", "yadisk_queue.json", "photobooth.log",
     } or top.startswith("photobooth.log."):
         return True
     return False
@@ -523,8 +522,8 @@ try {
     }
     Write-UpdateLog "Prepared full release found"
     $preserve = @(
-        ".git", ".env", ".ENV", "config_app.json", "config_camera.json",
-        "photos", "yadisk_queue.json", "photobooth.log", ".update_hash"
+        ".git", ".env", ".ENV", "photos", "yadisk_queue.json",
+        "photobooth.log", ".update_hash"
     )
     foreach ($name in $preserve) {
         Remove-Item -LiteralPath (Join-Path $stage $name) -Recurse -Force `
