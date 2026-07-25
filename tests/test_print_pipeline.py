@@ -5,13 +5,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from PIL import Image, ImageChops
 
 from backend.composer import compose, generate_template_previews
 from backend import main
-from backend.printer import _print_driver, _printer_name
+from backend.printer import _print_driver, _printer_name, prepare_custom_print
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +53,35 @@ class ComposerTests(unittest.TestCase):
         with Image.open(TEMPLATE_DIR / "strip_bg.png") as strip:
             width, height = self.config["print_size"]
             self.assertEqual(strip.size, (height // 2, width))
+
+    def test_canon_6000x4000_ratio_matches_every_photo_slot(self):
+        for template in self.config["templates"].values():
+            for slot in template["photos"]:
+                self.assertEqual(slot["w"] * 4000, slot["h"] * 6000)
+
+    def test_mismatched_photo_is_fitted_whole_without_slot_crop(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            Image.new("RGB", (100, 100), "blue").save(folder / "background.png")
+            source = folder / "wide.png"
+            Image.new("RGB", (200, 100), "red").save(source)
+            config = {
+                "print_size": [100, 100],
+                "templates": {
+                    "grid": {
+                        "background": "background.png",
+                        "photos": [{"x": 0, "y": 0, "w": 100, "h": 100}],
+                    },
+                },
+            }
+
+            result = compose(folder, "grid", [source], config)
+            try:
+                self.assertGreater(result.getpixel((50, 0))[2], 200)
+                self.assertGreater(result.getpixel((50, 50))[0], 200)
+                self.assertGreater(result.getpixel((50, 99))[2], 200)
+            finally:
+                result.close()
 
     def test_slightly_wrong_sheet_uses_fit_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -322,6 +351,113 @@ class PrinterQueueTests(unittest.TestCase):
                     "USB001",
                 ],
             )
+
+
+class CustomPrintPreparationTests(unittest.TestCase):
+    @staticmethod
+    def _source_payload(size=(200, 100), color="red") -> bytes:
+        import io
+
+        output = io.BytesIO()
+        Image.new("RGB", size, color).save(output, "PNG")
+        return output.getvalue()
+
+    def test_fit_keeps_whole_image_and_adds_white_margins(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "fit.jpg"
+            prepare_custom_print(
+                self._source_payload(), output, (120, 80), 600, "fit")
+
+            with Image.open(output) as result:
+                self.assertEqual(result.size, (120, 80))
+                self.assertGreater(min(result.getpixel((60, 2))), 245)
+                self.assertGreater(result.getpixel((60, 40))[0], 220)
+                self.assertLess(result.getpixel((60, 40))[1], 40)
+
+    def test_fill_covers_page_and_crops_center(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "fill.jpg"
+            prepare_custom_print(
+                self._source_payload(), output, (120, 80), 600, "fill")
+
+            with Image.open(output) as result:
+                self.assertEqual(result.size, (120, 80))
+                for point in ((2, 2), (60, 40), (117, 77)):
+                    red, green, blue = result.getpixel(point)
+                    self.assertGreater(red, 220)
+                    self.assertLess(green, 40)
+                    self.assertLess(blue, 40)
+
+    def test_portrait_source_is_rotated_before_fitting(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "portrait.jpg"
+            orientation = prepare_custom_print(
+                self._source_payload((100, 200)),
+                output,
+                (120, 80),
+                600,
+                "fill",
+            )
+
+            self.assertEqual(orientation, "вертикальная")
+            with Image.open(output) as result:
+                self.assertEqual(result.size, (120, 80))
+                self.assertGreater(result.getpixel((2, 2))[0], 220)
+
+    def test_rejects_unknown_mode(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaisesRegex(ValueError, "mode"):
+                prepare_custom_print(
+                    self._source_payload(),
+                    Path(tmpdir) / "bad.jpg",
+                    mode="stretch",
+                )
+
+
+class CustomPrintCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_requires_explicit_fit_or_fill_mode(self):
+        with patch.dict(main.CONFIG, {"print_enabled": True}):
+            result = await main.handle_disk_command({
+                "command": "print_image",
+                "command_id": "a" * 32,
+                "data": {"job_id": "b" * 32},
+            })
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("режим", result["message"].lower())
+
+    async def test_passes_selected_mode_to_renderer(self):
+        payload = CustomPrintPreparationTests._source_payload()
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "PRINT_JOBS_DIR", Path(tmpdir)), \
+             patch.dict(main.CONFIG, {
+                 "print_enabled": True,
+                 "keep_custom_print_files": True,
+                 "template_pack": "default",
+                 "print_dpi": 600,
+             }), \
+             patch(
+                 "backend.main.yadisk_control.download_print_artifact",
+                 AsyncMock(return_value=payload),
+             ), \
+             patch(
+                 "backend.printer.prepare_custom_print",
+                 return_value="горизонтальная",
+             ) as prepare:
+            result = await main.handle_disk_command({
+                "command": "print_image",
+                "command_id": "a" * 32,
+                "data": {
+                    "job_id": "b" * 32,
+                    "print_mode": "fill",
+                    "artifact_path": "/event_by_sessions/0000_print_jobs/image.png",
+                    "event_folder": "event",
+                    "sender_id": 123,
+                },
+            })
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(prepare.call_args.args[-1], "fill")
 
 
 class SessionGuardTests(unittest.IsolatedAsyncioTestCase):

@@ -717,16 +717,19 @@ async def handle_disk_command(command: dict) -> dict:
         artifact_path = data.get("artifact_path")
         event_folder = data.get("event_folder")
         job_id = str(data.get("job_id") or "")
+        print_mode = str(data.get("print_mode") or "")
         if not re.fullmatch(r"[a-f0-9]{32}", job_id):
             return {"status": "error", "message": "Некорректный ID задания печати"}
+        if print_mode not in ("fit", "fill"):
+            return {"status": "error", "message": "Некорректный режим печати"}
 
         source_filename = str(data.get("source_filename") or "")
         source_kind = str(data.get("telegram_source_kind") or "")
         source_mime = str(data.get("telegram_mime_type") or "")
         log.info(
-            "Custom print received: job=%s kind=%s filename=%s mime=%s "
+            "Custom print received: job=%s mode=%s kind=%s filename=%s mime=%s "
             "artifact=%s expected_size=%s",
-            job_id, source_kind, source_filename, source_mime,
+            job_id, print_mode, source_kind, source_filename, source_mime,
             artifact_path, data.get("source_size"),
         )
         keep_print_files = bool(CONFIG.get("keep_custom_print_files", True))
@@ -756,12 +759,13 @@ async def handle_disk_command(command: dict) -> dict:
             raw_print_size = template_config.get("print_size", [3688, 2480])
             print_size = tuple(int(value) for value in raw_print_size)
             from .printer import prepare_custom_print
-            orientation = await asyncio.to_thread(
+            await asyncio.to_thread(
                 prepare_custom_print,
                 payload,
                 output_path,
                 print_size,
                 int(CONFIG.get("print_dpi", 600)),
+                print_mode,
             )
         except Exception as exc:
             log.exception(
@@ -784,6 +788,11 @@ async def handle_disk_command(command: dict) -> dict:
         sender_id = data.get("sender_id")
         sender_label = f"@{username}" if username else sender_name
         sender_label = sender_label or str(sender_id or "неизвестный пользователь")
+        mode_label = (
+            "целиком, с белыми полями"
+            if print_mode == "fit"
+            else "без полей, с обрезкой"
+        )
 
         async def enqueue_custom_print_after_ack() -> None:
             from .printer import enqueue_print
@@ -801,8 +810,7 @@ async def handle_disk_command(command: dict) -> dict:
         return {
             "status": "ok",
             "message": (
-                f"Фото от {sender_label} принято: ориентация {orientation}, "
-                "4×6 без обрезки; поставлено в очередь печати"
+                f"Фото от {sender_label} поставлено в очередь: {mode_label}"
                 + (
                     f"; локальные файлы: photos_print_jobs/{job_id}"
                     if keep_print_files else ""

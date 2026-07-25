@@ -54,11 +54,12 @@ def compose(template_dir: Path, template_name: str, photos: list[str | Path], co
             with Image.open(photos[i]) as source:
                 source_image = _oriented_rgb(source)
             try:
-                img = _fit_crop(source_image, slot_w, slot_h)
+                img, offset_x, offset_y = _fit_inside(
+                    source_image, slot_w, slot_h)
             finally:
                 source_image.close()
             try:
-                bg.paste(img, (x, y))
+                bg.paste(img, (x + offset_x, y + offset_y))
             finally:
                 img.close()
 
@@ -88,12 +89,7 @@ def compose(template_dir: Path, template_name: str, photos: list[str | Path], co
         print_size[1],
     )
     try:
-        return ImageOps.fit(
-            sheet,
-            print_size,
-            method=Image.Resampling.LANCZOS,
-            centering=(0.5, 0.5),
-        )
+        return _fit_on_canvas(sheet, print_size, "white")
     finally:
         sheet.close()
 
@@ -257,9 +253,10 @@ def _compose_preview(
                 raise ValueError(
                     f"preview slot {index} exceeds {template_name!r} background"
                 )
-            fitted = _fit_crop(photos[index], width, height)
+            fitted, offset_x, offset_y = _fit_inside(
+                photos[index], width, height)
             try:
-                background.paste(fitted, (x, y))
+                background.paste(fitted, (x + offset_x, y + offset_y))
             finally:
                 fitted.close()
 
@@ -277,12 +274,7 @@ def _compose_preview(
         sheet.close()
         return rotated
     try:
-        return ImageOps.fit(
-            sheet,
-            target_size,
-            method=Image.Resampling.LANCZOS,
-            centering=(0.5, 0.5),
-        )
+        return _fit_on_canvas(sheet, target_size, PREVIEW_CANVAS_COLOR)
     finally:
         sheet.close()
 
@@ -354,25 +346,39 @@ def _save_jpeg_atomic(image: Image.Image, output_path: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _fit_crop(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
-    """Center crop to aspect ratio, then resize."""
-    src_ratio = img.width / img.height
-    dst_ratio = target_w / target_h
+def _fit_inside(
+    image: Image.Image,
+    target_width: int,
+    target_height: int,
+) -> tuple[Image.Image, int, int]:
+    """Resize the whole image into a box without cropping or distortion."""
+    scale = min(target_width / image.width, target_height / image.height)
+    fitted_size = (
+        max(1, round(image.width * scale)),
+        max(1, round(image.height * scale)),
+    )
+    fitted = image.resize(fitted_size, Image.Resampling.LANCZOS)
+    return (
+        fitted,
+        (target_width - fitted.width) // 2,
+        (target_height - fitted.height) // 2,
+    )
 
-    if src_ratio > dst_ratio:
-        new_w = int(img.height * dst_ratio)
-        left = (img.width - new_w) // 2
-        crop_box = (left, 0, left + new_w, img.height)
-    else:
-        new_h = int(img.width / dst_ratio)
-        top = (img.height - new_h) // 2
-        crop_box = (0, top, img.width, top + new_h)
 
-    cropped = img.crop(crop_box)
+def _fit_on_canvas(
+    image: Image.Image,
+    target_size: tuple[int, int],
+    background,
+) -> Image.Image:
+    """Fit a whole image onto a centered canvas, preserving every pixel."""
+    result = Image.new("RGB", target_size, background)
+    fitted, offset_x, offset_y = _fit_inside(
+        image, target_size[0], target_size[1])
     try:
-        return cropped.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        result.paste(fitted, (offset_x, offset_y))
     finally:
-        cropped.close()
+        fitted.close()
+    return result
 
 
 def _oriented_rgb(source: Image.Image) -> Image.Image:

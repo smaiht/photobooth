@@ -34,13 +34,16 @@ def prepare_custom_print(
     output_path: str | Path,
     print_size: tuple[int, int] = DEFAULT_CUSTOM_PRINT_SIZE,
     dpi: int = 600,
+    mode: str = "fit",
 ) -> str:
-    """Render one arbitrary image onto a horizontal 4x6 page without cropping."""
+    """Render one arbitrary image onto a horizontal 4x6 print page."""
     if not isinstance(payload, bytes) or not payload:
         raise ValueError("empty print image")
     if (len(print_size) != 2
             or not all(isinstance(value, int) and value > 0 for value in print_size)):
         raise ValueError("invalid custom print size")
+    if mode not in ("fit", "fill"):
+        raise ValueError("invalid custom print mode")
 
     with Image.open(io.BytesIO(payload)) as source:
         if source.width * source.height > MAX_CUSTOM_PRINT_PIXELS:
@@ -70,7 +73,8 @@ def prepare_custom_print(
     canvas_size = (long_side, short_side)
     canvas = Image.new("RGB", canvas_size, "white")
     try:
-        scale = min(canvas.width / image.width, canvas.height / image.height)
+        scales = (canvas.width / image.width, canvas.height / image.height)
+        scale = min(scales) if mode == "fit" else max(scales)
         fitted_size = (
             max(1, round(image.width * scale)),
             max(1, round(image.height * scale)),
@@ -96,12 +100,13 @@ def prepare_custom_print(
         temporary.replace(destination)
         output_bytes = destination.stat().st_size
         log.info(
-            "Custom print prepared: source=%sx%s orientation=%s rotated_ccw=%s "
+            "Custom print prepared: source=%sx%s orientation=%s rotated_ccw=%s mode=%s "
             "scale=%.3fx fitted=%sx%s margins=%s,%s,%s,%s "
             "output=%sx%s jpeg=%s bytes path=%s",
             source_size[0], source_size[1],
             "landscape" if landscape else "portrait",
             not landscape,
+            mode,
             scale,
             image.width, image.height,
             x, canvas.width - image.width - x,
@@ -189,6 +194,36 @@ def _print_driver(image_path: str, config: dict, template_name: str = ""):
     source = Path(image_path).resolve()
     if not source.is_file():
         raise FileNotFoundError(f"print image not found: {source}")
+
+    with Image.open(source) as print_image:
+        page_width, page_height = print_image.size
+        raw_dpi = print_image.info.get("dpi") or (0, 0)
+        if isinstance(raw_dpi, (tuple, list)) and len(raw_dpi) >= 2:
+            page_dpi = (
+                round(float(raw_dpi[0])),
+                round(float(raw_dpi[1])),
+            )
+        else:
+            page_dpi = (0, 0)
+    log.info(
+        "Print raster: source=%s page=%sx%s dpi=%sx%s template=%s",
+        source.name,
+        page_width,
+        page_height,
+        page_dpi[0],
+        page_dpi[1],
+        template_name or "custom",
+    )
+    if (page_width, page_height) != DEFAULT_CUSTOM_PRINT_SIZE:
+        log.warning(
+            "Print raster differs from DNP (6x4) Portrait 600 DPI page: "
+            "source=%s actual=%sx%s expected=%sx%s",
+            source.name,
+            page_width,
+            page_height,
+            DEFAULT_CUSTOM_PRINT_SIZE[0],
+            DEFAULT_CUSTOM_PRINT_SIZE[1],
+        )
 
     try:
         import win32print
