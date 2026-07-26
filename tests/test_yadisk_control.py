@@ -592,11 +592,13 @@ class CameraConfigValueTests(unittest.TestCase):
 
 
 class ConfigExportTests(unittest.TestCase):
-    def test_text_export_contains_both_original_json_files(self):
+    def test_text_export_starts_with_cafe_state_then_both_configs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            state_payload = b'{\n    "remaining_sessions": 5\n}\n'
             app_payload = b'{\n  "event": "test"\n}\n'
             camera_payload = b'{\n  "iso": 200\n}\n'
+            (root / "cafe_unlock_state.json").write_bytes(state_payload)
             (root / "config_app.json").write_bytes(app_payload)
             (root / "config_camera.json").write_bytes(camera_payload)
 
@@ -604,9 +606,32 @@ class ConfigExportTests(unittest.TestCase):
 
         self.assertEqual(
             payload,
+            b"===== cafe_unlock_state.json =====\n" + state_payload + b"\n"
             b"===== config_app.json =====\n" + app_payload + b"\n"
             b"===== config_camera.json =====\n" + camera_payload + b"\n",
         )
+
+    def test_text_export_synthesizes_missing_cafe_state(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 0):
+            root = Path(temporary)
+            (root / "config_app.json").write_text("{}", encoding="utf-8")
+            (root / "config_camera.json").write_text("{}", encoding="utf-8")
+
+            payload = main._build_config_export(root)
+
+        self.assertTrue(payload.startswith(
+            b'===== cafe_unlock_state.json =====\n{\n'
+            b'    "remaining_sessions": 0\n}\n\n'
+        ))
+
+
+class FrontendCacheTests(unittest.IsolatedAsyncioTestCase):
+    async def test_versioned_frontend_files_are_not_reused_after_update(self):
+        for endpoint in (main.index, main.style, main.script):
+            with self.subTest(endpoint=endpoint.__name__):
+                response = await endpoint()
+                self.assertEqual(response.headers["cache-control"], "no-store")
 
 
 if __name__ == "__main__":

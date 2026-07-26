@@ -73,6 +73,16 @@ def _cafe_unlock_state_path() -> Path:
     return ROOT_DIR / CAFE_UNLOCK_STATE_FILENAME
 
 
+def _serialize_cafe_unlock_state(remaining: int) -> bytes:
+    return (
+        json.dumps(
+            {"remaining_sessions": remaining},
+            ensure_ascii=False,
+            indent=4,
+        ) + "\n"
+    ).encode("utf-8")
+
+
 def _load_cafe_unlock_sessions() -> int:
     """Load the durable allowance, failing closed for any unusable state."""
     path = _cafe_unlock_state_path()
@@ -98,14 +108,7 @@ def _write_cafe_unlock_sessions(remaining: int) -> None:
     path = _cafe_unlock_state_path()
     temporary = path.with_name(path.name + ".tmp")
     try:
-        temporary.write_text(
-            json.dumps(
-                {"remaining_sessions": remaining},
-                ensure_ascii=False,
-                indent=4,
-            ) + "\n",
-            encoding="utf-8",
-        )
+        temporary.write_bytes(_serialize_cafe_unlock_state(remaining))
         temporary.replace(path)
     finally:
         try:
@@ -167,14 +170,23 @@ if sys.platform == "win32":
         log.warning(f"EDSDK not available: {e}")
 
 
-CONFIG_EXPORT_FILENAMES = ("config_app.json", "config_camera.json")
+CONFIG_EXPORT_FILENAMES = (
+    CAFE_UNLOCK_STATE_FILENAME,
+    "config_app.json",
+    "config_camera.json",
+)
 
 
 def _build_config_export(root: Path = ROOT_DIR) -> bytes:
-    """Combine both current config files into one readable text document."""
+    """Combine the current runtime state and configs into one text document."""
     output = bytearray()
     for filename in CONFIG_EXPORT_FILENAMES:
-        payload = (root / filename).read_bytes()
+        path = root / filename
+        if filename == CAFE_UNLOCK_STATE_FILENAME and not path.is_file():
+            payload = _serialize_cafe_unlock_state(
+                _cafe_unlock_sessions_remaining)
+        else:
+            payload = path.read_bytes()
         output.extend(f"===== {filename} =====\n".encode("utf-8"))
         output.extend(payload)
         if not payload.endswith(b"\n"):
@@ -742,20 +754,25 @@ async def live_view():
 app.mount("/photos", StaticFiles(directory=str(PHOTOS_DIR)), name="photos")
 app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")), name="assets")
 
+FRONTEND_FILE_HEADERS = {"Cache-Control": "no-store"}
+
 
 @app.get("/")
 async def index():
-    return FileResponse(str(FRONTEND_DIR / "index.html"))
+    return FileResponse(
+        str(FRONTEND_DIR / "index.html"), headers=FRONTEND_FILE_HEADERS)
 
 
 @app.get("/style.css")
 async def style():
-    return FileResponse(str(FRONTEND_DIR / "style.css"))
+    return FileResponse(
+        str(FRONTEND_DIR / "style.css"), headers=FRONTEND_FILE_HEADERS)
 
 
 @app.get("/app.js")
 async def script():
-    return FileResponse(str(FRONTEND_DIR / "app.js"))
+    return FileResponse(
+        str(FRONTEND_DIR / "app.js"), headers=FRONTEND_FILE_HEADERS)
 
 
 @app.get("/api/config")

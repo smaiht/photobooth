@@ -382,9 +382,10 @@ asyncio workers. После успешной обработки служебны
 - `/unblock [N]` — в техническом event `Кафе` задать точный остаток
   разрешённых фотосессий; без числа задаётся одна сессия;
 - `/logs`, `/clear_logs` — получить или очистить лог;
-- `/get_config` — получить `photobooth_configs.txt` с текущими
-  `config_app.json` и `config_camera.json`, а также отдельный `config_vps.json`
-  напрямую с VPS, без перезапуска будки;
+- `/get_config` — получить `photobooth_configs.txt`: сначала текущее runtime-
+  состояние `cafe_unlock_state.json`, затем `config_app.json` и
+  `config_camera.json`; отдельный `config_vps.json` приходит напрямую с VPS,
+  без перезапуска будки;
 - `/restart` — подтверждённый перезапуск;
 - `/update` — вручную повторно опубликовать последний GitHub Release, если
   автоматический CI/CD нужно запустить в обход нового push; установка после
