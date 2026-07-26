@@ -22,7 +22,9 @@ _FALSE_VALUES = {"0", "false", "no", "off", "нет", "выкл"}
 
 def load_event_config() -> dict:
     config_path = ROOT_DIR / "config_app.json"
-    return json.loads(config_path.read_text())
+    # This file is always written as UTF-8. An implicit Windows-locale decoder
+    # corrupts Cyrillic event names after a restart.
+    return json.loads(config_path.read_text(encoding="utf-8"))
 
 
 def _coerce_camera_scalar(raw_value: str, prototype):

@@ -520,18 +520,23 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
             return edsdk.EDS_ERR_OK
 
         camera._sdk.EdsGetDirectoryItemInfo.side_effect = get_info
-        camera._sdk.EdsCreateFileStream.side_effect = create_stream
+        camera._sdk.EdsCreateFileStreamEx.side_effect = create_stream
         camera._sdk.EdsDownload.return_value = edsdk.EDS_ERR_INCOMPLETE_TRANSFER
 
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch.object(camera, "storage_ready", return_value=(True, "")):
-            camera.set_download_dir(Path(tmpdir))
-            partial = Path(tmpdir) / "IMG_9999.JPG"
+            download_dir = Path(tmpdir) / "Фото с будки"
+            download_dir.mkdir()
+            camera.set_download_dir(download_dir)
+            partial = download_dir / "IMG_9999.JPG"
             partial.write_bytes(b"partial")
             with self.assertRaises(edsdk.EDSDKError):
                 camera._download_photo(ctypes.c_void_p(123))
             self.assertFalse(partial.exists())
 
+        stream_path = camera._sdk.EdsCreateFileStreamEx.call_args.args[0]
+        self.assertIsInstance(stream_path, str)
+        self.assertIn("Фото с будки", stream_path)
         camera._sdk.EdsDownloadCancel.assert_called_once()
         self.assertEqual(
             camera._sdk.EdsDownloadCancel.call_args.args[0].value, 123)
@@ -765,6 +770,7 @@ class SessionDisconnectTests(unittest.IsolatedAsyncioTestCase):
              patch.object(main, "SESSION_COUNT", 0), \
              patch.object(main, "_session_running", False), \
              patch.object(main, "_camera_disconnected_event", asyncio.Event()), \
+             patch("backend.main._start_locked", return_value=False), \
              patch("backend.main.yadisk_cloud.enqueue_session", new_callable=AsyncMock) as upload, \
              patch("backend.printer.enqueue_print", new_callable=AsyncMock) as print_job:
             await main.run_session()

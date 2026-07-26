@@ -7,6 +7,7 @@ its private options such as 2-inch cutting.
 
 import asyncio
 import io
+import locale
 import logging
 import os
 import subprocess
@@ -298,6 +299,8 @@ def _print_driver(image_path: str, config: dict, template_name: str = ""):
             command,
             capture_output=True,
             text=True,
+            encoding=locale.getpreferredencoding(False),
+            errors="replace",
             timeout=60,
             creationflags=creation_flags,
             check=False,

@@ -37,12 +37,15 @@ def _build_loading_html():
     font_b64 = base64.b64encode(FONT_PATH.read_bytes()).decode("ascii")
     return f"""
 <html>
-<head><style>
+<head>
+<meta charset="UTF-8">
+<style>
 @font-face {{
     font-family: 'Comfortaa';
     src: url('data:font/truetype;base64,{font_b64}') format('truetype');
 }}
-</style></head>
+</style>
+</head>
 <body style="margin:0; background:#fff; display:flex; align-items:center;
              justify-content:center; height:100vh; font-family:'Comfortaa',sans-serif">
     <div style="display:flex; flex-direction:column; align-items:center; gap:2vw">
@@ -781,7 +784,7 @@ def _run_application():
     # Load .env
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(env_path):
-        with open(env_path) as f:
+        with open(env_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:

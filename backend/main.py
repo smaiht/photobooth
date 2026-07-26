@@ -130,7 +130,10 @@ def _consume_cafe_unlock_session() -> int:
     """Consume one completed Café session; persistence errors fail closed."""
     global _cafe_unlock_sessions_remaining
     if _cafe_unlock_sessions_remaining <= 0:
-        log.error("Cafe session completed without an available unlock allowance")
+        log.info(
+            "Cafe session completed after the allowance was reset; "
+            "remaining sessions=0"
+        )
         _cafe_unlock_sessions_remaining = 0
         return 0
     remaining = _cafe_unlock_sessions_remaining - 1
@@ -734,7 +737,7 @@ async def _mjpeg_generator():
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n"
-                b"Content-Length: " + str(len(frame)).encode() + b"\r\n"
+                b"Content-Length: " + str(len(frame)).encode("ascii") + b"\r\n"
                 b"\r\n" + frame + b"\r\n"
             )
         await asyncio.sleep(0.033)
@@ -1070,10 +1073,10 @@ async def handle_disk_command(command: dict) -> dict:
     if cmd == "unblock":
         sessions = data.get("sessions") if isinstance(data, dict) else None
         if (type(sessions) is not int
-                or not 1 <= sessions <= MAX_UNLOCK_SESSIONS):
+                or not 0 <= sessions <= MAX_UNLOCK_SESSIONS):
             return {
                 "status": "error",
-                "message": "sessions должно быть целым числом от 1 до 1000",
+                "message": "sessions должно быть целым числом от 0 до 1000",
             }
         try:
             _set_cafe_unlock_sessions(sessions)
@@ -1263,7 +1266,9 @@ async def websocket_endpoint(ws: WebSocket):
     # Show update log on first client connect
     update_log = getattr(app.state, "update_log_path", None)
     if update_log and os.path.exists(update_log):
-        for line in open(update_log).read().strip().splitlines():
+        content = Path(update_log).read_text(
+            encoding="utf-8", errors="replace")
+        for line in content.strip().splitlines():
             log.info(f"[update] {line}")
         app.state.update_log_path = None
 

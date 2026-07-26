@@ -27,7 +27,7 @@
     "_printer_name_strips_comment": "Optional second queue with DNP 2inch cut enabled for strips.",
     "print_dpi": 600,
     "_print_dpi_comment": "DPI metadata written into composed JPEGs. Paper, quality, borderless mode and copies come from the saved Windows queue defaults.",
-    "yadisk_folder": "test_event",
+    "yadisk_folder": "Кафе",
     "_yadisk_folder_comment": "Event folder where media files are uploaded. Session notifications use yadisk_control_folder/to_vps.",
     "yadisk_updates_folder": "photobooth_system/updates",
     "_yadisk_updates_folder_comment": "Private Disk folder with the full update artifact and status.json. Must match VPS.",

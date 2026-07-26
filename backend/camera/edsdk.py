@@ -477,7 +477,15 @@ class Camera:
             ("EdsGetPropertyDesc", EdsError, [EdsBaseRef, EdsUInt32, ctypes.POINTER(EdsPropertyDesc)]),
             ("EdsSetCapacity", EdsError, [EdsBaseRef, EdsCapacity]),
             ("EdsCreateMemoryStream", EdsError, [EdsUInt64, ctypes.POINTER(EdsBaseRef)]),
-            ("EdsCreateFileStream", EdsError, [ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.POINTER(EdsBaseRef)]),
+            # The non-Ex API accepts an ANSI EdsChar path.  The Windows Ex API
+            # accepts WCHAR and therefore also works when the install or user
+            # profile path contains Cyrillic characters.
+            ("EdsCreateFileStreamEx", EdsError, [
+                ctypes.c_wchar_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.POINTER(EdsBaseRef),
+            ]),
             ("EdsCreateEvfImageRef", EdsError, [EdsBaseRef, ctypes.POINTER(EdsBaseRef)]),
             ("EdsDownloadEvfImage", EdsError, [EdsBaseRef, EdsBaseRef]),
             ("EdsGetPointer", EdsError, [EdsBaseRef, ctypes.POINTER(ctypes.c_void_p)]),
@@ -611,7 +619,7 @@ class Camera:
         from ..config import ROOT_DIR
         config_path = ROOT_DIR / "config_camera.json"
         if config_path.exists():
-            cfg = json.loads(config_path.read_text())
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
         else:
             cfg = {}
             log.warning("config_camera.json not found, using defaults")
@@ -1362,8 +1370,8 @@ class Camera:
             t = self._photo_tag
             log.info(f"{t} Photo download: {file_name} ({info.size} bytes)")
 
-            _check("CreateFileStream", self._sdk.EdsCreateFileStream(
-                str(file_path).encode(), kEdsFileCreateDisposition_CreateAlways,
+            _check("CreateFileStreamEx", self._sdk.EdsCreateFileStreamEx(
+                str(file_path), kEdsFileCreateDisposition_CreateAlways,
                 kEdsAccess_ReadWrite, ctypes.byref(stream)))
             _check("EdsDownload", self._sdk.EdsDownload(dir_item, info.size, stream))
             _check("EdsDownloadComplete", self._sdk.EdsDownloadComplete(dir_item))

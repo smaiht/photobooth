@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import WebSocketDisconnect
 
+from backend import config as backend_config
 from backend import main, yadisk_control
 from backend.config import update_camera_config_field
 
@@ -336,7 +337,7 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state_payload["unlock_sessions_remaining"], 3)
 
     async def test_unblock_rejects_non_integer_or_out_of_range_sessions(self):
-        invalid_values = (None, True, 1.5, "2", 0, 1001)
+        invalid_values = (None, True, 1.5, "2", -1, 1001)
         with patch("backend.main._set_cafe_unlock_sessions") as save:
             for sessions in invalid_values:
                 with self.subTest(sessions=sessions):
@@ -347,6 +348,35 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
                     })
                     self.assertEqual(result["status"], "error")
         save.assert_not_called()
+
+    async def test_zero_allowance_relocks_idle_immediately(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "unblock",
+            "data": {"sessions": 0},
+        }
+        config = {
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Кафе",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "CONFIG", config), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 5), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"), \
+             patch("backend.main.broadcast", new_callable=AsyncMock) as broadcast:
+            result = await main.handle_disk_command(command)
+            persisted = json.loads(
+                (Path(tmpdir) / "cafe_unlock_state.json").read_text(
+                    encoding="utf-8"))
+
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["start_locked"])
+        self.assertEqual(result["unlock_sessions_remaining"], 0)
+        self.assertEqual(persisted, {"remaining_sessions": 0})
+        self.assertTrue(broadcast.await_args.args[0]["start_locked"])
 
     async def test_remote_run_is_blocked_before_camera_checks(self):
         config = {
@@ -589,6 +619,25 @@ class CameraConfigValueTests(unittest.TestCase):
         result = update_camera_config_field("iso", "100", self.config_path)
         self.assertEqual(result, ("iso", 100, 100, False))
         self.assertEqual(self.config_path.read_bytes(), before)
+
+
+class EventConfigEncodingTests(unittest.TestCase):
+    def test_event_config_is_always_read_as_utf8(self):
+        payload = json.dumps(
+            {"yadisk_folder": "Кафе"}, ensure_ascii=False,
+        ).encode("utf-8")
+        self.assertNotEqual(
+            json.loads(payload.decode("cp1252"))["yadisk_folder"],
+            "Кафе",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(
+            backend_config, "ROOT_DIR", Path(tmpdir),
+        ):
+            (Path(tmpdir) / "config_app.json").write_bytes(payload)
+            config = backend_config.load_event_config()
+
+        self.assertEqual(config["yadisk_folder"], "Кафе")
 
 
 class ConfigExportTests(unittest.TestCase):

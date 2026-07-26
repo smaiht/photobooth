@@ -576,7 +576,8 @@ class SessionGuardTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
 
         main._session_running = False
-        with patch.object(main, "_run_session", fake_session):
+        with patch.object(main, "_run_session", fake_session), \
+             patch("backend.main._start_locked", return_value=False):
             first = asyncio.create_task(main.run_session())
             await entered.wait()
             await main.run_session()

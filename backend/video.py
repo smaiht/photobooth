@@ -134,7 +134,10 @@ class VideoRecorder:
             _, stderr = proc.communicate(timeout=120)
 
             if proc.returncode != 0:
-                log.error(f"ffmpeg error: {stderr.decode()}")
+                log.error(
+                    "ffmpeg error: %s",
+                    stderr.decode("utf-8", errors="replace"),
+                )
                 return None
 
             log.info(f"Video saved: {output_path}")
