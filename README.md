@@ -1,4 +1,5 @@
 # Photobooth
+## ФОТОБУДКА
 
 Фотобудка: Canon EDSDK + сублимационный принтер + сенсорный экран.
 FastAPI backend + pywebview fullscreen window.
