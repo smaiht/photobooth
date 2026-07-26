@@ -119,7 +119,7 @@ jobs:
                   "ZIP: $env:RELEASE_SIZE MiB`n" +
                   "SHA: $shortSha`n" +
                   "Способ: $method`n`n" +
-                  "Для установки отправь /restart`n$runUrl"
+                  "Для установки отправь /restart`n`n$runUrl"
           $body = @{ chat_id = $env:TG_ADMIN_ID; text = $text } | ConvertTo-Json -Compress
           Invoke-RestMethod `
             -Uri "https://api.telegram.org/bot$env:TG_BOT_TOKEN/sendMessage" `

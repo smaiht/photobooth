@@ -1162,7 +1162,7 @@ async def handle_disk_command(command: dict) -> dict:
             await broadcast(_state_message(STATE))
         return {
             "status": "ok",
-            "message": f"Event активирован на будке: {name}",
+            "message": f"Event активирован на будке: <b>{name}</b>",
             "event_folder": name,
         }
 
