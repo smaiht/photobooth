@@ -122,10 +122,10 @@ def main() -> None:
         )
     draw.text(
         (1900, 1970),
-        "EXPECTED BORDERLESS TRIM: ~48 px L/R, ~47 px T/B\n"
-        "WHITE DASH = template raster margin: 61 px (~13 px survives)\n"
+        "MEASURED TRIM: 40 px L / 50 px T / 55 px R / 55 px B\n"
+        "EXPECTED FROM DNP SIZES: ~48 px L/R, ~47 px T/B\n"
         "BLACK DASH = driver Border=Enable inset: 120 px\n"
-        "Border=Disable removes that border, not the physical trim.",
+        "Template calibration uses the measured values above.",
         font=small_font,
         fill="black",
         spacing=16,

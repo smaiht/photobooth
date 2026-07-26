@@ -1,12 +1,13 @@
 """Compose photos onto native-resolution print templates.
 
-Template folder contains config.json + background images.
-config.json["templates"]["strips"] / ["grid"] define background file and photo positions.
+Template folder contains config.json + background images. Each template has one
+print_layout shared by final composition and the on-screen preview.
 """
 
 from pathlib import Path
 import logging
 import os
+from typing import NamedTuple
 
 from PIL import Image, ImageOps
 
@@ -15,83 +16,77 @@ DEFAULT_PRINT_SIZE = (3688, 2480)
 DEFAULT_PREVIEW_WIDTH = 720
 PREVIEW_PHOTO_MAX_EDGE = 720
 PREVIEW_CANVAS_COLOR = (51, 51, 51)
-DUPLICATE_PREVIEW_HEIGHT_RATIO = 0.86
-DUPLICATE_PREVIEW_Y_OFFSET_RATIO = 0.08
-DUPLICATE_PREVIEW_GAP_RATIO = 0.035
+PREVIEW_SPLIT_HEIGHT_RATIO = 0.86
+PREVIEW_SPLIT_Y_OFFSET_RATIO = 0.08
+PREVIEW_SPLIT_GAP_RATIO = 0.035
+ROTATION_TRANSPOSE = {
+    "none": None,
+    "cw": Image.Transpose.ROTATE_270,
+    "ccw": Image.Transpose.ROTATE_90,
+}
 log = logging.getLogger(__name__)
+
+
+class PhotoSlot(NamedTuple):
+    photo_index: int
+    x: int
+    y: int
+    width: int
+    height: int
+    rotation: str
 
 
 def compose(template_dir: Path, template_name: str, photos: list[str | Path], config: dict) -> Image.Image:
     """Compose photos onto a template. Returns print-ready image."""
     print_size = _validated_print_size(config)
-    tpl = config["templates"][template_name]
-    slots = tpl["photos"]
-    if len(photos) < len(slots):
+    background_name, slots, _, _ = _validated_template(
+        config["templates"][template_name], template_name)
+    required_photos = _required_photo_count(slots)
+    if len(photos) < required_photos:
         raise ValueError(
-            f"template {template_name!r} needs {len(slots)} photos, got {len(photos)}"
+            f"template {template_name!r} needs {required_photos} photos, "
+            f"got {len(photos)}"
         )
-    with Image.open(template_dir / tpl["background"]) as background:
-        bg = background.convert("RGB")
+    with Image.open(template_dir / background_name) as background:
+        canvas = background.convert("RGB")
+    if canvas.size != print_size:
+        actual_size = canvas.size
+        canvas.close()
+        raise ValueError(
+            f"template {template_name!r} background must be {print_size}, "
+            f"got {actual_size}"
+        )
 
+    rendered: dict[tuple[int, str, int, int], tuple[Image.Image, int, int]] = {}
     try:
-        for i, slot in enumerate(slots):
-            try:
-                x, y, slot_w, slot_h = (
-                    int(slot["x"]), int(slot["y"]),
-                    int(slot["w"]), int(slot["h"]),
+        for slot_index, slot in enumerate(slots):
+            if (slot.x + slot.width > canvas.width
+                    or slot.y + slot.height > canvas.height):
+                raise ValueError(
+                    f"photo slot {slot_index} exceeds {template_name!r} "
+                    f"background {canvas.size}"
                 )
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"invalid photo slot {i} in template {template_name!r}"
-                ) from exc
-            if x < 0 or y < 0 or slot_w <= 0 or slot_h <= 0:
-                raise ValueError(
-                    f"invalid photo slot {i} in template {template_name!r}")
-            if x + slot_w > bg.width or y + slot_h > bg.height:
-                raise ValueError(
-                    f"photo slot {i} exceeds {template_name!r} background {bg.size}"
-                )
-            with Image.open(photos[i]) as source:
-                source_image = _oriented_rgb(source)
-            try:
-                img, offset_x, offset_y = _fit_inside(
-                    source_image, slot_w, slot_h)
-            finally:
-                source_image.close()
-            try:
-                bg.paste(img, (x + offset_x, y + offset_y))
-            finally:
-                img.close()
-
-        if tpl.get("duplicate"):
-            sheet = Image.new("RGB", (bg.width * 2, bg.height), "white")
-            sheet.paste(bg, (0, 0))
-            sheet.paste(bg, (bg.width, 0))
-        else:
-            sheet = bg.copy()
+            cache_key = (
+                slot.photo_index, slot.rotation, slot.width, slot.height)
+            prepared = rendered.get(cache_key)
+            if prepared is None:
+                with Image.open(photos[slot.photo_index]) as source:
+                    source_image = _oriented_rgb(source)
+                try:
+                    prepared = _render_photo(
+                        source_image, slot.rotation, slot.width, slot.height)
+                finally:
+                    source_image.close()
+                rendered[cache_key] = prepared
+            image, offset_x, offset_y = prepared
+            canvas.paste(image, (slot.x + offset_x, slot.y + offset_y))
+        return canvas
+    except Exception:
+        canvas.close()
+        raise
     finally:
-        bg.close()
-
-    if sheet.size == print_size:
-        return sheet
-    if sheet.size[::-1] == print_size:
-        rotated = sheet.transpose(Image.Transpose.ROTATE_90)
-        sheet.close()
-        sheet = rotated
-    if sheet.size == print_size:
-        return sheet
-    log.warning(
-        "Template %s produced %sx%s; fitting to %sx%s",
-        template_name,
-        sheet.width,
-        sheet.height,
-        print_size[0],
-        print_size[1],
-    )
-    try:
-        return _fit_on_canvas(sheet, print_size, "white")
-    finally:
-        sheet.close()
+        for image, _, _ in rendered.values():
+            image.close()
 
 
 def generate_template_previews(
@@ -113,8 +108,11 @@ def generate_template_previews(
     print_size = _validated_print_size(config)
     if not isinstance(preview_width, int) or preview_width < 100:
         raise ValueError("preview_width must be at least 100")
-    if len(photos) < max(len(template.get("photos", []))
-                         for template in templates.values()):
+    required_photos = max(
+        template_photo_count(template, name)
+        for name, template in templates.items()
+    )
+    if len(photos) < required_photos:
         raise ValueError("not enough photos for template previews")
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -153,6 +151,122 @@ def _validated_print_size(config: dict) -> tuple[int, int]:
             or not all(isinstance(value, int) and value > 0 for value in print_size)):
         raise ValueError("template print_size must contain two positive integers")
     return print_size
+
+
+def _validated_template(
+    template: dict,
+    template_name: str,
+) -> tuple[str, list[PhotoSlot], str, str]:
+    """Validate one template and return its background, slots and preview turn."""
+    if not isinstance(template, dict):
+        raise ValueError(f"invalid template {template_name!r}")
+    photo_width, photo_height = _validated_photo_size(template, template_name)
+    layout = template.get("print_layout")
+    if not isinstance(layout, dict):
+        raise ValueError(f"template {template_name!r} print_layout must be an object")
+    background = layout.get("background")
+    if not isinstance(background, str) or not background:
+        raise ValueError(f"template {template_name!r} needs a background")
+    raw_slots = layout.get("photos")
+    if not isinstance(raw_slots, list) or not raw_slots:
+        raise ValueError(f"template {template_name!r} has no photo slots")
+
+    slots = []
+    for slot_index, raw in enumerate(raw_slots):
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"invalid photo slot {slot_index} in template {template_name!r}"
+            )
+        try:
+            photo_index = raw["photo_index"]
+            x = raw["x"]
+            y = raw["y"]
+            rotation = raw["rotate"]
+        except KeyError as exc:
+            raise ValueError(
+                f"incomplete photo slot {slot_index} in template {template_name!r}"
+            ) from exc
+        if (not isinstance(photo_index, int) or isinstance(photo_index, bool)
+                or photo_index < 0):
+            raise ValueError(
+                f"invalid photo_index in slot {slot_index} "
+                f"of template {template_name!r}"
+            )
+        if (not isinstance(x, int) or isinstance(x, bool) or x < 0
+                or not isinstance(y, int) or isinstance(y, bool) or y < 0):
+            raise ValueError(
+                f"invalid coordinates in slot {slot_index} "
+                f"of template {template_name!r}"
+            )
+        _rotation_transpose(
+            rotation,
+            f"photo slot {slot_index} of template {template_name!r}",
+        )
+        slots.append(PhotoSlot(
+            photo_index,
+            x,
+            y,
+            photo_width,
+            photo_height,
+            rotation,
+        ))
+
+    required = _required_photo_count(slots)
+    if {slot.photo_index for slot in slots} != set(range(required)):
+        raise ValueError(
+            f"template {template_name!r} must reference consecutive photos"
+        )
+    preview_rotation = template.get("preview_rotation")
+    _rotation_transpose(
+        preview_rotation,
+        f"preview of template {template_name!r}",
+    )
+    preview_split = template.get("preview_split")
+    if preview_split not in ("none", "horizontal"):
+        raise ValueError(
+            f"unsupported preview_split {preview_split!r} "
+            f"in template {template_name!r}"
+        )
+    return background, slots, preview_rotation, preview_split
+
+
+def _required_photo_count(slots: list[PhotoSlot]) -> int:
+    return max(slot.photo_index for slot in slots) + 1
+
+
+def template_photo_count(template: dict, template_name: str = "template") -> int:
+    """Return how many distinct session photos a template references."""
+    _, slots, _, _ = _validated_template(template, template_name)
+    return _required_photo_count(slots)
+
+
+def _validated_photo_size(
+    template: dict,
+    template_name: str,
+) -> tuple[int, int]:
+    raw = template.get("photo_size_px")
+    if not isinstance(raw, dict):
+        raise ValueError(f"template {template_name!r} photo_size_px must be an object")
+    try:
+        size = raw["width"], raw["height"]
+    except KeyError as exc:
+        raise ValueError(
+            f"template {template_name!r} photo_size_px needs width and height"
+        ) from exc
+    if not all(isinstance(value, int) and value > 0 for value in size):
+        raise ValueError(
+            f"template {template_name!r} photo_size_px values must be positive integers"
+        )
+    return size
+
+
+def _rotation_transpose(rotation: str, context: str):
+    try:
+        return ROTATION_TRANSPOSE[rotation]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            f"unsupported rotation {rotation!r} in {context}"
+        ) from exc
 
 
 def _load_reduced_photos(photos: list[str | Path]) -> list[Image.Image]:
@@ -198,28 +312,27 @@ def _compose_preview(
     print_size: tuple[int, int],
     preview_width: int,
 ) -> Image.Image:
-    template = config["templates"][template_name]
-    slots = template["photos"]
-    if len(photos) < len(slots):
-        raise ValueError(f"template {template_name!r} needs {len(slots)} photos")
+    background_name, slots, preview_rotation, preview_split = _validated_template(
+        config["templates"][template_name], template_name)
+    required_photos = _required_photo_count(slots)
+    if len(photos) < required_photos:
+        raise ValueError(
+            f"template {template_name!r} needs {required_photos} photos"
+        )
 
-    source_path = template_dir / template["background"]
+    source_path = template_dir / background_name
     with Image.open(source_path) as source:
         source_size = source.size
+    if source_size != print_size:
+        raise ValueError(
+            f"template {template_name!r} background must be {print_size}, "
+            f"got {source_size}"
+        )
     target_size = (
         preview_width,
         max(1, round(print_size[1] * preview_width / print_size[0])),
     )
-    if template.get("duplicate"):
-        # The print compositor duplicates the strip and rotates the resulting
-        # sheet to match the printer page.  That technical layout is confusing
-        # on the choice screen, so keep the real strip upright and present two
-        # copies as separate physical strips instead.
-        display_height = max(
-            1, round(target_size[1] * DUPLICATE_PREVIEW_HEIGHT_RATIO))
-        scale = display_height / source_size[1]
-    else:
-        scale = preview_width / print_size[0]
+    scale = preview_width / print_size[0]
     background_size = (
         max(1, round(source_size[0] * scale)),
         max(1, round(source_size[1] * scale)),
@@ -229,77 +342,125 @@ def _compose_preview(
     with Image.open(cache_path) as cached:
         background = cached.convert("RGB")
 
+    rendered: dict[tuple[int, str, int, int], tuple[Image.Image, int, int]] = {}
     try:
-        for index, slot in enumerate(slots):
-            try:
-                source_x = int(slot["x"])
-                source_y = int(slot["y"])
-                source_width = int(slot["w"])
-                source_height = int(slot["h"])
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"invalid preview slot {index} in template {template_name!r}"
-                ) from exc
-            if (source_x < 0 or source_y < 0
-                    or source_width <= 0 or source_height <= 0):
-                raise ValueError(
-                    f"invalid preview slot {index} in template {template_name!r}")
-            x = round(source_x * scale)
-            y = round(source_y * scale)
-            width = max(1, round((source_x + source_width) * scale) - x)
-            height = max(1, round((source_y + source_height) * scale) - y)
+        for slot_index, slot in enumerate(slots):
+            x = round(slot.x * scale)
+            y = round(slot.y * scale)
+            width = max(1, round((slot.x + slot.width) * scale) - x)
+            height = max(1, round((slot.y + slot.height) * scale) - y)
             if (x < 0 or y < 0 or x + width > background.width
                     or y + height > background.height):
                 raise ValueError(
-                    f"preview slot {index} exceeds {template_name!r} background"
+                    f"preview slot {slot_index} exceeds "
+                    f"{template_name!r} background"
                 )
-            fitted, offset_x, offset_y = _fit_inside(
-                photos[index], width, height)
-            try:
-                background.paste(fitted, (x + offset_x, y + offset_y))
-            finally:
-                fitted.close()
+            cache_key = (slot.photo_index, slot.rotation, width, height)
+            prepared = rendered.get(cache_key)
+            if prepared is None:
+                prepared = _render_photo(
+                    photos[slot.photo_index], slot.rotation, width, height)
+                rendered[cache_key] = prepared
+            image, offset_x, offset_y = prepared
+            background.paste(image, (x + offset_x, y + offset_y))
+    except Exception:
+        background.close()
+        raise
+    finally:
+        for image, _, _ in rendered.values():
+            image.close()
 
-        if template.get("duplicate"):
-            sheet = _present_duplicate_preview(background, target_size)
-        else:
-            sheet = background.copy()
+    if preview_split == "horizontal":
+        try:
+            return _present_split_preview(
+                background,
+                target_size,
+                preview_rotation,
+                template_name,
+            )
+        finally:
+            background.close()
+
+    transpose = _rotation_transpose(
+        preview_rotation, f"preview of template {template_name!r}")
+    if transpose is not None:
+        rotated = background.transpose(transpose)
+        background.close()
+        background = rotated
+
+    if background.size == target_size:
+        return background
+    try:
+        return _fit_on_canvas(background, target_size, PREVIEW_CANVAS_COLOR)
     finally:
         background.close()
 
-    if sheet.size == target_size:
-        return sheet
-    if sheet.size[::-1] == target_size:
-        rotated = sheet.transpose(Image.Transpose.ROTATE_90)
-        sheet.close()
-        return rotated
-    try:
-        return _fit_on_canvas(sheet, target_size, PREVIEW_CANVAS_COLOR)
-    finally:
-        sheet.close()
 
-
-def _present_duplicate_preview(
-    strip: Image.Image,
+def _present_split_preview(
+    sheet: Image.Image,
     target_size: tuple[int, int],
+    rotation: str,
+    template_name: str,
 ) -> Image.Image:
-    """Place two upright strip copies with a small gap and vertical offset."""
-    target_width, target_height = target_size
-    gap = max(1, round(target_width * DUPLICATE_PREVIEW_GAP_RATIO))
-    y_offset = max(1, round(target_height * DUPLICATE_PREVIEW_Y_OFFSET_RATIO))
-    group_width = strip.width * 2 + gap
-    group_height = strip.height + y_offset
-    if group_width > target_width or group_height > target_height:
-        raise ValueError(
-            f"duplicate preview does not fit {target_size}: "
-            f"group={group_width}x{group_height}"
-        )
+    """Show the two physical half-sheet strips separately on one canvas."""
+    half_height = sheet.height // 2
+    if half_height < 1:
+        raise ValueError(f"template {template_name!r} preview is too short to split")
+    pieces = [
+        sheet.crop((0, 0, sheet.width, half_height)),
+        sheet.crop((0, sheet.height - half_height, sheet.width, sheet.height)),
+    ]
+    transpose = _rotation_transpose(
+        rotation, f"split preview of template {template_name!r}")
+    if transpose is not None:
+        rotated_pieces = []
+        try:
+            for piece in pieces:
+                rotated_pieces.append(piece.transpose(transpose))
+        except Exception:
+            for piece in rotated_pieces:
+                piece.close()
+            raise
+        finally:
+            for piece in pieces:
+                piece.close()
+        pieces = rotated_pieces
 
+    target_width, target_height = target_size
+    gap = max(1, round(target_width * PREVIEW_SPLIT_GAP_RATIO))
+    y_offset = max(0, round(target_height * PREVIEW_SPLIT_Y_OFFSET_RATIO))
+    width_ratios = sum(piece.width / piece.height for piece in pieces)
+    display_height = min(
+        max(1, round(target_height * PREVIEW_SPLIT_HEIGHT_RATIO)),
+        max(1, target_height - y_offset),
+        max(1, int((target_width - gap) / width_ratios)),
+    )
+
+    resized = []
+    try:
+        for piece in pieces:
+            width = max(1, round(piece.width * display_height / piece.height))
+            resized.append(piece.resize(
+                (width, display_height), Image.Resampling.LANCZOS))
+    except Exception:
+        for piece in resized:
+            piece.close()
+        raise
+    finally:
+        for piece in pieces:
+            piece.close()
+
+    group_width = sum(piece.width for piece in resized) + gap
+    group_height = display_height + y_offset
     x = (target_width - group_width) // 2
     y = (target_height - group_height) // 2
     preview = Image.new("RGB", target_size, PREVIEW_CANVAS_COLOR)
-    preview.paste(strip, (x, y))
-    preview.paste(strip, (x + strip.width + gap, y + y_offset))
+    try:
+        preview.paste(resized[0], (x, y))
+        preview.paste(resized[1], (x + resized[0].width + gap, y + y_offset))
+    finally:
+        for piece in resized:
+            piece.close()
     return preview
 
 
@@ -344,6 +505,26 @@ def _save_jpeg_atomic(image: Image.Image, output_path: Path) -> None:
         os.replace(temporary, output_path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _render_photo(
+    source: Image.Image,
+    rotation: str,
+    target_width: int,
+    target_height: int,
+) -> tuple[Image.Image, int, int]:
+    """Apply a configured turn, then fit the whole photo into one slot."""
+    transpose = _rotation_transpose(rotation, "photo slot")
+    rotated = None
+    image = source
+    if transpose is not None:
+        rotated = source.transpose(transpose)
+        image = rotated
+    try:
+        return _fit_inside(image, target_width, target_height)
+    finally:
+        if rotated is not None:
+            rotated.close()
 
 
 def _fit_inside(

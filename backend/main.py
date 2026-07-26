@@ -30,7 +30,7 @@ from .config import (
     load_event_config,
     update_camera_config_field,
 )
-from .composer import compose, generate_template_previews
+from .composer import compose, generate_template_previews, template_photo_count
 from .log import read_log_snapshot
 from .video import VideoRecorder
 from . import yadisk_cloud, yadisk_control
@@ -325,12 +325,12 @@ async def _run_session():
     if not isinstance(available_templates, dict) or not available_templates:
         raise ValueError(f"No templates configured in {template_dir}")
     for template_name, template in available_templates.items():
-        slots = template.get("photos") if isinstance(template, dict) else None
-        if not isinstance(slots, list) or len(slots) != num_photos:
+        if template_photo_count(template, template_name) != num_photos:
             raise ValueError(
-                f"Template {template_name!r} must contain {num_photos} photo slots"
+                f"Template {template_name!r} must reference {num_photos} photos"
             )
-        background = template.get("background")
+        layout = template["print_layout"]
+        background = layout.get("background")
         if not isinstance(background, str) or not (template_dir / background).is_file():
             raise ValueError(f"Template background is missing: {template_name!r}")
     if CONFIG["default_template"] not in available_templates:
@@ -723,6 +723,24 @@ async def handle_disk_command(command: dict) -> dict:
         if print_mode not in ("fit", "fill"):
             return {"status": "error", "message": "Некорректный режим печати"}
 
+        requested_event = str(event_folder or "").strip().strip("/")
+        current_event = (
+            yadisk_cloud.current_event_folder()
+            or str(CONFIG.get("yadisk_folder") or "")
+        ).strip().strip("/")
+        if not requested_event or requested_event != current_event:
+            log.warning(
+                "Custom print rejected for stale event: job=%s requested=%r current=%r",
+                job_id, requested_event, current_event,
+            )
+            return {
+                "status": "error",
+                "message": (
+                    f"Фото относится к event «{requested_event or 'не указан'}», "
+                    f"а на будке сейчас активен event «{current_event or 'не задан'}»"
+                ),
+            }
+
         source_filename = str(data.get("source_filename") or "")
         source_kind = str(data.get("telegram_source_kind") or "")
         source_mime = str(data.get("telegram_mime_type") or "")
@@ -783,17 +801,6 @@ async def handle_disk_command(command: dict) -> dict:
                     pass
             return {"status": "error", "message": f"Фото не поставлено на печать: {exc}"}
 
-        username = str(data.get("username") or "").strip()
-        sender_name = str(data.get("sender_name") or "").strip()
-        sender_id = data.get("sender_id")
-        sender_label = f"@{username}" if username else sender_name
-        sender_label = sender_label or str(sender_id or "неизвестный пользователь")
-        mode_label = (
-            "целиком, с белыми полями"
-            if print_mode == "fit"
-            else "без полей, с обрезкой"
-        )
-
         async def enqueue_custom_print_after_ack() -> None:
             from .printer import enqueue_print
             await enqueue_print(
@@ -809,13 +816,7 @@ async def handle_disk_command(command: dict) -> dict:
 
         return {
             "status": "ok",
-            "message": (
-                f"Фото от {sender_label} поставлено в очередь: {mode_label}"
-                + (
-                    f"; локальные файлы: photos_print_jobs/{job_id}"
-                    if keep_print_files else ""
-                )
-            ),
+            "message": "Ваше фото добавлено в очередь и скоро будет распечатано.",
             "_post_action": enqueue_custom_print_after_ack,
         }
 

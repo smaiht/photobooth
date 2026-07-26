@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageStat
 
 from backend.composer import compose, generate_template_previews
 from backend import main
@@ -51,13 +51,17 @@ class ComposerTests(unittest.TestCase):
         with Image.open(TEMPLATE_DIR / "grid_bg.png") as grid:
             self.assertEqual(grid.size, tuple(self.config["print_size"]))
         with Image.open(TEMPLATE_DIR / "strip_bg.png") as strip:
-            width, height = self.config["print_size"]
-            self.assertEqual(strip.size, (height // 2, width))
+            self.assertEqual(strip.size, tuple(self.config["print_size"]))
 
     def test_canon_6000x4000_ratio_matches_every_photo_slot(self):
         for template in self.config["templates"].values():
-            for slot in template["photos"]:
-                self.assertEqual(slot["w"] * 4000, slot["h"] * 6000)
+            size = template["photo_size_px"]
+            width, height = size["width"], size["height"]
+            for slot in template["print_layout"]["photos"]:
+                if slot.get("rotate") == "ccw":
+                    self.assertEqual(width * 6000, height * 4000)
+                else:
+                    self.assertEqual(width * 4000, height * 6000)
 
     def test_mismatched_photo_is_fitted_whole_without_slot_crop(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -69,8 +73,18 @@ class ComposerTests(unittest.TestCase):
                 "print_size": [100, 100],
                 "templates": {
                     "grid": {
-                        "background": "background.png",
-                        "photos": [{"x": 0, "y": 0, "w": 100, "h": 100}],
+                        "photo_size_px": {"width": 100, "height": 100},
+                        "print_layout": {
+                            "background": "background.png",
+                            "photos": [{
+                                "photo_index": 0,
+                                "x": 0,
+                                "y": 0,
+                                "rotate": "none",
+                            }],
+                        },
+                        "preview_rotation": "none",
+                        "preview_split": "none",
                     },
                 },
             }
@@ -83,7 +97,7 @@ class ComposerTests(unittest.TestCase):
             finally:
                 result.close()
 
-    def test_slightly_wrong_sheet_uses_fit_fallback(self):
+    def test_wrong_background_size_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             folder = Path(tmpdir)
             photos = self._make_photos(folder)
@@ -93,28 +107,56 @@ class ComposerTests(unittest.TestCase):
                 "print_size": self.config["print_size"],
                 "templates": {
                     "grid": {
-                        "background": background.name,
-                        "photos": self.config["templates"]["grid"]["photos"],
+                        "photo_size_px": self.config["templates"]["grid"][
+                            "photo_size_px"
+                        ],
+                        "print_layout": {
+                            "background": background.name,
+                            "photos": self.config["templates"]["grid"][
+                                "print_layout"
+                            ]["photos"],
+                        },
+                        "preview_rotation": "none",
+                        "preview_split": "none",
                     }
                 },
             }
-            with self.assertLogs("backend.composer", level="WARNING"):
-                result = compose(folder, "grid", photos, config)
-            try:
-                self.assertEqual(result.size, tuple(config["print_size"]))
-            finally:
-                result.close()
+            with self.assertRaisesRegex(ValueError, "background must be"):
+                compose(folder, "grid", photos, config)
 
-    def test_strips_are_duplicated_on_landscape_4x6(self):
+    def test_strips_are_duplicated_inside_measured_print_window(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             photos = self._make_photos(Path(tmpdir))
             result = compose(TEMPLATE_DIR, "strips", photos, self.config)
             try:
                 width, height = self.config["print_size"]
                 self.assertEqual(result.size, (width, height))
-                first_strip = result.crop((0, 0, width, height // 2))
-                second_strip = result.crop((0, height // 2, width, height))
-                self.assertIsNone(ImageChops.difference(first_strip, second_strip).getbbox())
+                trim = self.config["print_trim"]
+                visible = result.crop((
+                    trim["left"],
+                    trim["top"],
+                    width - trim["right"],
+                    height - trim["bottom"],
+                ))
+                try:
+                    # The measured area has an odd height, so omit its unmatched
+                    # center row and compare the two physical 2-inch halves.
+                    half = visible.height // 2
+                    first_strip = visible.crop((0, 0, visible.width, half))
+                    second_strip = visible.crop((
+                        0, visible.height - half, visible.width, visible.height))
+                    try:
+                        difference = ImageChops.difference(
+                            first_strip, second_strip)
+                        try:
+                            self.assertLess(max(ImageStat.Stat(difference).mean), 0.2)
+                        finally:
+                            difference.close()
+                    finally:
+                        first_strip.close()
+                        second_strip.close()
+                finally:
+                    visible.close()
             finally:
                 result.close()
 
@@ -130,16 +172,22 @@ class PreviewComposerTests(unittest.TestCase):
 
         Image.new("RGB", (600, 400), "white").save(folder / "grid.png")
         Image.new("RGB", (600, 400), "lightgray").save(folder / "grid_alt.png")
-        Image.new("RGB", (200, 600), "white").save(folder / "strip.png")
-        Image.new("RGB", (200, 600), "lightgray").save(folder / "strip_alt.png")
+        Image.new("RGB", (600, 400), "white").save(folder / "strip.png")
+        Image.new("RGB", (600, 400), "lightgray").save(folder / "strip_alt.png")
         grid_slots = [
-            {"x": 10, "y": 10, "w": 280, "h": 180},
-            {"x": 310, "y": 10, "w": 280, "h": 180},
-            {"x": 10, "y": 210, "w": 280, "h": 180},
-            {"x": 310, "y": 210, "w": 280, "h": 180},
+            {"photo_index": 0, "x": 10, "y": 10, "rotate": "none"},
+            {"photo_index": 1, "x": 310, "y": 10, "rotate": "none"},
+            {"photo_index": 2, "x": 10, "y": 210, "rotate": "none"},
+            {"photo_index": 3, "x": 310, "y": 210, "rotate": "none"},
         ]
         strip_slots = [
-            {"x": 10, "y": 10 + index * 145, "w": 180, "h": 130}
+            {
+                "photo_index": index,
+                "x": 10 + index * 100,
+                "y": row_y,
+                "rotate": "ccw",
+            }
+            for row_y in (10, 255)
             for index in range(4)
         ]
         config = {
@@ -147,23 +195,41 @@ class PreviewComposerTests(unittest.TestCase):
             "templates": {
                 "strips": {
                     "label": "2 полоски",
-                    "background": "strip.png",
-                    "duplicate": True,
-                    "photos": strip_slots,
+                    "photo_size_px": {"width": 90, "height": 135},
+                    "print_layout": {
+                        "background": "strip.png",
+                        "photos": strip_slots,
+                    },
+                    "preview_rotation": "cw",
+                    "preview_split": "horizontal",
                 },
                 "grid": {
                     "label": "4 фото",
-                    "background": "grid.png",
-                    "photos": grid_slots,
+                    "photo_size_px": {"width": 280, "height": 180},
+                    "print_layout": {
+                        "background": "grid.png",
+                        "photos": grid_slots,
+                    },
+                    "preview_rotation": "none",
+                    "preview_split": "none",
                 },
                 "strips_alt": {
-                    "background": "strip_alt.png",
-                    "duplicate": True,
-                    "photos": strip_slots,
+                    "photo_size_px": {"width": 90, "height": 135},
+                    "print_layout": {
+                        "background": "strip_alt.png",
+                        "photos": strip_slots,
+                    },
+                    "preview_rotation": "cw",
+                    "preview_split": "horizontal",
                 },
                 "grid_alt": {
-                    "background": "grid_alt.png",
-                    "photos": grid_slots,
+                    "photo_size_px": {"width": 280, "height": 180},
+                    "print_layout": {
+                        "background": "grid_alt.png",
+                        "photos": grid_slots,
+                    },
+                    "preview_rotation": "none",
+                    "preview_split": "none",
                 },
             },
         }
@@ -187,17 +253,15 @@ class PreviewComposerTests(unittest.TestCase):
             with Image.open(folder / "grid_preview.jpg") as grid_cache:
                 self.assertEqual(grid_cache.size, (300, 200))
             with Image.open(folder / "strip_preview.jpg") as strip_cache:
-                self.assertEqual(strip_cache.size, (57, 172))
+                self.assertEqual(strip_cache.size, (300, 200))
 
             with Image.open(results["strips"]) as strips:
-                # This is a presentation preview, not the rotated printer
-                # sheet: two portrait strips, with the second lower and to the
-                # right, on the same 3:2 canvas as the other choices.
                 self.assertLess(max(strips.getpixel((10, 10))), 80)
-                self.assertGreater(max(strips.getpixel((116, 10))), 150)
-                self.assertLess(max(strips.getpixel((183, 10))), 80)
-                self.assertLess(max(strips.getpixel((116, 190))), 80)
-                self.assertGreater(max(strips.getpixel((183, 190))), 150)
+                self.assertGreater(strips.getpixel((120, 20))[0], 200)
+                self.assertGreater(strips.getpixel((180, 30))[0], 200)
+                self.assertLess(max(strips.getpixel((150, 100))), 80)
+                self.assertGreater(strips.getpixel((120, 50))[1], 80)
+                self.assertGreater(strips.getpixel((120, 85))[2], 200)
 
     def test_background_cache_is_reused_and_rebuilt_when_stale_or_wrong(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -441,6 +505,10 @@ class CustomPrintCommandTests(unittest.IsolatedAsyncioTestCase):
                  AsyncMock(return_value=payload),
              ), \
              patch(
+                 "backend.main.yadisk_cloud.current_event_folder",
+                 return_value="event",
+             ), \
+             patch(
                  "backend.printer.prepare_custom_print",
                  return_value="горизонтальная",
              ) as prepare:
@@ -458,6 +526,41 @@ class CustomPrintCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(prepare.call_args.args[-1], "fill")
+
+    async def test_rejects_print_for_stale_event_before_download(self):
+        download = AsyncMock()
+        with patch.dict(main.CONFIG, {
+                 "print_enabled": True,
+                 "yadisk_folder": "new_event",
+             }), \
+             patch(
+                 "backend.main.yadisk_cloud.current_event_folder",
+                 return_value="new_event",
+             ), \
+             patch(
+                 "backend.main.yadisk_control.download_print_artifact",
+                 download,
+             ), \
+             patch("backend.printer.prepare_custom_print") as prepare:
+            result = await main.handle_disk_command({
+                "command": "print_image",
+                "command_id": "a" * 32,
+                "data": {
+                    "job_id": "b" * 32,
+                    "print_mode": "fill",
+                    "artifact_path": (
+                        "/old_event_by_sessions/0000_print_jobs/image.png"
+                    ),
+                    "event_folder": "old_event",
+                },
+            })
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("old_event", result["message"])
+        self.assertIn("new_event", result["message"])
+        self.assertNotIn("_post_action", result)
+        download.assert_not_awaited()
+        prepare.assert_not_called()
 
 
 class SessionGuardTests(unittest.IsolatedAsyncioTestCase):

@@ -93,11 +93,11 @@ html, body {
 
 #photo-counter {
     position: absolute;
-    top: 3vh;
-    right: 4vw;
+    top: 5vh;
+    right: 5vh;
     font-size: 3vw;
     font-weight: 600;
-    background: rgba(0,0,0,0.5);
+    background: rgba(0, 0, 0, 0.35);
     padding: 0.5em 1em;
     border-radius: 1em;
 }
@@ -171,8 +171,8 @@ html, body {
 /* QR modal */
 #qr-modal {
     position: fixed;
-    bottom: 3vh;
-    left: 3vh;
+    bottom: 5vh;
+    left: 5vh;
     width: 30vh;
     height: 30vh;
     background: #fff;
