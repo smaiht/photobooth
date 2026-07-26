@@ -18,9 +18,11 @@ const qrModalCode = document.getElementById("qr-modal-code");
 const qrModalText = document.getElementById("qr-modal-text");
 const cameraStatusTitle = document.getElementById("camera-status-title");
 const cameraStatusSubtitle = document.getElementById("camera-status-subtitle");
+const tapLockStatus = document.querySelector(".tap-lock-status");
 
 let ws = null;
 let currentState = "idle";
+let startLocked = true;
 let templateTimeout = null;
 let liveViewStarted = false;
 let currentSessionId = "";
@@ -54,6 +56,7 @@ setInterval(() => {
             console.warn(`State desync: frontend=${currentState} backend=${s.state}, fixing`);
             switchScreen(s.state, s);
         } else {
+            syncStartLock(s);
             syncSessionContext(s.state, s);
             if (s.state === "template_select") {
                 renderTemplateOptions(s.templates);
@@ -172,6 +175,14 @@ function handleMessage(msg) {
 const tapPrompt = document.querySelector(".tap-prompt");
 let sessionStarting = false;
 
+function syncStartLock(data = {}) {
+    if (typeof data.start_locked !== "boolean") return;
+    startLocked = data.start_locked;
+    tapLockStatus.hidden = !startLocked;
+    screens.idle.classList.toggle("start-locked", startLocked);
+    screens.idle.setAttribute("aria-disabled", String(startLocked));
+}
+
 function setLiveView(active) {
     if (active === liveViewStarted) return;
     liveViewStarted = active;
@@ -183,6 +194,7 @@ function setLiveView(active) {
 }
 
 function switchScreen(state, data = {}) {
+    syncStartLock(data);
     syncSessionContext(state, data);
 
     // First countdown of a new session — delay screen switch, animate tap prompt
@@ -325,7 +337,7 @@ function startTemplateTimer(seconds) {
 
 // --- Start session ---
 screens.idle.addEventListener("click", () => {
-    if (currentState !== "idle") return;
+    if (currentState !== "idle" || startLocked) return;
     send({ type: "start_session" });
 });
 

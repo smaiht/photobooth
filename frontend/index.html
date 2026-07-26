@@ -15,8 +15,11 @@
         </div>
 
         <!-- IDLE -->
-        <div class="screen" id="screen-idle">
-            <div class="tap-prompt">НАЖМИ ЧТОБЫ НАЧАТЬ</div>
+        <div class="screen start-locked" id="screen-idle" aria-disabled="true">
+            <div class="tap-prompt">
+                <div>НАЖМИ ЧТОБЫ НАЧАТЬ</div>
+                <div class="tap-lock-status">(ЗАБЛОКИРОВАНО)</div>
+            </div>
         </div>
 
         <!-- SHOOTING: live view + countdown + flash -->

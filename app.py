@@ -363,7 +363,8 @@ def _should_skip(name: str) -> bool:
     # config_camera.json intentionally come from the release for now.
     if top in {
         ".git", ".env", ".ENV", "photos", "photos_print_jobs",
-        "yadisk_queue.json", "photobooth.log",
+        "yadisk_queue.json", "cafe_unlock_state.json",
+        "cafe_unlock_state.json.tmp", "photobooth.log",
     } or top.startswith("photobooth.log."):
         return True
     return False
@@ -524,6 +525,7 @@ try {
     Write-UpdateLog "Prepared full release found"
     $preserve = @(
         ".git", ".env", ".ENV", "photos", "photos_print_jobs", "yadisk_queue.json",
+        "cafe_unlock_state.json", "cafe_unlock_state.json.tmp",
         "photobooth.log", ".update_hash"
     )
     foreach ($name in $preserve) {

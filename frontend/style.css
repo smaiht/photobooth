@@ -49,10 +49,25 @@ html, body {
 
 /* IDLE */
 .tap-prompt {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5vh;
     font-size: 5vw;
     font-weight: 700;
     letter-spacing: 0.1em;
     animation: pulse 2s ease-in-out infinite;
+}
+
+.tap-lock-status {
+    font-size: 0.42em;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    opacity: 0.55;
+}
+
+#screen-idle.start-locked {
+    pointer-events: none;
 }
 
 .tap-prompt.exiting {

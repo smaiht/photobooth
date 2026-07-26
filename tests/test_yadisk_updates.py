@@ -136,6 +136,28 @@ class UpdateExtractionTests(unittest.TestCase):
             self.assertEqual((target / "config_app.json").read_text(), "release")
             self.assertFalse((target / "python/runtime.dll").exists())
 
+    def test_preserves_cafe_unlock_runtime_state(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            archive = root / "update.zip"
+            target = root / "app"
+            target.mkdir()
+            state_path = target / "cafe_unlock_state.json"
+            state_path.write_text('{"remaining_sessions":5}', encoding="utf-8")
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("backend/main.py", "updated")
+                zf.writestr(
+                    "cafe_unlock_state.json",
+                    '{"remaining_sessions":0}',
+                )
+
+            app._extract_update(str(archive), str(target))
+
+            self.assertEqual(
+                state_path.read_text(encoding="utf-8"),
+                '{"remaining_sessions":5}',
+            )
+
     def test_rejects_path_traversal(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -206,6 +228,7 @@ class FullUpdateSchedulingTests(unittest.TestCase):
             self.assertIn('Write-UpdateLog "Prepared full release found"', script)
             self.assertNotIn('"config_app.json"', script)
             self.assertIn('".git"', script)
+            self.assertIn('"cafe_unlock_state.json"', script)
             self.assertIn("Get-PhotoboothProcesses", script)
             self.assertIn("robocopy.exe", script)
             self.assertIn("if ($copyExitCode -ge 8)", script)

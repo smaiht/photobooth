@@ -48,6 +48,112 @@ SESSION_LINK = ""
 TEMPLATE_OPTIONS: list[dict] = []
 CONFIG = load_event_config()
 
+CAFE_UNLOCK_STATE_FILENAME = "cafe_unlock_state.json"
+MAX_UNLOCK_SESSIONS = 1000
+
+
+def _technical_event_name() -> str:
+    """Return the exact event name whose start button needs an allowance."""
+    configured = CONFIG.get("technical_event_name")
+    return configured if isinstance(configured, str) and configured else "Кафе"
+
+
+def _active_event_name() -> str:
+    active = yadisk_cloud.current_event_folder()
+    if active is None or active == "":
+        active = CONFIG.get("yadisk_folder", "")
+    return active if isinstance(active, str) else ""
+
+
+def _is_technical_event() -> bool:
+    return _active_event_name() == _technical_event_name()
+
+
+def _cafe_unlock_state_path() -> Path:
+    return ROOT_DIR / CAFE_UNLOCK_STATE_FILENAME
+
+
+def _load_cafe_unlock_sessions() -> int:
+    """Load the durable allowance, failing closed for any unusable state."""
+    path = _cafe_unlock_state_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        remaining = payload.get("remaining_sessions") if isinstance(payload, dict) else None
+        if (type(remaining) is not int
+                or not 0 <= remaining <= MAX_UNLOCK_SESSIONS):
+            raise ValueError("remaining_sessions must be an integer from 0 to 1000")
+        return remaining
+    except FileNotFoundError:
+        return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        log.warning("Cafe unlock state is invalid; start remains locked: %s", exc)
+        return 0
+
+
+def _write_cafe_unlock_sessions(remaining: int) -> None:
+    """Atomically persist a validated session allowance."""
+    if (type(remaining) is not int
+            or not 0 <= remaining <= MAX_UNLOCK_SESSIONS):
+        raise ValueError("remaining_sessions must be an integer from 0 to 1000")
+    path = _cafe_unlock_state_path()
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(
+                {"remaining_sessions": remaining},
+                ensure_ascii=False,
+                indent=4,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+_cafe_unlock_sessions_remaining = _load_cafe_unlock_sessions()
+
+
+def _set_cafe_unlock_sessions(remaining: int) -> None:
+    global _cafe_unlock_sessions_remaining
+    _write_cafe_unlock_sessions(remaining)
+    _cafe_unlock_sessions_remaining = remaining
+
+
+def _consume_cafe_unlock_session() -> int:
+    """Consume one completed Café session; persistence errors fail closed."""
+    global _cafe_unlock_sessions_remaining
+    if _cafe_unlock_sessions_remaining <= 0:
+        log.error("Cafe session completed without an available unlock allowance")
+        _cafe_unlock_sessions_remaining = 0
+        return 0
+    remaining = _cafe_unlock_sessions_remaining - 1
+    try:
+        _set_cafe_unlock_sessions(remaining)
+    except (OSError, ValueError) as exc:
+        # Never leave another start enabled when the durable decrement is
+        # uncertain. Remove any older positive allowance so a process restart
+        # sees a missing file and also fails closed.
+        _cafe_unlock_sessions_remaining = 0
+        log.error("Could not persist consumed Cafe session; failing closed: %s", exc)
+        try:
+            _cafe_unlock_state_path().unlink(missing_ok=True)
+        except OSError as cleanup_exc:
+            log.critical(
+                "Could not remove stale Cafe unlock state after failed consume: %s",
+                cleanup_exc,
+            )
+        return 0
+    log.info("Cafe unlock consumed; remaining sessions=%d", remaining)
+    return remaining
+
+
+def _start_locked() -> bool:
+    return _is_technical_event() and _cafe_unlock_sessions_remaining <= 0
+
 CLIENTS: list[WebSocket] = []
 
 # --- Camera (Windows only) ---
@@ -141,7 +247,12 @@ async def broadcast(msg: dict):
 
 
 def _state_message(new_state: str) -> dict:
-    msg = {"type": "state", "state": new_state}
+    msg = {
+        "type": "state",
+        "state": new_state,
+        "start_locked": _start_locked(),
+        "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
+    }
     if SESSION_ID:
         msg["session_id"] = SESSION_ID
     if SESSION_LINK:
@@ -261,11 +372,36 @@ def _countdown_timing() -> tuple[float, int, int]:
     return pre_countdown_delay, countdown_seconds, countdown_sound_seconds
 
 
+async def _finish_successful_session(
+    output_path: Path,
+    selected_template: str,
+    camera_generation: int,
+    session_uses_cafe_unlock: bool,
+) -> None:
+    """Queue the completed print, charge its allowance, then expose done."""
+    if CONFIG["print_enabled"]:
+        from .printer import enqueue_print
+        await enqueue_print(str(output_path), CONFIG, selected_template)
+        _require_session_camera(camera_generation)
+
+    if session_uses_cafe_unlock:
+        _consume_cafe_unlock_session()
+
+    await set_state("done")
+
+
 # --- Session flow ---
 async def run_session():
     global _session_running, TEMPLATE_OPTIONS
     if _session_running:
         log.warning("Duplicate session start ignored")
+        return
+    if _start_locked():
+        log.warning(
+            "Session start blocked for technical event %r: no unlock sessions remain",
+            _technical_event_name(),
+        )
+        await broadcast(_state_message(STATE))
         return
     _session_running = True
     try:
@@ -345,6 +481,7 @@ async def _run_session():
         yadisk_cloud.current_event_folder()
         or str(CONFIG.get("yadisk_folder") or "").strip().strip("/")
     )
+    session_uses_cafe_unlock = event_folder == _technical_event_name()
     session_folder = yadisk_cloud.session_folder_name(
         SESSION_ID, session_created_at)
     SESSION_PHOTOS = []
@@ -535,13 +672,17 @@ async def _run_session():
         log.warning("No photos to compose!")
 
     _require_session_camera(camera_generation)
-    await set_state("done")
+    if output_path is None:
+        raise RuntimeError("Session composition produced no print file")
 
-    # Print in background
-    if CONFIG["print_enabled"] and output_path:
-        from .printer import enqueue_print
-        await enqueue_print(str(output_path), CONFIG, selected_template)
-        _require_session_camera(camera_generation)
+    # Any compose/print-enqueue error happens before the durable allowance is
+    # consumed, so a failed visitor session can be retried.
+    await _finish_successful_session(
+        output_path,
+        selected_template,
+        camera_generation,
+        session_uses_cafe_unlock,
+    )
 
     # Upload in background
     session_id = SESSION_ID
@@ -881,6 +1022,16 @@ async def handle_disk_command(command: dict) -> dict:
     if cmd in ("run", "start_session"):
         if STATE != "idle":
             return {"status": "error", "message": f"Будка занята: state={STATE}"}
+        if _start_locked():
+            return {
+                "status": "error",
+                "message": (
+                    f"Старт заблокирован для event «{_technical_event_name()}»: "
+                    "сначала выполните /unblock"
+                ),
+                "start_locked": True,
+                "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
+            }
         if not camera or not camera.is_connected:
             await set_state("camera_searching" if camera else "no_camera")
             return {"status": "error", "message": "Камера не подключена"}
@@ -899,6 +1050,31 @@ async def handle_disk_command(command: dict) -> dict:
             "_post_action": start_session_after_ack,
         }
 
+    if cmd == "unblock":
+        sessions = data.get("sessions") if isinstance(data, dict) else None
+        if (type(sessions) is not int
+                or not 1 <= sessions <= MAX_UNLOCK_SESSIONS):
+            return {
+                "status": "error",
+                "message": "sessions должно быть целым числом от 1 до 1000",
+            }
+        try:
+            _set_cafe_unlock_sessions(sessions)
+        except (OSError, ValueError) as exc:
+            return {
+                "status": "error",
+                "message": f"Фотобудка не разблокирована: {exc}",
+            }
+        log.info("Cafe unlock updated: remaining sessions=%d", sessions)
+        if STATE == "idle":
+            await broadcast(_state_message(STATE))
+        return {
+            "status": "ok",
+            "message": f"Остаток разрешённых фотосессий: {sessions}",
+            "start_locked": _start_locked(),
+            "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
+        }
+
     if cmd == "status":
         hash_path = ROOT_DIR / ".update_hash"
         version = hash_path.read_text(encoding="utf-8").strip() if hash_path.exists() else "unknown"
@@ -907,6 +1083,8 @@ async def handle_disk_command(command: dict) -> dict:
         status_lines = [
             f"State: {STATE}",
             f"Camera: {'online' if connected else 'offline'}",
+            f"Start locked: {'yes' if _start_locked() else 'no'}",
+            f"Unlock sessions remaining: {_cafe_unlock_sessions_remaining}",
         ]
         snapshot_method = getattr(camera, "status_snapshot", None) if camera else None
         if snapshot_method:
@@ -948,6 +1126,8 @@ async def handle_disk_command(command: dict) -> dict:
             "status": "ok",
             "message": "\n".join(status_lines),
             "event_folder": event,
+            "start_locked": _start_locked(),
+            "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
         }
 
     if cmd == "set_event":
@@ -961,6 +1141,8 @@ async def handle_disk_command(command: dict) -> dict:
             _save_event_folder(name)
         except Exception as exc:
             return {"status": "error", "message": f"Event не изменён: {exc}"}
+        if STATE == "idle":
+            await broadcast(_state_message(STATE))
         return {
             "status": "ok",
             "message": f"Event активирован на будке: {name}",
@@ -1074,7 +1256,9 @@ async def websocket_endpoint(ws: WebSocket):
             msg = json.loads(data)
 
             if msg["type"] == "start_session" and STATE == "idle":
-                if camera and camera.is_connected:
+                if _start_locked():
+                    await ws.send_text(json.dumps(_state_message(STATE)))
+                elif camera and camera.is_connected:
                     asyncio.create_task(run_session())
                 else:
                     await set_state("camera_searching" if camera else "no_camera")

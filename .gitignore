@@ -31,6 +31,8 @@ build/
 
 photobooth.log*
 yadisk_queue.json
+cafe_unlock_state.json
+cafe_unlock_state.json.tmp
 templates/**/*_preview.jpg
 templates/**/*_preview.jpg.tmp
 templates/**/*_trim.png

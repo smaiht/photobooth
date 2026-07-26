@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import WebSocketDisconnect
+
 from backend import main, yadisk_control
 from backend.config import update_camera_config_field
 
@@ -244,6 +246,286 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
         abort.assert_called_once_with()
         control_close.assert_awaited_once_with()
         cloud_close.assert_awaited_once_with()
+
+
+class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_and_invalid_persistent_state_fail_closed(self):
+        invalid_payloads = (
+            "not-json",
+            json.dumps({}),
+            json.dumps({"remaining_sessions": True}),
+            json.dumps({"remaining_sessions": -1}),
+            json.dumps({"remaining_sessions": 1001}),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)):
+            state_path = Path(tmpdir) / "cafe_unlock_state.json"
+            self.assertEqual(main._load_cafe_unlock_sessions(), 0)
+            for payload in invalid_payloads:
+                with self.subTest(payload=payload):
+                    state_path.write_text(payload, encoding="utf-8")
+                    self.assertEqual(main._load_cafe_unlock_sessions(), 0)
+
+    async def test_state_payload_locks_only_exact_technical_event(self):
+        config = {
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Кафе",
+        }
+        with patch.object(main, "CONFIG", config), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 0), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"):
+            locked = main._state_message("idle")
+        with patch.object(main, "CONFIG", config), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 0), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="кафе"):
+            other_case = main._state_message("idle")
+        with patch.object(main, "CONFIG", config), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 2), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"):
+            unlocked = main._state_message("idle")
+
+        self.assertTrue(locked["start_locked"])
+        self.assertEqual(locked["unlock_sessions_remaining"], 0)
+        self.assertFalse(other_case["start_locked"])
+        self.assertFalse(unlocked["start_locked"])
+        self.assertEqual(unlocked["unlock_sessions_remaining"], 2)
+
+    async def test_technical_event_name_falls_back_to_cafe(self):
+        with patch.object(main, "CONFIG", {"yadisk_folder": "Кафе"}), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 0), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"):
+            self.assertEqual(main._technical_event_name(), "Кафе")
+            self.assertTrue(main._start_locked())
+
+    async def test_unblock_persists_allowance_and_rebroadcasts_idle(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "unblock",
+            "data": {"sessions": 3},
+        }
+        config = {
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Кафе",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "CONFIG", config), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 9), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"), \
+             patch("backend.main.broadcast", new_callable=AsyncMock) as broadcast:
+            result = await main.handle_disk_command(command)
+            persisted = json.loads(
+                (Path(tmpdir) / "cafe_unlock_state.json").read_text(encoding="utf-8"))
+            temporary_exists = (
+                Path(tmpdir) / "cafe_unlock_state.json.tmp").exists()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["start_locked"])
+        self.assertEqual(result["unlock_sessions_remaining"], 3)
+        self.assertEqual(persisted, {"remaining_sessions": 3})
+        self.assertFalse(temporary_exists)
+        broadcast.assert_awaited_once()
+        state_payload = broadcast.await_args.args[0]
+        self.assertFalse(state_payload["start_locked"])
+        self.assertEqual(state_payload["unlock_sessions_remaining"], 3)
+
+    async def test_unblock_rejects_non_integer_or_out_of_range_sessions(self):
+        invalid_values = (None, True, 1.5, "2", 0, 1001)
+        with patch("backend.main._set_cafe_unlock_sessions") as save:
+            for sessions in invalid_values:
+                with self.subTest(sessions=sessions):
+                    result = await main.handle_disk_command({
+                        "command_id": "a" * 32,
+                        "command": "unblock",
+                        "data": {"sessions": sessions},
+                    })
+                    self.assertEqual(result["status"], "error")
+        save.assert_not_called()
+
+    async def test_remote_run_is_blocked_before_camera_checks(self):
+        config = {
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Кафе",
+        }
+        with patch.object(main, "CONFIG", config), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 0), \
+             patch.object(main, "camera", None), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"):
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "run",
+                "data": None,
+            })
+
+        self.assertEqual(result["status"], "error")
+        self.assertTrue(result["start_locked"])
+        self.assertNotIn("_post_action", result)
+
+    async def test_run_session_has_a_final_central_lock_guard(self):
+        with patch.object(main, "_session_running", False), \
+             patch("backend.main._start_locked", return_value=True), \
+             patch("backend.main._run_session", new_callable=AsyncMock) as run, \
+             patch("backend.main.broadcast", new_callable=AsyncMock) as broadcast:
+            await main.run_session()
+
+        run.assert_not_awaited()
+        broadcast.assert_awaited_once()
+
+    async def test_websocket_start_is_blocked_without_scheduling_session(self):
+        ws = MagicMock()
+        ws.accept = AsyncMock()
+        ws.send_text = AsyncMock()
+        ws.receive_text = AsyncMock(side_effect=[
+            json.dumps({"type": "start_session"}),
+            WebSocketDisconnect(),
+        ])
+        config = {
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Кафе",
+        }
+        camera = MagicMock()
+        camera.is_connected = True
+        with patch.object(main, "CONFIG", config), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "CLIENTS", []), \
+             patch.object(main, "camera", camera), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 0), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"), \
+             patch("backend.main.run_session", new_callable=AsyncMock) as run:
+            await main.websocket_endpoint(ws)
+
+        run.assert_not_called()
+        self.assertEqual(ws.send_text.await_count, 2)
+        blocked_payload = json.loads(ws.send_text.await_args_list[-1].args[0])
+        self.assertTrue(blocked_payload["start_locked"])
+
+    async def test_allowance_is_consumed_after_print_enqueue_before_done(self):
+        order = []
+
+        async def enqueue(*_args):
+            order.append("print")
+
+        def require(_generation):
+            order.append("camera")
+
+        def consume():
+            order.append("consume")
+
+        async def state(value):
+            self.assertEqual(value, "done")
+            order.append("done")
+
+        with patch.object(main, "CONFIG", {"print_enabled": True}), \
+             patch("backend.printer.enqueue_print", side_effect=enqueue), \
+             patch("backend.main._require_session_camera", side_effect=require), \
+             patch("backend.main._consume_cafe_unlock_session",
+                   side_effect=consume), \
+             patch("backend.main.set_state", side_effect=state):
+            await main._finish_successful_session(
+                Path("print.jpg"), "grid", 7, True)
+
+        self.assertEqual(order, ["print", "camera", "consume", "done"])
+
+    async def test_print_enqueue_error_does_not_consume_allowance(self):
+        with patch.object(main, "CONFIG", {"print_enabled": True}), \
+             patch("backend.printer.enqueue_print", new_callable=AsyncMock,
+                   side_effect=RuntimeError("printer unavailable")), \
+             patch("backend.main._consume_cafe_unlock_session") as consume, \
+             patch("backend.main.set_state", new_callable=AsyncMock) as state:
+            with self.assertRaisesRegex(RuntimeError, "printer unavailable"):
+                await main._finish_successful_session(
+                    Path("print.jpg"), "grid", 7, True)
+
+        consume.assert_not_called()
+        state.assert_not_awaited()
+
+    async def test_consumption_persists_exactly_one_session(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 2):
+            remaining = main._consume_cafe_unlock_session()
+            persisted = json.loads(
+                (Path(tmpdir) / "cafe_unlock_state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(remaining, 1)
+        self.assertEqual(persisted, {"remaining_sessions": 1})
+
+    async def test_failed_consumption_removes_stale_positive_allowance(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 2), \
+             patch("backend.main._write_cafe_unlock_sessions",
+                   side_effect=OSError("disk full")):
+            state_path = Path(tmpdir) / "cafe_unlock_state.json"
+            state_path.write_text(
+                json.dumps({"remaining_sessions": 2}), encoding="utf-8")
+            remaining = main._consume_cafe_unlock_session()
+            state_exists = state_path.exists()
+            in_memory_remaining = main._cafe_unlock_sessions_remaining
+
+        self.assertEqual(remaining, 0)
+        self.assertEqual(in_memory_remaining, 0)
+        self.assertFalse(state_exists)
+
+    async def test_status_reports_lock_and_remaining_sessions(self):
+        config = {
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Кафе",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "CONFIG", config), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "camera", None), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 0), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"), \
+             patch("backend.main.yadisk_cloud.pending_count", return_value=0):
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "status",
+                "data": None,
+            })
+
+        self.assertTrue(result["start_locked"])
+        self.assertEqual(result["unlock_sessions_remaining"], 0)
+        self.assertIn("Start locked: yes", result["message"])
+        self.assertIn("Unlock sessions remaining: 0", result["message"])
+
+    async def test_set_event_rebroadcasts_idle_lock_state(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "set_event",
+            "data": {"name": "Кафе"},
+        }
+        config = {
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "old_event",
+        }
+        with patch.object(main, "CONFIG", config), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_background_uploads", set()), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", 0), \
+             patch("backend.main.yadisk_cloud.set_event_folder",
+                   new_callable=AsyncMock), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"), \
+             patch("backend.main._save_event_folder"), \
+             patch("backend.main.broadcast", new_callable=AsyncMock) as broadcast:
+            result = await main.handle_disk_command(command)
+
+        self.assertEqual(result["status"], "ok")
+        broadcast.assert_awaited_once()
+        self.assertTrue(broadcast.await_args.args[0]["start_locked"])
 
 
 class CameraConfigValueTests(unittest.TestCase):
