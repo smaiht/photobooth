@@ -18,17 +18,51 @@ class CommandValidationTests(unittest.TestCase):
     def test_validates_command_id_and_filename(self):
         command_id = "a" * 32
         command = yadisk_control.validate_command({
-            "schema_version": 2,
+            "schema_version": 3,
             "message_type": "command",
             "command_id": command_id,
             "command": "set_event",
             "data": {"name": "Свадьба Ивановых 2026"},
-            "reply_chat_id": 123,
+            "reply_target": {
+                "provider": " Telegram ",
+                "conversation_id": 123,
+            },
         }, f"{command_id}.json")
         self.assertEqual(command["command"], "set_event")
+        self.assertEqual(command["reply_target"], {
+            "provider": "telegram",
+            "conversation_id": "123",
+        })
 
         with self.assertRaisesRegex(ValueError, "filename"):
             yadisk_control.validate_command(command, f"{'b' * 32}.json")
+
+    def test_rejects_previous_command_schema(self):
+        with self.assertRaisesRegex(ValueError, "unsupported command schema"):
+            yadisk_control.validate_command({"schema_version": 2})
+
+    def test_requires_valid_reply_target(self):
+        command_id = "a" * 32
+        base = {
+            "schema_version": 3,
+            "message_type": "command",
+            "command_id": command_id,
+            "command": "status",
+            "data": None,
+        }
+        invalid_targets = (
+            None,
+            {"provider": "email", "conversation_id": "123"},
+            {"provider": "telegram", "conversation_id": ""},
+            {"provider": "vk", "conversation_id": None},
+            {"provider": "vk", "conversation_id": True},
+        )
+        for target in invalid_targets:
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                yadisk_control.validate_command({
+                    **base,
+                    "reply_target": target,
+                })
 
 
 class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
@@ -54,12 +88,15 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
     async def test_writes_response_and_deletes_command_before_restart(self):
         command_id = "a" * 32
         body = json.dumps({
-            "schema_version": 2,
+            "schema_version": 3,
             "message_type": "command",
             "command_id": command_id,
             "command": "restart",
             "data": None,
-            "reply_chat_id": 123,
+            "reply_target": {
+                "provider": "vk",
+                "conversation_id": 123,
+            },
         }).encode()
         calls = []
 
@@ -76,6 +113,11 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
             response = json.loads(payload)
             self.assertEqual(response["command_id"], command_id)
             self.assertEqual(response["message_type"], "command_response")
+            self.assertEqual(response["schema_version"], 3)
+            self.assertEqual(response["reply_target"], {
+                "provider": "vk",
+                "conversation_id": "123",
+            })
             self.assertEqual(path, f"/control/to_vps/response_{command_id}.json")
 
         async def delete(filename):

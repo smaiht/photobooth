@@ -8,15 +8,16 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 import aiohttp
 
 log = logging.getLogger(__name__)
 
 API = "https://cloud-api.yandex.net/v1/disk"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 POLL_INTERVAL = 10
 PAGE_SIZE = 100
 # Normal snapshots are about 400 KB.  The larger ceiling allows one legacy
@@ -28,12 +29,52 @@ COMMAND_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 PRINT_ARTIFACT_NAME_RE = re.compile(
     r"^[0-9]{1,20}_[0-9]{8}T[0-9]{6}Z_[a-f0-9]{32}"
     r"\.[a-z0-9]{1,10}$")
+REPLY_PROVIDERS = frozenset({"telegram", "vk"})
 
 _session: aiohttp.ClientSession | None = None
 _transfer_session: aiohttp.ClientSession | None = None
 _root = ""
 _token = ""
 _configured = False
+
+
+@dataclass(frozen=True)
+class ReplyTarget:
+    """Provider-neutral destination carried through the control protocol."""
+
+    provider: str
+    conversation_id: str | int
+
+    def __post_init__(self) -> None:
+        provider = str(self.provider or "").strip().lower()
+        if provider not in REPLY_PROVIDERS:
+            raise ValueError(
+                f"unsupported reply provider: {provider or '<empty>'}")
+        if (not isinstance(self.conversation_id, (str, int))
+                or isinstance(self.conversation_id, bool)):
+            raise ValueError("reply conversation_id must be a string or integer")
+        conversation_id = str(self.conversation_id).strip()
+        if not conversation_id:
+            raise ValueError("reply conversation_id is required")
+        object.__setattr__(self, "provider", provider)
+        object.__setattr__(self, "conversation_id", conversation_id)
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "provider": self.provider,
+            "conversation_id": self.conversation_id,
+        }
+
+    @classmethod
+    def from_value(cls, value: Any) -> ReplyTarget:
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, dict):
+            raise ValueError("reply_target must be an object")
+        return cls(
+            provider=value.get("provider", ""),
+            conversation_id=value.get("conversation_id", ""),
+        )
 
 
 def normalize_folder(folder: str) -> str:
@@ -59,9 +100,7 @@ def validate_command(data: dict, filename: str = "") -> dict:
     command_data = data.get("data")
     if command_data is not None and not isinstance(command_data, (dict, str)):
         raise ValueError("invalid command data")
-    reply_chat_id = data.get("reply_chat_id")
-    if reply_chat_id is not None and not isinstance(reply_chat_id, (int, str)):
-        raise ValueError("invalid reply_chat_id")
+    reply_target = ReplyTarget.from_value(data.get("reply_target"))
     return {
         "schema_version": SCHEMA_VERSION,
         "message_type": "command",
@@ -69,7 +108,7 @@ def validate_command(data: dict, filename: str = "") -> dict:
         "command": command,
         "data": command_data,
         "created_at": str(data.get("created_at", "")),
-        "reply_chat_id": reply_chat_id,
+        "reply_target": reply_target.to_dict(),
     }
 
 
@@ -287,7 +326,7 @@ def _response(command: dict, result: dict) -> tuple[dict, Callable[[], Awaitable
         "message": str(result.get("message", "Готово")),
         "artifact_path": result.get("artifact_path"),
         "event_folder": result.get("event_folder"),
-        "reply_chat_id": command.get("reply_chat_id"),
+        "reply_target": command["reply_target"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     return response, post_action
