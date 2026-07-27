@@ -185,12 +185,15 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(main, "STATE", "idle"), \
              patch.object(main, "_background_uploads", set()), \
              patch("backend.main.yadisk_cloud.set_event_folder", AsyncMock()), \
-             patch("backend.main._save_event_folder") as save:
+             patch("backend.main._save_event_folder") as save, \
+             patch("backend.main._set_cafe_unlock_sessions") as reset:
             result = await main.handle_disk_command(command)
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["event_folder"], "Свадьба Ивановых 2026")
+        self.assertNotIn("<b>", result["message"])
         save.assert_called_once_with("Свадьба Ивановых 2026")
+        reset.assert_not_called()
 
     async def test_restart_is_rejected_during_session(self):
         command = {
@@ -583,21 +586,61 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
             "technical_event_name": "Кафе",
             "yadisk_folder": "old_event",
         }
-        with patch.object(main, "CONFIG", config), \
-             patch.object(main, "STATE", "idle"), \
-             patch.object(main, "_background_uploads", set()), \
-             patch.object(main, "_cafe_unlock_sessions_remaining", 0), \
-             patch("backend.main.yadisk_cloud.set_event_folder",
-                   new_callable=AsyncMock), \
-             patch("backend.main.yadisk_cloud.current_event_folder",
-                   return_value="Кафе"), \
-             patch("backend.main._save_event_folder"), \
-             patch("backend.main.broadcast", new_callable=AsyncMock) as broadcast:
-            result = await main.handle_disk_command(command)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+                 patch.object(main, "CONFIG", config), \
+                 patch.object(main, "STATE", "idle"), \
+                 patch.object(main, "_background_uploads", set()), \
+                 patch.object(main, "_cafe_unlock_sessions_remaining", 4), \
+                 patch("backend.main.yadisk_cloud.set_event_folder",
+                       new_callable=AsyncMock), \
+                 patch("backend.main.yadisk_cloud.current_event_folder",
+                       return_value="Кафе"), \
+                 patch("backend.main._save_event_folder"), \
+                 patch("backend.main.broadcast",
+                       new_callable=AsyncMock) as broadcast:
+                result = await main.handle_disk_command(command)
+                persisted = json.loads(
+                    (Path(tmpdir) / "cafe_unlock_state.json").read_text(
+                        encoding="utf-8"))
 
         self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["start_locked"])
+        self.assertEqual(result["unlock_sessions_remaining"], 0)
+        self.assertEqual(persisted, {"remaining_sessions": 0})
         broadcast.assert_awaited_once()
         self.assertTrue(broadcast.await_args.args[0]["start_locked"])
+        self.assertEqual(
+            broadcast.await_args.args[0]["unlock_sessions_remaining"],
+            0,
+        )
+
+    async def test_cafe_event_is_not_changed_when_lock_reset_fails(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "set_event",
+            "data": {"name": "Кафе"},
+        }
+        with patch.object(
+            main,
+            "CONFIG",
+            {"technical_event_name": "Кафе", "yadisk_folder": "old_event"},
+        ), patch.object(main, "STATE", "idle"), patch.object(
+            main,
+            "_background_uploads",
+            set(),
+        ), patch(
+            "backend.main._set_cafe_unlock_sessions",
+            side_effect=OSError("disk full"),
+        ), patch(
+            "backend.main.yadisk_cloud.set_event_folder",
+            new_callable=AsyncMock,
+        ) as set_event:
+            result = await main.handle_disk_command(command)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Кафе не заблокировано", result["message"])
+        set_event.assert_not_awaited()
 
 
 class CameraConfigValueTests(unittest.TestCase):

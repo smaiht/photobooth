@@ -1,5 +1,6 @@
 import asyncio
 import ctypes
+import io
 import json
 import tempfile
 import threading
@@ -7,6 +8,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from PIL import Image
 
 from backend import main
 from backend.camera import edsdk
@@ -785,6 +788,22 @@ class SessionDisconnectTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VideoAbortTests(unittest.TestCase):
+    def test_first_live_frame_logs_canon_evf_resolution(self):
+        recorder = VideoRecorder()
+        frame = io.BytesIO()
+        Image.new("RGB", (960, 640), "black").save(frame, "JPEG")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder.start(Path(tmpdir))
+            with self.assertLogs("backend.video", level="INFO") as captured:
+                recorder.add_frame(frame.getvalue())
+            recorder.abort()
+
+        self.assertTrue(any(
+            "Canon EVF JPEG: 960x640" in message
+            for message in captured.output
+        ))
+
     def test_late_photo_after_abort_is_ignored(self):
         recorder = VideoRecorder()
         with tempfile.TemporaryDirectory() as tmpdir:

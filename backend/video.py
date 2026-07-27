@@ -49,6 +49,12 @@ class VideoRecorder:
             if not self._frame_size:
                 with Image.open(io.BytesIO(jpeg_bytes)) as img:
                     self._frame_size = img.size
+                log.info(
+                    "Canon EVF JPEG: %dx%d, first frame %.1f KiB",
+                    self._frame_size[0],
+                    self._frame_size[1],
+                    len(jpeg_bytes) / 1024,
+                )
             self._items.append(jpeg_bytes)
 
     def mark_photo(self):

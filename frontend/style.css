@@ -5,6 +5,12 @@
     font-display: block;
 }
 
+:root {
+    --live-view-fit: contain;
+    --live-view-margin-top: 5vh;
+    --live-view-margin-bottom: 5vh;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -89,9 +95,15 @@ html, body {
 }
 
 #live-view {
+    position: absolute;
+    top: var(--live-view-margin-top);
+    left: 0;
     width: 100%;
-    height: 100%;
-    object-fit: cover;
+    height: calc(
+        100% - var(--live-view-margin-top) - var(--live-view-margin-bottom)
+    );
+    object-fit: var(--live-view-fit);
+    object-position: center center;
 }
 
 #countdown-number {
@@ -108,7 +120,7 @@ html, body {
 
 #photo-counter {
     position: absolute;
-    top: 5vh;
+    top: calc(var(--live-view-margin-top) + 3vh);
     right: 5vh;
     font-size: 3vw;
     font-weight: 600;

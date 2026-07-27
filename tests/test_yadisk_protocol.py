@@ -5,8 +5,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
+from PIL import Image
+
+from backend import yadisk_cloud
 from backend.yadisk_cloud import (
     _copy_path,
+    _ensure_promo_card,
     _migrate_queue_jobs,
     _upload_job,
     build_session_job,
@@ -16,6 +20,16 @@ from backend.yadisk_cloud import (
 
 
 class SessionJobTests(unittest.TestCase):
+    def test_bundled_promo_card_is_a_landscape_jpeg(self):
+        self.assertTrue(yadisk_cloud.PROMO_CARD_PATH.is_file())
+        self.assertLessEqual(
+            yadisk_cloud.PROMO_CARD_PATH.stat().st_size,
+            yadisk_cloud.MAX_PROMO_CARD_SIZE,
+        )
+        with Image.open(yadisk_cloud.PROMO_CARD_PATH) as image:
+            self.assertEqual(image.format, "JPEG")
+            self.assertGreater(image.width, image.height)
+
     def test_builds_originals_and_video_without_print_file(self):
         photos = [rf"C:\photos\IMG_{index:04d}.JPG" for index in range(1, 5)]
         job = build_session_job(
@@ -81,7 +95,46 @@ class SessionJobTests(unittest.TestCase):
 
 
 class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_empty_session_folder_can_be_published_before_media(self):
+    async def test_event_switch_uploads_promo_before_becoming_active(self):
+        calls = []
+
+        async def ensure(path):
+            calls.append(("mkdir", path))
+            return True
+
+        async def ensure_promo(path):
+            calls.append(("promo", path))
+            return True
+
+        with patch("backend.yadisk_cloud.pending_count", return_value=0), \
+             patch("backend.yadisk_cloud._connect", AsyncMock(return_value=True)), \
+             patch("backend.yadisk_cloud._ensure_directory", side_effect=ensure), \
+             patch("backend.yadisk_cloud._ensure_promo_card", side_effect=ensure_promo), \
+             patch.object(yadisk_cloud, "_folder", "/old-event"):
+            await yadisk_cloud.set_event_folder("new-event")
+            self.assertEqual(yadisk_cloud.current_event_folder(), "new-event")
+
+        self.assertEqual(calls, [
+            ("mkdir", "/new-event"),
+            ("mkdir", "/new-event_by_sessions"),
+            ("promo", "/new-event"),
+        ])
+
+    async def test_event_switch_stays_on_old_event_if_promo_fails(self):
+        with patch("backend.yadisk_cloud.pending_count", return_value=0), \
+             patch("backend.yadisk_cloud._connect", AsyncMock(return_value=True)), \
+             patch(
+                 "backend.yadisk_cloud._ensure_directory",
+                 AsyncMock(return_value=True),
+             ), patch(
+                 "backend.yadisk_cloud._ensure_promo_card",
+                 AsyncMock(return_value=False),
+             ), patch.object(yadisk_cloud, "_folder", "/old-event"):
+            with self.assertRaisesRegex(RuntimeError, "рекламную карточку"):
+                await yadisk_cloud.set_event_folder("new-event")
+            self.assertEqual(yadisk_cloud.current_event_folder(), "old-event")
+
+    async def test_session_folder_is_published_before_background_promo_copy(self):
         calls = []
 
         async def ensure(path):
@@ -92,11 +145,16 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
             calls.append(("publish", path))
             return "https://disk.yandex.ru/d/link"
 
+        async def ensure_promo(event_path, session_path):
+            calls.append(("promo", event_path, session_path))
+            return True
+
         async def notify(session_id, url):
             calls.append(("qr", session_id, url))
 
         with patch("backend.yadisk_cloud._connect", AsyncMock(return_value=True)), \
              patch("backend.yadisk_cloud._ensure_directory", side_effect=ensure), \
+             patch("backend.yadisk_cloud._ensure_promo_card", side_effect=ensure_promo), \
              patch("backend.yadisk_cloud._publish_directory", side_effect=publish), \
              patch("backend.yadisk_cloud._notify_session_link", side_effect=notify), \
              patch("backend.yadisk_cloud._prepared_links", {}):
@@ -114,8 +172,35 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
                 ("mkdir", "/event_by_sessions/session-folder"),
                 ("publish", "/event_by_sessions/session-folder"),
                 ("qr", "abc123", "https://disk.yandex.ru/d/link"),
+                ("promo", "/event", "/event_by_sessions/session-folder"),
             ],
         )
+
+    async def test_early_promo_failure_does_not_delay_qr(self):
+        with patch("backend.yadisk_cloud._connect", AsyncMock(return_value=True)), \
+             patch(
+                 "backend.yadisk_cloud._ensure_directory",
+                 AsyncMock(return_value=True),
+             ), patch(
+                 "backend.yadisk_cloud._publish_directory",
+                 AsyncMock(return_value="https://disk.yandex.ru/d/link"),
+             ), patch(
+                 "backend.yadisk_cloud._notify_session_link",
+                 new_callable=AsyncMock,
+             ) as notify, patch(
+                 "backend.yadisk_cloud._ensure_promo_card",
+                 AsyncMock(return_value=False),
+             ), patch("backend.yadisk_cloud._prepared_links", {}):
+            url = await prepare_session_share(
+                "abc123",
+                datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc),
+                event_folder="event",
+                session_folder="session-folder",
+            )
+
+        self.assertEqual(url, "https://disk.yandex.ru/d/link")
+        notify.assert_awaited_once_with(
+            "abc123", "https://disk.yandex.ru/d/link")
 
     async def test_upload_then_fallback_publish_then_copy_then_manifest(self):
         with TemporaryDirectory() as tmpdir:
@@ -136,6 +221,10 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
                 calls.append(("upload", remote_path))
                 return True, {"size": local_path.stat().st_size}
 
+            async def ensure_promo(event_path, session_path):
+                calls.append(("promo", event_path, session_path))
+                return True
+
             async def publish(path):
                 calls.append(("publish", path))
                 return "https://disk.yandex.ru/d/link"
@@ -152,6 +241,7 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
                 return True
 
             with patch("backend.yadisk_cloud._ensure_directory", AsyncMock(return_value=True)), \
+                 patch("backend.yadisk_cloud._ensure_promo_card", side_effect=ensure_promo), \
                  patch("backend.yadisk_cloud._publish_directory", side_effect=publish), \
                  patch("backend.yadisk_cloud._notify_session_link", side_effect=notify), \
                  patch("backend.yadisk_cloud._upload_path", side_effect=upload_path), \
@@ -162,15 +252,16 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(
                 [call[0] for call in calls],
-                ["upload", "upload", "publish", "qr", "copy", "copy", "manifest"],
+                ["upload", "upload", "publish", "qr", "promo", "copy", "copy", "manifest"],
             )
             session_path = "/event_by_sessions/session-folder"
             self.assertEqual(calls[0][1], f"{session_path}/photo_01.jpg")
             self.assertEqual(calls[1][1], f"{session_path}/video.mp4")
             self.assertEqual(calls[2][1], session_path)
             self.assertEqual(calls[3][1:], ("abc123", "https://disk.yandex.ru/d/link"))
-            self.assertEqual(calls[4][1], calls[0][1])
-            self.assertTrue(calls[4][2].startswith("/event/202"))
+            self.assertEqual(calls[4][1:], ("/event", session_path))
+            self.assertEqual(calls[5][1], calls[0][1])
+            self.assertTrue(calls[5][2].startswith("/event/202"))
             self.assertIn("/to_vps/session_", calls[-1][1])
             manifest = calls[-1][2]
             self.assertEqual(manifest["message_type"], "session_ready")
@@ -190,6 +281,7 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
             job["files"][0].update({"size": 5, "session_uploaded": True})
 
             with patch("backend.yadisk_cloud._ensure_directory", AsyncMock(return_value=True)), \
+                 patch("backend.yadisk_cloud._ensure_promo_card", AsyncMock(return_value=True)), \
                  patch("backend.yadisk_cloud._resource_size_matches", AsyncMock(return_value=True)), \
                  patch("backend.yadisk_cloud._upload_path", new_callable=AsyncMock) as upload, \
                  patch("backend.yadisk_cloud._publish_directory", AsyncMock(return_value="https://disk.yandex.ru/d/link")), \
@@ -200,6 +292,50 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(await _upload_job(job))
 
             upload.assert_not_awaited()
+
+    async def test_promo_is_uploaded_once_then_copied_into_session(self):
+        with TemporaryDirectory() as tmpdir:
+            promo = Path(tmpdir) / "promo.jpg"
+            promo.write_bytes(b"promo-card")
+            matches = AsyncMock(side_effect=[False, True, False, True])
+
+            with patch("backend.yadisk_cloud.PROMO_CARD_PATH", promo), \
+                 patch("backend.yadisk_cloud._promo_resource_matches", matches), \
+                 patch(
+                     "backend.yadisk_cloud._upload_path",
+                     AsyncMock(return_value=(True, {"size": promo.stat().st_size})),
+                 ) as upload, patch(
+                     "backend.yadisk_cloud._copy_path",
+                     AsyncMock(return_value=True),
+                 ) as copy:
+                self.assertTrue(await _ensure_promo_card(
+                    "/event", "/event_by_sessions/session"))
+
+            event_card = "/event/000_фотобудка_контакты.jpg"
+            session_card = "/event_by_sessions/session/000_фотобудка_контакты.jpg"
+            upload.assert_awaited_once_with(promo, event_card)
+            copy.assert_awaited_once_with(event_card, session_card)
+
+    async def test_current_promo_is_not_uploaded_or_copied_again(self):
+        with TemporaryDirectory() as tmpdir:
+            promo = Path(tmpdir) / "promo.jpg"
+            promo.write_bytes(b"promo-card")
+            with patch("backend.yadisk_cloud.PROMO_CARD_PATH", promo), \
+                 patch(
+                     "backend.yadisk_cloud._promo_resource_matches",
+                     AsyncMock(side_effect=[True, True]),
+                 ), patch(
+                     "backend.yadisk_cloud._upload_path",
+                     new_callable=AsyncMock,
+                 ) as upload, patch(
+                     "backend.yadisk_cloud._copy_path",
+                     new_callable=AsyncMock,
+                 ) as copy:
+                self.assertTrue(await _ensure_promo_card(
+                    "/event", "/event_by_sessions/session"))
+
+            upload.assert_not_awaited()
+            copy.assert_not_awaited()
 
     async def test_server_side_copy_does_not_read_size_or_md5(self):
         class Response:
@@ -238,8 +374,13 @@ class FrontendProtocolTests(unittest.TestCase):
         self.assertIn('new Set(["composing", "printing", "done", "idle"])', frontend_source)
         self.assertIn("Фото с последней съёмки загружаются сюда", frontend_source)
         self.assertIn("dismissedQrSessionId === currentSessionId", frontend_source)
+        self.assertIn("object-fit: var(--live-view-fit)",
+                      (root / "frontend" / "style.css").read_text(encoding="utf-8"))
         self.assertIn('id="qr-modal-close"', frontend_html)
         self.assertTrue(config["show_qr"])
+        self.assertEqual(config["live_view_fit"], "contain")
+        self.assertGreater(config["live_view_margin_top_percent"], 0)
+        self.assertGreater(config["live_view_margin_bottom_percent"], 0)
 
 
 if __name__ == "__main__":

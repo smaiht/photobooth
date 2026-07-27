@@ -329,6 +329,9 @@ def _response(command: dict, result: dict) -> tuple[dict, Callable[[], Awaitable
         "reply_target": command["reply_target"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    for field in ("start_locked", "unlock_sessions_remaining"):
+        if field in result:
+            response[field] = result[field]
     return response, post_action
 
 

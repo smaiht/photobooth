@@ -2,13 +2,16 @@
 
 Original photos and video are uploaded once into a public per-session folder.
 Yandex.Disk then copies them server-side into the flat event folder consumed by
-the VPS.  A typed ``session_ready`` message is published to ``control/to_vps``
-only after every flat copy has completed.
+the VPS. A bundled promotional card is kept in the event root and every public
+session folder, but stays outside the media manifest. A typed ``session_ready``
+message is published to ``control/to_vps`` only after every flat copy has
+completed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -27,6 +30,12 @@ SCHEMA_VERSION = 2
 STORAGE_LAYOUT = "event_sibling_v1"
 RETRY_MIN_SECONDS = 5
 RETRY_MAX_SECONDS = 60
+PROMO_CARD_FILENAME = "000_фотобудка_контакты.jpg"
+PROMO_CARD_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "assets" / "yadisk" / "photobooth_card.jpg"
+)
+MAX_PROMO_CARD_SIZE = 5 * 1024 * 1024
 
 _session: aiohttp.ClientSession | None = None
 _transfer_session: aiohttp.ClientSession | None = None
@@ -314,6 +323,8 @@ async def set_event_folder(folder_name: str) -> None:
     for path in (target, sessions_root(target)):
         if not await _ensure_directory(path):
             raise RuntimeError(f"не удалось создать папку {path}")
+    if not await _ensure_promo_card(target):
+        raise RuntimeError("не удалось загрузить рекламную карточку")
     _folder = target
     log.info(f"YaDisk: active event changed to {_folder}")
 
@@ -357,6 +368,9 @@ async def _connect() -> bool:
             if not await _ensure_directory(path):
                 await _close_sessions()
                 return False
+        if not await _ensure_promo_card(_folder):
+            await _close_sessions()
+            return False
         log.info(f"YaDisk: connected, event folder {_folder}")
         return True
     except Exception as exc:
@@ -419,7 +433,7 @@ async def _publish_directory(path: str) -> str | None:
 async def prepare_session_share(session_id: str, created_at: datetime,
                                 event_folder: str | None = None,
                                 session_folder: str | None = None) -> str | None:
-    """Publish an empty sibling session folder so its QR can be prepared early."""
+    """Publish a session folder early, then add its promo card in background."""
     folder = "/" + str(event_folder or _folder).strip().strip("/")
     folder_name = session_folder or session_folder_name(session_id, created_at)
     if (folder == "/" or not folder_name or "/" in folder_name
@@ -444,6 +458,14 @@ async def prepare_session_share(session_id: str, created_at: datetime,
             session_path,
         )
         await _notify_session_link(session_id, public_url)
+        # This function already runs as a tracked background task. Publish and
+        # expose the QR first; the durable upload worker repeats this check and
+        # will not complete the session until the card is present.
+        if not await _ensure_promo_card(folder, session_path):
+            log.warning(
+                "YaDisk: early promo copy deferred to durable worker session=%s",
+                session_id,
+            )
     return public_url
 
 
@@ -476,6 +498,87 @@ async def _resource_size_matches(remote_path: str, size: int,
         if attempt + 1 < attempts:
             await asyncio.sleep(min(1 + attempt, 5))
     return False
+
+
+def _promo_card_metadata() -> tuple[Path, int, str]:
+    path = PROMO_CARD_PATH
+    if not path.is_file():
+        raise FileNotFoundError(f"promo card is missing: {path}")
+    size = path.stat().st_size
+    if not 0 < size <= MAX_PROMO_CARD_SIZE:
+        raise ValueError(f"promo card has invalid size: {size}")
+    digest = hashlib.md5(path.read_bytes()).hexdigest()
+    return path, size, digest
+
+
+async def _promo_resource_matches(
+    remote_path: str,
+    size: int,
+    digest: str,
+    attempts: int = 1,
+) -> bool:
+    """Check the small static card by size and Yandex.Disk MD5 metadata."""
+    for attempt in range(attempts):
+        try:
+            async with _session.get(
+                f"{API}/resources",
+                params={"path": remote_path, "fields": "size,md5"},
+            ) as response:
+                if response.status == 200:
+                    metadata = await response.json()
+                    if (metadata.get("size") == size
+                            and metadata.get("md5") == digest):
+                        return True
+                elif response.status not in (404, 423):
+                    log.warning(
+                        "YaDisk: verify promo %s: %s %s",
+                        remote_path,
+                        response.status,
+                        await response.text(),
+                    )
+                    return False
+        except Exception as exc:
+            log.warning("YaDisk: verify promo %s failed: %s", remote_path, exc)
+            return False
+        if attempt + 1 < attempts:
+            await asyncio.sleep(min(attempt + 1, 3))
+    return False
+
+
+async def _ensure_promo_card(
+    event_folder: str,
+    session_folder: str | None = None,
+) -> bool:
+    """Ensure the bundled card is current in the event and optional session."""
+    try:
+        local_path, size, digest = _promo_card_metadata()
+    except (OSError, ValueError) as exc:
+        log.error("YaDisk: promo card unavailable: %s", exc)
+        return False
+
+    event_path = f"{event_folder.rstrip('/')}/{PROMO_CARD_FILENAME}"
+    if not await _promo_resource_matches(event_path, size, digest):
+        log.info("YaDisk: uploading promo card to event path=%s", event_path)
+        uploaded, _ = await _upload_path(local_path, event_path)
+        if (not uploaded
+                or not await _promo_resource_matches(
+                    event_path, size, digest, attempts=5)):
+            log.warning("YaDisk: promo card did not verify path=%s", event_path)
+            return False
+
+    if session_folder is None:
+        return True
+
+    session_path = f"{session_folder.rstrip('/')}/{PROMO_CARD_FILENAME}"
+    if await _promo_resource_matches(session_path, size, digest):
+        return True
+    log.info("YaDisk: copying promo card into session path=%s", session_path)
+    if (not await _copy_path(event_path, session_path)
+            or not await _promo_resource_matches(
+                session_path, size, digest, attempts=5)):
+        log.warning("YaDisk: session promo card did not verify path=%s", session_path)
+        return False
+    return True
 
 
 async def _upload_path(local_path: Path, remote_path: str) -> tuple[bool, dict]:
@@ -644,7 +747,6 @@ async def _upload_job(job: dict) -> bool:
     for path in (event_folder, session_root, session_folder, f"{_bus_root}/to_vps"):
         if not await _ensure_directory(path):
             return False
-
     total_files = len(job["files"])
     total_size = sum(
         Path(entry["local_path"]).stat().st_size
@@ -727,6 +829,10 @@ async def _upload_job(job: dict) -> bool:
         session_folder,
     )
     await _notify_session_link(job["session_id"], public_url)
+    # Guest media and QR take priority over the promotional card. If this copy
+    # fails, the durable job remains queued and retries without losing media.
+    if not await _ensure_promo_card(event_folder, session_folder):
+        return False
 
     copies_started = time.monotonic()
     for entry in job["files"]:

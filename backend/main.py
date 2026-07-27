@@ -1156,6 +1156,14 @@ async def handle_disk_command(command: dict) -> dict:
             return {"status": "error", "message": f"Event не изменён: state={STATE}"}
         if _background_uploads:
             return {"status": "error", "message": "Event не изменён: завершается текущая загрузка"}
+        if name == _technical_event_name():
+            try:
+                _set_cafe_unlock_sessions(0)
+            except (OSError, ValueError) as exc:
+                return {
+                    "status": "error",
+                    "message": f"Event не изменён: Кафе не заблокировано: {exc}",
+                }
         try:
             await yadisk_cloud.set_event_folder(name)
             _save_event_folder(name)
@@ -1165,8 +1173,10 @@ async def handle_disk_command(command: dict) -> dict:
             await broadcast(_state_message(STATE))
         return {
             "status": "ok",
-            "message": f"Event активирован на будке: <b>{name}</b>",
+            "message": f"Event активирован на будке: {name}",
             "event_folder": name,
+            "start_locked": _start_locked(),
+            "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
         }
 
     if cmd == "send_logs":

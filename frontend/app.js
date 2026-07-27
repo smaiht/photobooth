@@ -346,7 +346,24 @@ let config = {};
 fetch("/api/config").then(r => r.json()).then(cfg => {
     config = cfg;
     if (cfg.mirror_live_view) liveView.style.transform = "scaleX(-1)";
-    document.documentElement.style.setProperty("--warmup", (cfg.live_view_warmup || 0.3) + "s");
+    const rootStyle = document.documentElement.style;
+    const fit = cfg.live_view_fit === "cover" ? "cover" : "contain";
+    const safeMargin = (value, fallback) => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed)
+            ? Math.min(25, Math.max(0, parsed))
+            : fallback;
+    };
+    rootStyle.setProperty("--live-view-fit", fit);
+    rootStyle.setProperty(
+        "--live-view-margin-top",
+        `${safeMargin(cfg.live_view_margin_top_percent, 5)}vh`,
+    );
+    rootStyle.setProperty(
+        "--live-view-margin-bottom",
+        `${safeMargin(cfg.live_view_margin_bottom_percent, 5)}vh`,
+    );
+    rootStyle.setProperty("--warmup", (cfg.live_view_warmup || 0.3) + "s");
     refreshQr();
 });
 
