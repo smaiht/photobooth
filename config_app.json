@@ -7,7 +7,7 @@
     "countdown_sound_seconds": 3,
     "_countdown_sound_seconds_comment": "How many last countdown ticks play sound. 0 disables countdown beeps.",
     "template_select_timeout": 6,
-    "done_screen_seconds": 8,
+    "done_screen_seconds": 15,
     "_done_screen_seconds_comment": "Seconds to keep the final/done screen before returning to idle.",
     "default_template": "grid",
     "template_pack": "kvas01aug26",
