@@ -484,6 +484,13 @@ async def _run_session():
         background = layout.get("background")
         if not isinstance(background, str) or not (template_dir / background).is_file():
             raise ValueError(f"Template background is missing: {template_name!r}")
+        foreground = layout.get("foreground")
+        if foreground is not None and (
+            not isinstance(foreground, str)
+            or not foreground
+            or not (template_dir / foreground).is_file()
+        ):
+            raise ValueError(f"Template foreground is missing: {template_name!r}")
     if CONFIG["default_template"] not in available_templates:
         raise ValueError(f"Unknown default template: {CONFIG['default_template']}")
 

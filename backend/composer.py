@@ -1,7 +1,8 @@
 """Compose photos onto native-resolution print templates.
 
-Template folder contains config.json + background images. Each template has one
-print_layout shared by final composition and the on-screen preview.
+Template folder contains config.json and image layers. Each template has one
+print_layout shared by final composition and the on-screen preview. An optional
+foreground layer is composited after the photos.
 """
 
 from pathlib import Path
@@ -36,18 +37,26 @@ class PhotoSlot(NamedTuple):
     rotation: str
 
 
+class TemplateSpec(NamedTuple):
+    background: str
+    foreground: str | None
+    slots: list[PhotoSlot]
+    preview_rotation: str
+    preview_split: str
+
+
 def compose(template_dir: Path, template_name: str, photos: list[str | Path], config: dict) -> Image.Image:
     """Compose photos onto a template. Returns print-ready image."""
     print_size = _validated_print_size(config)
-    background_name, slots, _, _ = _validated_template(
+    spec = _validated_template(
         config["templates"][template_name], template_name)
-    required_photos = _required_photo_count(slots)
+    required_photos = _required_photo_count(spec.slots)
     if len(photos) < required_photos:
         raise ValueError(
             f"template {template_name!r} needs {required_photos} photos, "
             f"got {len(photos)}"
         )
-    with Image.open(template_dir / background_name) as background:
+    with Image.open(template_dir / spec.background) as background:
         canvas = background.convert("RGB")
     if canvas.size != print_size:
         actual_size = canvas.size
@@ -59,7 +68,7 @@ def compose(template_dir: Path, template_name: str, photos: list[str | Path], co
 
     rendered: dict[tuple[int, str, int, int], tuple[Image.Image, int, int]] = {}
     try:
-        for slot_index, slot in enumerate(slots):
+        for slot_index, slot in enumerate(spec.slots):
             if (slot.x + slot.width > canvas.width
                     or slot.y + slot.height > canvas.height):
                 raise ValueError(
@@ -80,6 +89,13 @@ def compose(template_dir: Path, template_name: str, photos: list[str | Path], co
                 rendered[cache_key] = prepared
             image, offset_x, offset_y = prepared
             canvas.paste(image, (slot.x + offset_x, slot.y + offset_y))
+        if spec.foreground is not None:
+            _composite_foreground(
+                canvas,
+                template_dir / spec.foreground,
+                print_size,
+                template_name,
+            )
         return canvas
     except Exception:
         canvas.close()
@@ -156,8 +172,8 @@ def _validated_print_size(config: dict) -> tuple[int, int]:
 def _validated_template(
     template: dict,
     template_name: str,
-) -> tuple[str, list[PhotoSlot], str, str]:
-    """Validate one template and return its background, slots and preview turn."""
+) -> TemplateSpec:
+    """Validate one template and return its layers, slots and preview settings."""
     if not isinstance(template, dict):
         raise ValueError(f"invalid template {template_name!r}")
     photo_width, photo_height = _validated_photo_size(template, template_name)
@@ -167,6 +183,13 @@ def _validated_template(
     background = layout.get("background")
     if not isinstance(background, str) or not background:
         raise ValueError(f"template {template_name!r} needs a background")
+    foreground = layout.get("foreground")
+    if foreground is not None and (
+        not isinstance(foreground, str) or not foreground
+    ):
+        raise ValueError(
+            f"template {template_name!r} foreground must be a non-empty string"
+        )
     raw_slots = layout.get("photos")
     if not isinstance(raw_slots, list) or not raw_slots:
         raise ValueError(f"template {template_name!r} has no photo slots")
@@ -227,7 +250,13 @@ def _validated_template(
             f"unsupported preview_split {preview_split!r} "
             f"in template {template_name!r}"
         )
-    return background, slots, preview_rotation, preview_split
+    return TemplateSpec(
+        background,
+        foreground,
+        slots,
+        preview_rotation,
+        preview_split,
+    )
 
 
 def _required_photo_count(slots: list[PhotoSlot]) -> int:
@@ -236,8 +265,31 @@ def _required_photo_count(slots: list[PhotoSlot]) -> int:
 
 def template_photo_count(template: dict, template_name: str = "template") -> int:
     """Return how many distinct session photos a template references."""
-    _, slots, _, _ = _validated_template(template, template_name)
-    return _required_photo_count(slots)
+    spec = _validated_template(template, template_name)
+    return _required_photo_count(spec.slots)
+
+
+def _composite_foreground(
+    canvas: Image.Image,
+    source_path: Path,
+    print_size: tuple[int, int],
+    template_name: str,
+) -> None:
+    with Image.open(source_path) as source:
+        if source.size != print_size:
+            raise ValueError(
+                f"template {template_name!r} foreground must be {print_size}, "
+                f"got {source.size}"
+            )
+        if "A" not in source.getbands():
+            raise ValueError(
+                f"template {template_name!r} foreground must have an alpha channel"
+            )
+        foreground = source.convert("RGBA")
+    try:
+        canvas.paste(foreground, (0, 0), foreground)
+    finally:
+        foreground.close()
 
 
 def _validated_photo_size(
@@ -312,15 +364,15 @@ def _compose_preview(
     print_size: tuple[int, int],
     preview_width: int,
 ) -> Image.Image:
-    background_name, slots, preview_rotation, preview_split = _validated_template(
+    spec = _validated_template(
         config["templates"][template_name], template_name)
-    required_photos = _required_photo_count(slots)
+    required_photos = _required_photo_count(spec.slots)
     if len(photos) < required_photos:
         raise ValueError(
             f"template {template_name!r} needs {required_photos} photos"
         )
 
-    source_path = template_dir / background_name
+    source_path = template_dir / spec.background
     with Image.open(source_path) as source:
         source_size = source.size
     if source_size != print_size:
@@ -344,7 +396,7 @@ def _compose_preview(
 
     rendered: dict[tuple[int, str, int, int], tuple[Image.Image, int, int]] = {}
     try:
-        for slot_index, slot in enumerate(slots):
+        for slot_index, slot in enumerate(spec.slots):
             x = round(slot.x * scale)
             y = round(slot.y * scale)
             width = max(1, round((slot.x + slot.width) * scale) - x)
@@ -363,6 +415,14 @@ def _compose_preview(
                 rendered[cache_key] = prepared
             image, offset_x, offset_y = prepared
             background.paste(image, (x + offset_x, y + offset_y))
+        if spec.foreground is not None:
+            _composite_preview_foreground(
+                background,
+                template_dir / spec.foreground,
+                print_size,
+                background_size,
+                template_name,
+            )
     except Exception:
         background.close()
         raise
@@ -370,19 +430,19 @@ def _compose_preview(
         for image, _, _ in rendered.values():
             image.close()
 
-    if preview_split == "horizontal":
+    if spec.preview_split == "horizontal":
         try:
             return _present_split_preview(
                 background,
                 target_size,
-                preview_rotation,
+                spec.preview_rotation,
                 template_name,
             )
         finally:
             background.close()
 
     transpose = _rotation_transpose(
-        preview_rotation, f"preview of template {template_name!r}")
+        spec.preview_rotation, f"preview of template {template_name!r}")
     if transpose is not None:
         rotated = background.transpose(transpose)
         background.close()
@@ -469,15 +529,8 @@ def _ensure_background_preview(
     cache_path: Path,
     expected_size: tuple[int, int],
 ) -> None:
-    if cache_path.is_file():
-        try:
-            fresh = cache_path.stat().st_mtime_ns >= source_path.stat().st_mtime_ns
-            if fresh:
-                with Image.open(cache_path) as cached:
-                    if cached.size == expected_size:
-                        return
-        except (OSError, ValueError):
-            pass
+    if _preview_cache_is_fresh(source_path, cache_path, expected_size):
+        return
 
     with Image.open(source_path) as source:
         source_image = source.convert("RGB")
@@ -492,6 +545,102 @@ def _ensure_background_preview(
     log.info("Template preview background cached: %s", cache_path)
 
 
+def _composite_preview_foreground(
+    canvas: Image.Image,
+    source_path: Path,
+    print_size: tuple[int, int],
+    preview_size: tuple[int, int],
+    template_name: str,
+) -> None:
+    cache_path = source_path.with_name(f"{source_path.stem}_preview.png")
+    _ensure_foreground_preview(
+        source_path,
+        cache_path,
+        print_size,
+        preview_size,
+        template_name,
+    )
+    with Image.open(cache_path) as cached:
+        foreground = cached.convert("RGBA")
+    try:
+        canvas.paste(foreground, (0, 0), foreground)
+    finally:
+        foreground.close()
+
+
+def _ensure_foreground_preview(
+    source_path: Path,
+    cache_path: Path,
+    print_size: tuple[int, int],
+    expected_size: tuple[int, int],
+    template_name: str,
+) -> None:
+    with Image.open(source_path) as source:
+        if source.size != print_size:
+            raise ValueError(
+                f"template {template_name!r} foreground must be {print_size}, "
+                f"got {source.size}"
+            )
+        if "A" not in source.getbands():
+            raise ValueError(
+                f"template {template_name!r} foreground must have an alpha channel"
+            )
+        if _preview_cache_is_fresh(
+            source_path,
+            cache_path,
+            expected_size,
+            require_alpha=True,
+        ):
+            return
+        source_image = source.convert("RGBA")
+
+    try:
+        reduced = _resize_rgba(source_image, expected_size)
+    finally:
+        source_image.close()
+    try:
+        _save_png_atomic(reduced, cache_path)
+    finally:
+        reduced.close()
+    log.info("Template preview foreground cached: %s", cache_path)
+
+
+def _preview_cache_is_fresh(
+    source_path: Path,
+    cache_path: Path,
+    expected_size: tuple[int, int],
+    require_alpha: bool = False,
+) -> bool:
+    if not cache_path.is_file():
+        return False
+    try:
+        if cache_path.stat().st_mtime_ns < source_path.stat().st_mtime_ns:
+            return False
+        with Image.open(cache_path) as cached:
+            return (
+                cached.size == expected_size
+                and (not require_alpha or "A" in cached.getbands())
+            )
+    except (OSError, ValueError):
+        return False
+
+
+def _resize_rgba(
+    image: Image.Image,
+    target_size: tuple[int, int],
+) -> Image.Image:
+    """Resize RGBA without dark fringes around translucent edges."""
+    premultiplied = image.convert("RGBa")
+    try:
+        resized = premultiplied.resize(target_size, Image.Resampling.LANCZOS)
+    finally:
+        premultiplied.close()
+    try:
+        return resized.convert("RGBA")
+    finally:
+        resized.close()
+
+
 def _save_jpeg_atomic(image: Image.Image, output_path: Path) -> None:
     temporary = output_path.with_name(output_path.name + ".tmp")
     try:
@@ -502,6 +651,15 @@ def _save_jpeg_atomic(image: Image.Image, output_path: Path) -> None:
             optimize=True,
             subsampling=0,
         )
+        os.replace(temporary, output_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _save_png_atomic(image: Image.Image, output_path: Path) -> None:
+    temporary = output_path.with_name(output_path.name + ".tmp")
+    try:
+        image.save(temporary, "PNG", optimize=True)
         os.replace(temporary, output_path)
     finally:
         temporary.unlink(missing_ok=True)

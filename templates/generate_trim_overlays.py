@@ -51,33 +51,67 @@ def _trim_values(raw, print_size: tuple[int, int], label: str) -> tuple[int, int
     return left, top, right, bottom
 
 
-def _background_paths(config_path: Path, config: dict) -> list[Path]:
+def _layer_path(
+    config_path: Path,
+    raw_path: object,
+    template_name: str,
+    layer_name: str,
+    required: bool,
+) -> Path | None:
+    if raw_path is None and not required:
+        return None
+    if not isinstance(raw_path, str) or not raw_path:
+        raise ValueError(
+            f"{config_path}: template {template_name!r} has invalid {layer_name}"
+        )
+    pack_dir = config_path.parent.resolve()
+    source_path = (pack_dir / raw_path).resolve()
+    if pack_dir not in source_path.parents:
+        raise ValueError(
+            f"{config_path}: {layer_name} escapes template pack: {raw_path}"
+        )
+    if not source_path.is_file():
+        raise FileNotFoundError(source_path)
+    return source_path
+
+
+def _template_layers(
+    config_path: Path,
+    config: dict,
+) -> list[tuple[Path, Path | None]]:
     templates = config.get("templates")
     if not isinstance(templates, dict) or not templates:
         raise ValueError(f"{config_path}: templates must be a non-empty object")
 
-    pack_dir = config_path.parent.resolve()
-    backgrounds = set()
+    layers = []
     for template_name, template in templates.items():
         layout = template.get("print_layout") if isinstance(template, dict) else None
-        background = layout.get("background") if isinstance(layout, dict) else None
-        if not isinstance(background, str) or not background:
+        if not isinstance(layout, dict):
             raise ValueError(
-                f"{config_path}: template {template_name!r} has no background"
+                f"{config_path}: template {template_name!r} has no print_layout"
             )
-        source_path = (pack_dir / background).resolve()
-        if pack_dir not in source_path.parents:
-            raise ValueError(
-                f"{config_path}: background escapes template pack: {background}"
-            )
-        if not source_path.is_file():
-            raise FileNotFoundError(source_path)
-        backgrounds.add(source_path)
-    return sorted(backgrounds)
+        background_path = _layer_path(
+            config_path,
+            layout.get("background"),
+            template_name,
+            "background",
+            required=True,
+        )
+        assert background_path is not None
+        foreground_path = _layer_path(
+            config_path,
+            layout.get("foreground"),
+            template_name,
+            "foreground",
+            required=False,
+        )
+        layers.append((background_path, foreground_path))
+    return layers
 
 
 def _write_overlay(
     source_path: Path,
+    foreground_path: Path | None,
     print_size: tuple[int, int],
     trim: tuple[int, int, int, int],
 ) -> Path:
@@ -89,6 +123,26 @@ def _write_overlay(
         raise ValueError(
             f"{source_path}: expected {print_size}, got {actual_size}"
         )
+
+    if foreground_path is not None:
+        with Image.open(foreground_path) as source:
+            if source.size != print_size:
+                background.close()
+                raise ValueError(
+                    f"{foreground_path}: expected {print_size}, got {source.size}"
+                )
+            if "A" not in source.getbands():
+                background.close()
+                raise ValueError(
+                    f"{foreground_path}: foreground must have an alpha channel"
+                )
+            foreground = source.convert("RGBA")
+        try:
+            composed = Image.alpha_composite(background, foreground)
+        finally:
+            foreground.close()
+            background.close()
+        background = composed
 
     width, height = print_size
     left, top, right, bottom = trim
@@ -134,8 +188,13 @@ def main() -> None:
             print_size,
             f"{config_path}: print_trim",
         )
-        for source_path in _background_paths(config_path, config):
-            output_path = _write_overlay(source_path, print_size, trim)
+        for source_path, foreground_path in _template_layers(config_path, config):
+            output_path = _write_overlay(
+                source_path,
+                foreground_path,
+                print_size,
+                trim,
+            )
             generated += 1
             print(f"{config_path.parent.name}: {source_path.name} -> {output_path.name}")
 

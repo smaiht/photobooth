@@ -97,6 +97,82 @@ class ComposerTests(unittest.TestCase):
             finally:
                 result.close()
 
+    def test_optional_foreground_is_composited_after_photos(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            Image.new("RGB", (100, 100), "blue").save(folder / "background.png")
+            Image.new("RGB", (100, 100), "red").save(folder / "photo.png")
+            foreground = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+            try:
+                foreground.paste((0, 255, 0, 255), (40, 40, 60, 60))
+                foreground.save(folder / "foreground.png")
+            finally:
+                foreground.close()
+            config = {
+                "print_size": [100, 100],
+                "templates": {
+                    "grid": {
+                        "photo_size_px": {"width": 100, "height": 100},
+                        "print_layout": {
+                            "background": "background.png",
+                            "foreground": "foreground.png",
+                            "photos": [{
+                                "photo_index": 0,
+                                "x": 0,
+                                "y": 0,
+                                "rotate": "none",
+                            }],
+                        },
+                        "preview_rotation": "none",
+                        "preview_split": "none",
+                    },
+                },
+            }
+
+            result = compose(folder, "grid", [folder / "photo.png"], config)
+            try:
+                self.assertGreater(result.getpixel((10, 10))[0], 200)
+                self.assertGreater(result.getpixel((50, 50))[1], 200)
+                self.assertLess(result.getpixel((50, 50))[0], 50)
+            finally:
+                result.close()
+
+    def test_foreground_requires_native_size_and_alpha(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            Image.new("RGB", (100, 100), "white").save(folder / "background.png")
+            Image.new("RGB", (100, 100), "red").save(folder / "photo.png")
+            config = {
+                "print_size": [100, 100],
+                "templates": {
+                    "grid": {
+                        "photo_size_px": {"width": 100, "height": 100},
+                        "print_layout": {
+                            "background": "background.png",
+                            "foreground": "foreground.png",
+                            "photos": [{
+                                "photo_index": 0,
+                                "x": 0,
+                                "y": 0,
+                                "rotate": "none",
+                            }],
+                        },
+                        "preview_rotation": "none",
+                        "preview_split": "none",
+                    },
+                },
+            }
+
+            Image.new("RGBA", (99, 100), (0, 0, 0, 0)).save(
+                folder / "foreground.png")
+            with self.assertRaisesRegex(ValueError, "foreground must be"):
+                compose(folder, "grid", [folder / "photo.png"], config)
+
+            Image.new("RGB", (100, 100), "white").save(
+                folder / "foreground.png")
+            with self.assertRaisesRegex(ValueError, "alpha channel"):
+                compose(folder, "grid", [folder / "photo.png"], config)
+
     def test_wrong_background_size_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             folder = Path(tmpdir)
@@ -301,6 +377,73 @@ class PreviewComposerTests(unittest.TestCase):
                 folder, photos, config, output_dir, preview_width=300)
             with Image.open(cache_path) as repaired:
                 self.assertEqual(repaired.size, (300, 200))
+
+    def test_foreground_preview_cache_preserves_alpha_and_is_composited_last(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            config, photos = self._make_pack(folder)
+            config["templates"] = {"grid": config["templates"]["grid"]}
+            config["templates"]["grid"]["print_layout"][
+                "foreground"
+            ] = "grid_after.png"
+            source_path = folder / "grid_after.png"
+            cache_path = folder / "grid_after_preview.png"
+            output_dir = folder / "previews"
+
+            foreground = Image.new("RGBA", (600, 400), (0, 0, 0, 0))
+            try:
+                foreground.paste((0, 255, 0, 255), (60, 60, 180, 160))
+                foreground.save(source_path)
+            finally:
+                foreground.close()
+
+            # A fresh-looking RGB cache is still invalid because alpha was lost.
+            Image.new("RGB", (300, 200), "black").save(cache_path)
+            cache_stat = cache_path.stat()
+            os.utime(cache_path, ns=(
+                cache_stat.st_atime_ns,
+                source_path.stat().st_mtime_ns + 1_000_000_000,
+            ))
+
+            results = generate_template_previews(
+                folder, photos, config, output_dir, preview_width=300)
+            with Image.open(cache_path) as cached:
+                self.assertEqual(cached.mode, "RGBA")
+                self.assertEqual(cached.size, (300, 200))
+                self.assertEqual(cached.getpixel((0, 0))[3], 0)
+                self.assertGreater(cached.getpixel((50, 50))[3], 250)
+            with Image.open(results["grid"]) as preview:
+                green = preview.getpixel((50, 50))
+                red = preview.getpixel((125, 50))
+                self.assertGreater(green[1], 180)
+                self.assertLess(green[0], 80)
+                self.assertGreater(red[0], 180)
+                self.assertLess(red[1], 80)
+
+            first_mtime = cache_path.stat().st_mtime_ns
+            generate_template_previews(
+                folder, photos, config, output_dir, preview_width=300)
+            self.assertEqual(cache_path.stat().st_mtime_ns, first_mtime)
+
+            foreground = Image.new("RGBA", (600, 400), (0, 0, 0, 0))
+            try:
+                foreground.paste((0, 0, 255, 255), (60, 60, 180, 160))
+                foreground.save(source_path)
+            finally:
+                foreground.close()
+            source_stat = source_path.stat()
+            os.utime(source_path, ns=(
+                source_stat.st_atime_ns,
+                max(source_stat.st_mtime_ns, first_mtime + 1),
+            ))
+
+            results = generate_template_previews(
+                folder, photos, config, output_dir, preview_width=300)
+            self.assertGreater(cache_path.stat().st_mtime_ns, first_mtime)
+            with Image.open(results["grid"]) as preview:
+                blue = preview.getpixel((50, 50))
+                self.assertGreater(blue[2], 180)
+                self.assertLess(blue[1], 80)
 
     def test_reduced_photos_are_closed_after_preview_batch(self):
         with tempfile.TemporaryDirectory() as tmpdir:

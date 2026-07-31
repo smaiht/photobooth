@@ -35,5 +35,7 @@ cafe_unlock_state.json
 cafe_unlock_state.json.tmp
 templates/**/*_preview.jpg
 templates/**/*_preview.jpg.tmp
+templates/**/*_preview.png
+templates/**/*_preview.png.tmp
 templates/**/*_trim.png
 templates/**/*_trim.png.tmp
