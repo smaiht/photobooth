@@ -476,9 +476,13 @@ async def _run_session():
     if not isinstance(available_templates, dict) or not available_templates:
         raise ValueError(f"No templates configured in {template_dir}")
     for template_name, template in available_templates.items():
-        if template_photo_count(template, template_name) != num_photos:
+        required_photos = template_photo_count(template, template_name)
+        # A layout may intentionally use only the first captured photo, but it
+        # must never reference a photo the session does not capture.
+        if required_photos > num_photos:
             raise ValueError(
-                f"Template {template_name!r} must reference {num_photos} photos"
+                f"Template {template_name!r} needs {required_photos} photos, "
+                f"but the session captures {num_photos}"
             )
         layout = template["print_layout"]
         background = layout.get("background")

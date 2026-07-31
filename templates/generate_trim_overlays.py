@@ -84,6 +84,7 @@ def _template_layers(
         raise ValueError(f"{config_path}: templates must be a non-empty object")
 
     layers = []
+    seen = set()
     for template_name, template in templates.items():
         layout = template.get("print_layout") if isinstance(template, dict) else None
         if not isinstance(layout, dict):
@@ -105,7 +106,10 @@ def _template_layers(
             "foreground",
             required=False,
         )
-        layers.append((background_path, foreground_path))
+        pair = (background_path, foreground_path)
+        if pair not in seen:
+            seen.add(pair)
+            layers.append(pair)
     return layers
 
 

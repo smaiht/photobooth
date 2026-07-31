@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from PIL import Image, ImageChops, ImageStat
 
-from backend.composer import compose, generate_template_previews
+from backend.composer import compose, generate_template_previews, template_photo_count
 from backend import main
 from backend.printer import _print_driver, _printer_name, prepare_custom_print
 
@@ -172,6 +172,68 @@ class ComposerTests(unittest.TestCase):
                 folder / "foreground.png")
             with self.assertRaisesRegex(ValueError, "alpha channel"):
                 compose(folder, "grid", [folder / "photo.png"], config)
+
+    def test_template_may_use_only_first_available_session_photo(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            Image.new("RGB", (120, 80), "white").save(folder / "background.png")
+            first = folder / "first.png"
+            second = folder / "second.png"
+            Image.new("RGB", (100, 60), "red").save(first)
+            Image.new("RGB", (100, 60), "green").save(second)
+            template = {
+                "photo_size_px": {"width": 100, "height": 60},
+                "print_layout": {
+                    "background": "background.png",
+                    "photos": [{
+                        "photo_index": 0,
+                        "x": 10,
+                        "y": 10,
+                        "rotate": "none",
+                    }],
+                },
+                "preview_rotation": "none",
+                "preview_split": "none",
+            }
+            config = {
+                "print_size": [120, 80],
+                "templates": {"single": template},
+            }
+
+            self.assertEqual(template_photo_count(template, "single"), 1)
+            result = compose(folder, "single", [first, second], config)
+            try:
+                pixel = result.getpixel((60, 40))
+                self.assertGreater(pixel[0], 200)
+                self.assertLess(pixel[1], 80)
+            finally:
+                result.close()
+
+    def test_single_template_spans_the_four_grid_slots(self):
+        template_dir = ROOT / "templates" / "kvas01aug26"
+        config = json.loads(
+            (template_dir / "config.json").read_text(encoding="utf-8")
+        )
+        grid = config["templates"]["grid"]
+        single = config["templates"]["single"]
+        grid_width = grid["photo_size_px"]["width"]
+        grid_height = grid["photo_size_px"]["height"]
+        grid_slots = grid["print_layout"]["photos"]
+        left = min(slot["x"] for slot in grid_slots)
+        top = min(slot["y"] for slot in grid_slots)
+        right = max(slot["x"] + grid_width for slot in grid_slots)
+        bottom = max(slot["y"] + grid_height for slot in grid_slots)
+
+        self.assertEqual(
+            single["photo_size_px"],
+            {"width": right - left, "height": bottom - top},
+        )
+        self.assertEqual(single["print_layout"]["photos"], [{
+            "photo_index": 0,
+            "x": left,
+            "y": top,
+            "rotate": "none",
+        }])
 
     def test_wrong_background_size_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:

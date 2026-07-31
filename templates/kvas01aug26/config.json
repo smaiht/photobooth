@@ -42,6 +42,19 @@
             },
             "preview_rotation": "none",
             "preview_split": "none"
+        },
+        "single": {
+            "label": "1 фото",
+            "photo_size_px": {"width": 3050, "height": 2050},
+            "print_layout": {
+                "background": "grid_bg.png",
+                "foreground": "grid_bg_after.png",
+                "photos": [
+                    {"photo_index": 0, "x": 312, "y": 110, "rotate": "none"}
+                ]
+            },
+            "preview_rotation": "none",
+            "preview_split": "none"
         }
     }
 }

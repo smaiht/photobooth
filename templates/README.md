@@ -28,8 +28,9 @@ python\python.exe templates\generate_layout_previews.py kvas01aug26
 python3 templates/generate_layout_previews.py
 ```
 
-Для шаблонов `grid` и `strips` рядом с исходными фонами появятся
-`grid_layout_preview.png` и `strips_layout_preview.png`. Исходные background-
+Для шаблонов `grid`, `single` и `strips` рядом с исходными фонами
+появятся `grid_layout_preview.png`, `single_layout_preview.png` и
+`strips_layout_preview.png`. Исходные background-
 файлы не изменяются. Эти PNG предназначены только для ручной проверки и не
 используются приложением. Они не связаны с runtime-кешами слоёв
 `*_preview.jpg` и `*_preview.png`, которые приложение создаёт автоматически для
