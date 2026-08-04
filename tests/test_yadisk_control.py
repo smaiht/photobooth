@@ -483,6 +483,23 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
         blocked_payload = json.loads(ws.send_text.await_args_list[-1].args[0])
         self.assertTrue(blocked_payload["start_locked"])
 
+    async def test_websocket_skip_finishes_template_selection(self):
+        ws = MagicMock()
+        ws.accept = AsyncMock()
+        ws.send_text = AsyncMock()
+        ws.receive_text = AsyncMock(side_effect=[
+            json.dumps({"type": "skip_print"}),
+            WebSocketDisconnect(),
+        ])
+        skip = MagicMock()
+        with patch.object(main, "STATE", "template_select"), \
+             patch.object(main, "CLIENTS", []), \
+             patch.object(main.app.state, "on_skip_print", skip, create=True), \
+             patch("backend.main._start_locked", return_value=False):
+            await main.websocket_endpoint(ws)
+
+        skip.assert_called_once_with()
+
     async def test_allowance_is_consumed_after_print_enqueue_before_done(self):
         order = []
 

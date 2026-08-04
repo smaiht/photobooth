@@ -571,10 +571,12 @@ class FrontendPreviewTests(unittest.TestCase):
 
         self.assertIn('id="screen-processing"', html)
         self.assertIn('id="template-options"', html)
+        self.assertIn('id="template-skip"', html)
         self.assertNotIn('data-template="strips"', html)
         self.assertNotIn('data-template="grid"', html)
         self.assertIn('document.createElement("button")', script)
         self.assertIn('processing: "processing"', script)
+        self.assertIn('send({ type: "skip_print" })', script)
 
 
 class PrinterQueueTests(unittest.TestCase):
@@ -791,6 +793,142 @@ class SessionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, 1)
         self.assertFalse(main._session_running)
+
+
+class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_outbox_waits_for_video(self):
+        video_future = asyncio.get_running_loop().create_future()
+        created_at = object()
+        with patch(
+            "backend.main.yadisk_cloud.enqueue_session",
+            new_callable=AsyncMock,
+        ) as enqueue:
+            task = asyncio.create_task(main._enqueue_session_after_video(
+                "session123",
+                ["photo1.jpg", "photo2.jpg"],
+                video_future,
+                created_at,
+                "event",
+                "session-folder",
+            ))
+            await asyncio.sleep(0)
+            enqueue.assert_not_awaited()
+
+            video_future.set_result("session.mp4")
+            await task
+
+        enqueue.assert_awaited_once_with(
+            "session123",
+            ["photo1.jpg", "photo2.jpg"],
+            "session.mp4",
+            created_at=created_at,
+            event_folder="event",
+            session_folder="session-folder",
+        )
+
+    async def test_skip_uploads_media_without_printing_or_consuming_unlock(self):
+        class Camera:
+            is_connected = True
+            connection_generation = 1
+
+            def set_download_dir(self, path):
+                self.download_dir = Path(path)
+
+            def start_live_view(self):
+                pass
+
+            def stop_live_view(self):
+                pass
+
+            def take_picture(self, _tag=""):
+                photo_number = len(main.SESSION_PHOTOS) + 1
+                main.SESSION_PHOTOS.append(
+                    str(self.download_dir / f"photo_{photo_number}.jpg"))
+
+        states = []
+
+        async def set_state(state, _extra=None):
+            main.STATE = state
+            states.append(state)
+            if state == "template_select":
+                main.app.state.on_skip_print()
+
+        def previews(_template_dir, _photos, config, output_dir):
+            return {
+                name: Path(output_dir) / f"{name}.jpg"
+                for name in config["templates"]
+            }
+
+        uploaded = asyncio.Event()
+
+        async def enqueue(*_args, **_kwargs):
+            uploaded.set()
+
+        recorder = Mock()
+        recorder.stop_and_encode.return_value = "session.mp4"
+        config = dict(main.CONFIG)
+        config.update({
+            "num_photos": 4,
+            "pre_countdown_delay": 0,
+            "countdown_seconds": 0,
+            "countdown_sound_seconds": 0,
+            "template_select_timeout": 1,
+            "done_screen_seconds": 0,
+            "default_template": "grid",
+            "template_pack": "default",
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Кафе",
+            "print_enabled": True,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.multiple(
+                 main,
+                 camera=Camera(),
+                 video_recorder=recorder,
+                 CONFIG=config,
+                 PHOTOS_DIR=Path(tmpdir),
+                 CLIENTS=[],
+                 STATE="idle",
+                 SESSION_ID="",
+                 SESSION_PHOTOS=[],
+                 SESSION_LINK="",
+                 TEMPLATE_OPTIONS=[],
+                 SESSION_COUNT=0,
+                 _session_running=False,
+                 _background_uploads=set(),
+                 _camera_disconnected_event=asyncio.Event(),
+             ), \
+             patch("backend.main._start_locked", return_value=False), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"), \
+             patch("backend.main.yadisk_cloud.enqueue_session",
+                   new_callable=AsyncMock, side_effect=enqueue) as upload, \
+             patch("backend.main._prepare_session_link",
+                   new_callable=AsyncMock), \
+             patch("backend.main.generate_template_previews",
+                   side_effect=previews), \
+             patch("backend.main.compose") as compose_print, \
+             patch("backend.printer.enqueue_print",
+                   new_callable=AsyncMock) as print_job, \
+             patch("backend.main._consume_cafe_unlock_session") as consume, \
+             patch("backend.main.broadcast", new_callable=AsyncMock), \
+             patch("backend.main.set_state", side_effect=set_state):
+            await main.run_session()
+            await asyncio.wait_for(uploaded.wait(), timeout=1)
+            if main._background_uploads:
+                await asyncio.gather(*list(main._background_uploads))
+
+            self.assertEqual(main.STATE, "idle")
+            self.assertEqual(len(upload.await_args.args[1]), 4)
+            self.assertEqual(upload.await_args.args[2], "session.mp4")
+            self.assertFalse(any(Path(tmpdir).rglob("print_*.jpg")))
+
+        self.assertIn("template_select", states)
+        self.assertNotIn("composing", states)
+        compose_print.assert_not_called()
+        print_job.assert_not_awaited()
+        consume.assert_not_called()
 
 
 if __name__ == "__main__":

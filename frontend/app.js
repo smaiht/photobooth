@@ -12,6 +12,7 @@ const countdownNum = document.getElementById("countdown-number");
 const photoCounter = document.getElementById("photo-counter");
 const templateTimer = document.getElementById("template-timer");
 const templateOptions = document.getElementById("template-options");
+const templateSkip = document.getElementById("template-skip");
 const qrModal = document.getElementById("qr-modal");
 const qrModalClose = document.getElementById("qr-modal-close");
 const qrModalCode = document.getElementById("qr-modal-code");
@@ -257,6 +258,7 @@ function _doSwitch(state, data) {
     }
 
     if (state === "template_select") {
+        templateSkip.disabled = false;
         renderTemplateOptions(data.templates);
         startTemplateTimer(data.timeout ?? config.template_select_timeout ?? 5);
     } else {
@@ -277,6 +279,22 @@ function showCountdown(value) {
 }
 
 // --- Template selection ---
+function lockTemplateSelection() {
+    clearInterval(templateTimeout);
+    templateTimer.textContent = "";
+    templateSkip.disabled = true;
+    templateOptions.querySelectorAll("button").forEach((item) => {
+        item.disabled = true;
+    });
+}
+
+templateSkip.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (currentState !== "template_select" || !send({ type: "skip_print" })) return;
+    lockTemplateSelection();
+});
+
 function renderTemplateOptions(options) {
     if (!Array.isArray(options)) return;
     const signature = JSON.stringify(options.map((option) => [
@@ -310,11 +328,7 @@ function renderTemplateOptions(options) {
         button.append(preview, caption);
         button.addEventListener("click", () => {
             if (!send({ type: "select_template", template: option.name })) return;
-            clearInterval(templateTimeout);
-            templateTimer.textContent = "";
-            templateOptions.querySelectorAll("button").forEach((item) => {
-                item.disabled = true;
-            });
+            lockTemplateSelection();
         });
         templateOptions.appendChild(button);
     });

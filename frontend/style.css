@@ -147,6 +147,29 @@ html, body {
 
 #screen-template { gap: 3vh; }
 
+#template-skip {
+    position: absolute;
+    top: 5vh;
+    right: 5vh;
+    width: 7vw;
+    height: 7vw;
+    border: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: #eee;
+    color: #555;
+    font-family: Arial, sans-serif;
+    font-size: 5vw;
+    font-weight: 300;
+    line-height: 1;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+#template-skip:active { background: #ddd; }
+#template-skip:disabled { opacity: 0.45; }
+
 .template-title { font-size: 4vw; font-weight: 700; }
 
 .template-options {

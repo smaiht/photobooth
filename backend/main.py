@@ -1,7 +1,8 @@
 """Photobooth backend - FastAPI + WebSocket.
 
 State machine:
-  IDLE -> COUNTDOWN -> CAPTURE -> (repeat num_photos times) -> PROCESSING -> TEMPLATE_SELECT -> COMPOSING -> DONE -> IDLE
+  IDLE -> COUNTDOWN -> CAPTURE -> (repeat num_photos times) -> PROCESSING
+  -> TEMPLATE_SELECT -> (COMPOSING -> DONE -> IDLE | IDLE when printing is skipped)
 """
 
 import asyncio
@@ -336,6 +337,33 @@ async def _prepare_session_link(session_id: str, created_at: datetime,
     log.warning("YaDisk: early QR preparation failed for session %s", session_id)
 
 
+async def _enqueue_session_after_video(
+    session_id: str,
+    photos: list[str],
+    video_future: asyncio.Future,
+    created_at: datetime,
+    event_folder: str,
+    session_folder: str,
+) -> None:
+    """Put captured media in the durable outbox as soon as video is ready."""
+    try:
+        video_file = await video_future
+    except Exception:
+        log.exception(
+            "Video encoding failed for session %s; uploading photos only",
+            session_id,
+        )
+        video_file = None
+    await yadisk_cloud.enqueue_session(
+        session_id,
+        photos,
+        video_file,
+        created_at=created_at,
+        event_folder=event_folder,
+        session_folder=session_folder,
+    )
+
+
 # --- Callbacks from EDSDK thread ---
 def on_evf_frame(jpeg_bytes: bytes):
     """Called from EDSDK thread - store latest frame, record video."""
@@ -439,6 +467,7 @@ async def run_session():
     finally:
         _session_running = False
         app.state.on_template_choice = None
+        app.state.on_skip_print = None
         TEMPLATE_OPTIONS = []
         if SESSION_ID:
             try:
@@ -589,13 +618,24 @@ async def _run_session():
         None, video_recorder.stop_and_encode
     )
 
-    link_task = asyncio.create_task(_prepare_session_link(
-        SESSION_ID,
+    session_id = SESSION_ID
+    upload_task = asyncio.create_task(_enqueue_session_after_video(
+        session_id,
+        photos_copy,
+        video_future,
         session_created_at,
         event_folder,
         session_folder,
     ))
-    _track_background(link_task, f"QR preparation for {SESSION_ID}")
+    _track_background(upload_task, f"outbox preparation for {session_id}")
+
+    link_task = asyncio.create_task(_prepare_session_link(
+        session_id,
+        session_created_at,
+        event_folder,
+        session_folder,
+    ))
+    _track_background(link_task, f"QR preparation for {session_id}")
 
     # Build real, session-specific options before showing template selection.
     await set_state("processing")
@@ -638,9 +678,11 @@ async def _run_session():
     )
 
     template_event = asyncio.Event()
-    chosen = {"template": selected_template}
+    chosen = {"template": selected_template, "skip_print": False}
 
     def on_template_choice(t):
+        if template_event.is_set():
+            return
         if t not in selectable_templates:
             log.warning(f"Ignoring unknown template: {t}")
             return
@@ -648,7 +690,15 @@ async def _run_session():
         chosen["template"] = t
         template_event.set()
 
+    def on_skip_print():
+        if template_event.is_set():
+            return
+        log.info("Print skipped by visitor")
+        chosen["skip_print"] = True
+        template_event.set()
+
     app.state.on_template_choice = on_template_choice
+    app.state.on_skip_print = on_skip_print
     await set_state("template_select")
     log.info("Waiting for template choice...")
     choice_task = asyncio.create_task(template_event.wait())
@@ -667,6 +717,12 @@ async def _run_session():
             if not task.done():
                 task.cancel()
         await asyncio.gather(choice_task, disconnect_task, return_exceptions=True)
+    template_event.set()
+    if chosen["skip_print"]:
+        TEMPLATE_OPTIONS = []
+        await set_state("idle")
+        return
+
     selected_template = chosen["template"]
     log.info(f"Selected template: {selected_template}")
 
@@ -709,28 +765,6 @@ async def _run_session():
         camera_generation,
         session_uses_cafe_unlock,
     )
-
-    # Upload in background
-    session_id = SESSION_ID
-    async def _bg_upload():
-        try:
-            video_file = await video_future
-        except Exception:
-            log.exception(
-                "Video encoding failed for session %s; uploading photos only",
-                session_id,
-            )
-            video_file = None
-        await yadisk_cloud.enqueue_session(
-            session_id,
-            photos_copy,
-            video_file,
-            created_at=session_created_at,
-            event_folder=event_folder,
-            session_folder=session_folder,
-        )
-    upload_task = asyncio.create_task(_bg_upload())
-    _track_background(upload_task, f"outbox preparation for {session_id}")
 
     # Show done/QR screen before allowing the next session
     await asyncio.sleep(max(0, float(CONFIG.get("done_screen_seconds", 8))))
@@ -1310,6 +1344,11 @@ async def websocket_endpoint(ws: WebSocket):
                 cb = getattr(app.state, "on_template_choice", None)
                 if cb:
                     cb(msg.get("template", ""))
+
+            elif msg["type"] == "skip_print" and STATE == "template_select":
+                cb = getattr(app.state, "on_skip_print", None)
+                if cb:
+                    cb()
 
     except WebSocketDisconnect:
         try:
