@@ -40,8 +40,18 @@
         <!-- TEMPLATE SELECT -->
         <div class="screen" id="screen-template" hidden>
             <button id="template-skip" type="button" aria-label="Не печатать">×</button>
-            <div class="template-title">ВЫБЕРИ ФОРМАТ</div>
+            <div class="template-title">ВЫБЕРИТЕ ФОРМАТ</div>
             <div class="template-options" id="template-options"></div>
+            <section class="photo-choice-panel" id="photo-choice-panel" hidden>
+                <div class="photo-choice-header">
+                    <h2>ВЫБЕРИТЕ ФОТО ДЛЯ ПЕЧАТИ</h2>
+                    <div class="frame-segments" role="group" aria-label="Рамка фотографии">
+                        <button class="frame-segment active" id="frame-on" type="button" aria-pressed="true">С РАМКОЙ</button>
+                        <button class="frame-segment" id="frame-off" type="button" aria-pressed="false">БЕЗ РАМКИ</button>
+                    </div>
+                </div>
+                <div class="photo-choice-options" id="photo-choice-options"></div>
+            </section>
             <div id="template-timer"></div>
         </div>
 

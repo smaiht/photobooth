@@ -9,7 +9,15 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from PIL import Image, ImageChops, ImageStat
 
-from backend.composer import compose, generate_template_previews, template_photo_count
+from backend.composer import (
+    PhotoChoicePreview,
+    PreviewBatch,
+    compose,
+    compose_unframed_photo,
+    generate_template_previews,
+    template_photo_count,
+)
+from backend import composer as composer_module
 from backend import main
 from backend.printer import _print_driver, _printer_name, prepare_custom_print
 
@@ -235,6 +243,29 @@ class ComposerTests(unittest.TestCase):
             "rotate": "none",
         }])
 
+    def test_unframed_photo_covers_the_complete_print_raster(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            source = Image.new("RGB", (200, 100), "green")
+            try:
+                source.paste("red", (0, 0, 30, 100))
+                source.paste("blue", (170, 0, 200, 100))
+                source.save(folder / "wide.png")
+            finally:
+                source.close()
+
+            result = compose_unframed_photo(
+                folder / "wide.png", {"print_size": [100, 100]})
+            try:
+                self.assertEqual(result.size, (100, 100))
+                for point in ((0, 0), (99, 0), (0, 99), (99, 99), (50, 50)):
+                    red, green, blue = result.getpixel(point)
+                    self.assertLess(red, 30)
+                    self.assertGreater(green, 100)
+                    self.assertLess(blue, 30)
+            finally:
+                result.close()
+
     def test_wrong_background_size_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             folder = Path(tmpdir)
@@ -400,6 +431,66 @@ class PreviewComposerTests(unittest.TestCase):
                 self.assertLess(max(strips.getpixel((150, 100))), 80)
                 self.assertGreater(strips.getpixel((120, 50))[1], 80)
                 self.assertGreater(strips.getpixel((120, 85))[2], 200)
+
+    def test_photo_choice_reuses_reduced_photos_for_four_preview_pairs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            config, photos = self._make_pack(folder)
+            Image.new("RGB", (600, 400), "white").save(folder / "single.png")
+            config["templates"] = {
+                "single": {
+                    "label": "1 фото",
+                    "photo_choice": True,
+                    "photo_size_px": {"width": 500, "height": 300},
+                    "print_layout": {
+                        "background": "single.png",
+                        "photos": [{
+                            "photo_index": 0,
+                            "x": 50,
+                            "y": 50,
+                            "rotate": "none",
+                        }],
+                    },
+                    "preview_rotation": "none",
+                    "preview_split": "none",
+                },
+            }
+            output_dir = folder / "previews"
+
+            with patch(
+                "backend.composer._load_reduced_photos",
+                wraps=composer_module._load_reduced_photos,
+            ) as load_photos:
+                batch = generate_template_previews(
+                    folder, photos, config, output_dir, preview_width=300)
+
+            self.assertIsInstance(batch, PreviewBatch)
+            load_photos.assert_called_once_with(photos)
+            self.assertEqual(list(batch), ["single"])
+            choices = batch.photo_choices["single"]
+            self.assertEqual(
+                [choice.photo_index for choice in choices], list(range(4)))
+            self.assertEqual(batch["single"], choices[0].with_frame)
+            self.assertEqual(len(list(output_dir.glob("*.jpg"))), 8)
+
+            expected_colors = (
+                (255, 0, 0),
+                (0, 128, 0),
+                (0, 0, 255),
+                (255, 255, 0),
+            )
+            for choice, expected in zip(choices, expected_colors):
+                with Image.open(choice.with_frame) as framed, \
+                     Image.open(choice.without_frame) as unframed:
+                    self.assertEqual(framed.size, (300, 200))
+                    self.assertEqual(unframed.size, (300, 200))
+                    self.assertGreater(min(framed.getpixel((2, 2))), 220)
+                    center = framed.getpixel((150, 100))
+                    edge = unframed.getpixel((2, 2))
+                    for actual, wanted in zip(center, expected):
+                        self.assertAlmostEqual(actual, wanted, delta=30)
+                    for actual, wanted in zip(edge, expected):
+                        self.assertAlmostEqual(actual, wanted, delta=30)
 
     def test_background_cache_is_reused_and_rebuilt_when_stale_or_wrong(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -577,6 +668,13 @@ class FrontendPreviewTests(unittest.TestCase):
         self.assertIn('document.createElement("button")', script)
         self.assertIn('processing: "processing"', script)
         self.assertIn('send({ type: "skip_print" })', script)
+        self.assertIn('id="photo-choice-panel"', html)
+        self.assertIn('id="frame-on"', html)
+        self.assertIn('id="frame-off"', html)
+        self.assertIn('ВЫБЕРИТЕ ФОТО ДЛЯ ПЕЧАТИ', html)
+        self.assertIn('photo_index: choice.photo_index', script)
+        self.assertIn('with_frame: photoChoiceWithFrame', script)
+        self.assertIn('resetTemplateSelection();', script)
 
 
 class PrinterQueueTests(unittest.TestCase):
@@ -929,6 +1027,133 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         compose_print.assert_not_called()
         print_job.assert_not_awaited()
         consume.assert_not_called()
+
+    async def test_single_choice_uses_selected_original_and_unframed_cover(self):
+        class Camera:
+            is_connected = True
+            connection_generation = 1
+
+            def set_download_dir(self, path):
+                self.download_dir = Path(path)
+
+            def start_live_view(self):
+                pass
+
+            def stop_live_view(self):
+                pass
+
+            def take_picture(self, _tag=""):
+                photo_number = len(main.SESSION_PHOTOS) + 1
+                main.SESSION_PHOTOS.append(
+                    str(self.download_dir / f"photo_{photo_number}.jpg"))
+
+        states = []
+        exposed_options = []
+
+        async def set_state(state, _extra=None):
+            main.STATE = state
+            states.append(state)
+            if state == "template_select":
+                exposed_options.extend(main.TEMPLATE_OPTIONS)
+                choose = main.app.state.on_template_choice
+                choose("single", True, True)
+                choose("single", 4, True)
+                choose("single", 2, "false")
+                choose("single", 2, False)
+
+        def previews(_template_dir, _photos, config, output_dir):
+            paths = {
+                name: Path(output_dir) / f"{name}.jpg"
+                for name in config["templates"]
+            }
+            choices = [
+                PhotoChoicePreview(
+                    index,
+                    Path(output_dir) / f"single_{index + 1}_frame.jpg",
+                    Path(output_dir) / f"single_{index + 1}_no_frame.jpg",
+                )
+                for index in range(4)
+            ]
+            paths["single"] = choices[0].with_frame
+            return PreviewBatch(paths, {"single": choices})
+
+        uploaded = asyncio.Event()
+
+        async def enqueue(*_args, **_kwargs):
+            uploaded.set()
+
+        recorder = Mock()
+        recorder.stop_and_encode.return_value = "session.mp4"
+        config = dict(main.CONFIG)
+        config.update({
+            "num_photos": 4,
+            "pre_countdown_delay": 0,
+            "countdown_seconds": 0,
+            "countdown_sound_seconds": 0,
+            "template_select_timeout": 1,
+            "done_screen_seconds": 0,
+            "default_template": "grid",
+            "template_pack": "kvas01aug26",
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "event",
+            "print_enabled": False,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.multiple(
+                 main,
+                 camera=Camera(),
+                 video_recorder=recorder,
+                 CONFIG=config,
+                 PHOTOS_DIR=Path(tmpdir),
+                 CLIENTS=[],
+                 STATE="idle",
+                 SESSION_ID="",
+                 SESSION_PHOTOS=[],
+                 SESSION_LINK="",
+                 TEMPLATE_OPTIONS=[],
+                 SESSION_COUNT=0,
+                 _session_running=False,
+                 _background_uploads=set(),
+                 _camera_disconnected_event=asyncio.Event(),
+             ), \
+             patch("backend.main._start_locked", return_value=False), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="event"), \
+             patch("backend.main.yadisk_cloud.enqueue_session",
+                   new_callable=AsyncMock, side_effect=enqueue), \
+             patch("backend.main._prepare_session_link",
+                   new_callable=AsyncMock), \
+             patch("backend.main.generate_template_previews",
+                   side_effect=previews), \
+             patch("backend.main.compose") as compose_with_frame, \
+             patch(
+                 "backend.main.compose_unframed_photo",
+                 side_effect=lambda *_args: Image.new("RGB", (120, 80), "red"),
+             ) as compose_without_frame, \
+             patch("backend.main.broadcast", new_callable=AsyncMock), \
+             patch("backend.main.set_state", side_effect=set_state):
+            await main.run_session()
+            await asyncio.wait_for(uploaded.wait(), timeout=1)
+            if main._background_uploads:
+                await asyncio.gather(*list(main._background_uploads))
+
+            selected_path = compose_without_frame.call_args.args[0]
+            self.assertEqual(Path(selected_path).name, "photo_3.jpg")
+            self.assertEqual(
+                len(list(Path(tmpdir).rglob(
+                    "print_single_photo_03_no_frame.jpg"))),
+                1,
+            )
+
+        single_option = next(
+            option for option in exposed_options if option["name"] == "single")
+        self.assertTrue(single_option["photo_choice"])
+        self.assertEqual(len(single_option["photo_previews"]), 4)
+        self.assertIn("template_select", states)
+        self.assertIn("composing", states)
+        compose_with_frame.assert_not_called()
+        compose_without_frame.assert_called_once()
 
 
 if __name__ == "__main__":

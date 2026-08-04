@@ -31,7 +31,12 @@ from .config import (
     load_event_config,
     update_camera_config_field,
 )
-from .composer import compose, generate_template_previews, template_photo_count
+from .composer import (
+    compose,
+    compose_unframed_photo,
+    generate_template_previews,
+    template_photo_count,
+)
 from .log import read_log_snapshot
 from .video import VideoRecorder
 from . import yadisk_cloud, yadisk_control
@@ -513,6 +518,11 @@ async def _run_session():
                 f"Template {template_name!r} needs {required_photos} photos, "
                 f"but the session captures {num_photos}"
             )
+        if template.get("photo_choice") is True and required_photos != 1:
+            raise ValueError(
+                f"Photo-choice template {template_name!r} must reference "
+                "exactly one photo"
+            )
         layout = template["print_layout"]
         background = layout.get("background")
         if not isinstance(background, str) or not (template_dir / background).is_file():
@@ -642,7 +652,7 @@ async def _run_session():
     preview_dir = session_dir / "previews"
     log.info("Generating previews for %d templates...", len(available_templates))
     preview_started = time.monotonic()
-    preview_paths = await asyncio.get_running_loop().run_in_executor(
+    preview_batch = await asyncio.get_running_loop().run_in_executor(
         None,
         generate_template_previews,
         template_dir,
@@ -651,18 +661,33 @@ async def _run_session():
         preview_dir,
     )
     _require_session_camera(camera_generation)
+    preview_paths = dict(preview_batch)
+    photo_choice_previews = getattr(preview_batch, "photo_choices", {})
     for template_name, preview_path in preview_paths.items():
         template = available_templates[template_name]
         label = template.get("label")
         if not isinstance(label, str) or not label.strip():
             label = template_name
-        TEMPLATE_OPTIONS.append({
+        option = {
             "name": template_name,
             "label": label,
             "preview_url": (
                 f"/photos/{SESSION_ID}/previews/{preview_path.name}"
             ),
-        })
+        }
+        choices = photo_choice_previews.get(template_name, [])
+        if choices:
+            option["photo_choice"] = True
+            option["photo_previews"] = [{
+                "photo_index": choice.photo_index,
+                "with_frame_url": (
+                    f"/photos/{SESSION_ID}/previews/{choice.with_frame.name}"
+                ),
+                "without_frame_url": (
+                    f"/photos/{SESSION_ID}/previews/{choice.without_frame.name}"
+                ),
+            } for choice in choices]
+        TEMPLATE_OPTIONS.append(option)
     selectable_templates = set(preview_paths)
     selected_template = CONFIG["default_template"]
     if selected_template not in selectable_templates:
@@ -678,16 +703,45 @@ async def _run_session():
     )
 
     template_event = asyncio.Event()
-    chosen = {"template": selected_template, "skip_print": False}
+    chosen = {
+        "template": selected_template,
+        "photo_index": (
+            0 if available_templates[selected_template].get("photo_choice") is True
+            else None
+        ),
+        "with_frame": True,
+        "skip_print": False,
+    }
 
-    def on_template_choice(t):
+    def on_template_choice(t, photo_index=None, with_frame=None):
         if template_event.is_set():
             return
         if t not in selectable_templates:
             log.warning(f"Ignoring unknown template: {t}")
             return
-        log.info(f"Template chosen: {t}")
+        is_photo_choice = available_templates[t].get("photo_choice") is True
+        if is_photo_choice:
+            if (type(photo_index) is not int
+                    or not 0 <= photo_index < len(SESSION_PHOTOS)):
+                log.warning(
+                    "Ignoring invalid photo index for %s: %r", t, photo_index)
+                return
+            if type(with_frame) is not bool:
+                log.warning(
+                    "Ignoring invalid frame choice for %s: %r", t, with_frame)
+                return
+        else:
+            photo_index = None
+            with_frame = True
+        log.info(
+            "Template chosen: %s, photo_index=%r, with_frame=%s",
+            t,
+            photo_index,
+            with_frame,
+        )
         chosen["template"] = t
+        chosen["photo_index"] = photo_index
+        chosen["with_frame"] = with_frame
         template_event.set()
 
     def on_skip_print():
@@ -724,7 +778,14 @@ async def _run_session():
         return
 
     selected_template = chosen["template"]
-    log.info(f"Selected template: {selected_template}")
+    selected_photo_index = chosen["photo_index"]
+    selected_with_frame = chosen["with_frame"]
+    log.info(
+        "Selected template: %s, photo_index=%r, with_frame=%s",
+        selected_template,
+        selected_photo_index,
+        selected_with_frame,
+    )
 
     # Compose the local print file. It never enters the cloud outbox.
     await set_state("composing")
@@ -738,8 +799,24 @@ async def _run_session():
     if SESSION_PHOTOS:
         def _compose():
             log.info(f"Composing {selected_template}...")
-            result = compose(template_dir, selected_template, SESSION_PHOTOS, tpl_config)
-            path = session_dir / f"print_{selected_template}.jpg"
+            template = available_templates[selected_template]
+            if template.get("photo_choice") is True:
+                photo = SESSION_PHOTOS[selected_photo_index]
+                if selected_with_frame:
+                    result = compose(
+                        template_dir, selected_template, [photo], tpl_config)
+                    frame_label = "frame"
+                else:
+                    result = compose_unframed_photo(photo, tpl_config)
+                    frame_label = "no_frame"
+                path = session_dir / (
+                    f"print_{selected_template}_photo_"
+                    f"{selected_photo_index + 1:02d}_{frame_label}.jpg"
+                )
+            else:
+                result = compose(
+                    template_dir, selected_template, SESSION_PHOTOS, tpl_config)
+                path = session_dir / f"print_{selected_template}.jpg"
             try:
                 dpi = int(CONFIG.get("print_dpi", 600))
                 result.save(str(path), "JPEG", quality=95, subsampling=0, dpi=(dpi, dpi))
@@ -1343,7 +1420,11 @@ async def websocket_endpoint(ws: WebSocket):
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)
                 if cb:
-                    cb(msg.get("template", ""))
+                    cb(
+                        msg.get("template", ""),
+                        msg.get("photo_index"),
+                        msg.get("with_frame"),
+                    )
 
             elif msg["type"] == "skip_print" and STATE == "template_select":
                 cb = getattr(app.state, "on_skip_print", None)

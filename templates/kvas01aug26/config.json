@@ -45,6 +45,7 @@
         },
         "single": {
             "label": "1 фото",
+            "photo_choice": true,
             "photo_size_px": {"width": 3050, "height": 2050},
             "print_layout": {
                 "background": "grid_bg.png",

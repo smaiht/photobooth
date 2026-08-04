@@ -42,6 +42,12 @@ python3 templates/generate_layout_previews.py
 `preview_rotation`. Например, `strips_single_strip_layout_preview.png` имеет
 ориентацию одной готовой вертикальной полоски.
 
+Шаблон, в котором посетитель должен выбрать один из снятых кадров, помечается
+`"photo_choice": true` и обязан иметь единственный слот с `photo_index: 0`.
+Во время сессии backend подставляет в этот слот выбранный оригинал и готовит
+рамочное превью для каждого кадра. Безрамочные превью и печать используют
+центральный `cover` на полный `print_size`, без background/foreground шаблона.
+
 ## Print trim overlay
 
 `generate_trim_overlays.py` проходит по всем template packs с файлом

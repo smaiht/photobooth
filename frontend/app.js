@@ -13,6 +13,10 @@ const photoCounter = document.getElementById("photo-counter");
 const templateTimer = document.getElementById("template-timer");
 const templateOptions = document.getElementById("template-options");
 const templateSkip = document.getElementById("template-skip");
+const photoChoicePanel = document.getElementById("photo-choice-panel");
+const photoChoiceOptions = document.getElementById("photo-choice-options");
+const frameOn = document.getElementById("frame-on");
+const frameOff = document.getElementById("frame-off");
 const qrModal = document.getElementById("qr-modal");
 const qrModalClose = document.getElementById("qr-modal-close");
 const qrModalCode = document.getElementById("qr-modal-code");
@@ -30,6 +34,9 @@ let currentSessionId = "";
 let displayedQrUrl = "";
 let dismissedQrSessionId = "";
 let renderedTemplateSignature = "";
+let photoChoiceTemplate = null;
+let photoChoiceWithFrame = true;
+let photoPreviewCycle = null;
 const sessionLinks = new Map();
 
 // --- WebSocket ---
@@ -264,6 +271,7 @@ function _doSwitch(state, data) {
     } else {
         clearInterval(templateTimeout);
         templateTimer.textContent = "";
+        resetTemplateSelection();
     }
 
     refreshQr();
@@ -286,6 +294,11 @@ function lockTemplateSelection() {
     templateOptions.querySelectorAll("button").forEach((item) => {
         item.disabled = true;
     });
+    photoChoiceOptions.querySelectorAll("button").forEach((item) => {
+        item.disabled = true;
+    });
+    frameOn.disabled = true;
+    frameOff.disabled = true;
 }
 
 templateSkip.addEventListener("click", (event) => {
@@ -301,10 +314,19 @@ function renderTemplateOptions(options) {
         option.name,
         option.label,
         option.preview_url,
+        option.photo_choice === true,
+        Array.isArray(option.photo_previews)
+            ? option.photo_previews.map((preview) => [
+                preview.photo_index,
+                preview.with_frame_url,
+                preview.without_frame_url,
+            ])
+            : [],
     ]));
     if (signature === renderedTemplateSignature) return;
 
     renderedTemplateSignature = signature;
+    resetPhotoChoice();
     templateOptions.replaceChildren();
     options.forEach((option) => {
         if (!option || typeof option.name !== "string"
@@ -316,6 +338,10 @@ function renderTemplateOptions(options) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "template-btn";
+        const isPhotoChoice = option.photo_choice === true
+            && Array.isArray(option.photo_previews)
+            && option.photo_previews.length > 0;
+        button.dataset.photoChoice = String(isPhotoChoice);
 
         const preview = document.createElement("img");
         preview.className = "template-preview";
@@ -326,25 +352,154 @@ function renderTemplateOptions(options) {
         const caption = document.createElement("span");
         caption.textContent = label;
         button.append(preview, caption);
+        if (isPhotoChoice) {
+            button.photoPreviews = option.photo_previews;
+        }
         button.addEventListener("click", () => {
+            if (isPhotoChoice) {
+                openPhotoChoice(option, button);
+                return;
+            }
             if (!send({ type: "select_template", template: option.name })) return;
             lockTemplateSelection();
         });
         templateOptions.appendChild(button);
     });
+    startPhotoPreviewCycle();
 }
+
+function startPhotoPreviewCycle() {
+    clearInterval(photoPreviewCycle);
+    const buttons = [...templateOptions.querySelectorAll(
+        '.template-btn[data-photo-choice="true"]',
+    )];
+    if (!buttons.length) return;
+    let index = 0;
+    photoPreviewCycle = setInterval(() => {
+        index++;
+        buttons.forEach((button) => {
+            const previews = button.photoPreviews;
+            if (!Array.isArray(previews) || !previews.length) return;
+            const preview = previews[index % previews.length];
+            button.querySelector("img").src = preview.with_frame_url;
+        });
+    }, 1000);
+}
+
+function resetPhotoChoice() {
+    photoChoiceTemplate = null;
+    photoChoiceWithFrame = true;
+    photoChoicePanel.hidden = true;
+    photoChoiceOptions.replaceChildren();
+    screens.template.classList.remove("photo-choice-open");
+    templateOptions.querySelectorAll(".template-btn").forEach((button) => {
+        button.classList.remove("active");
+    });
+    updateFrameSegments();
+}
+
+function resetTemplateSelection() {
+    clearInterval(photoPreviewCycle);
+    photoPreviewCycle = null;
+    renderedTemplateSignature = "";
+    resetPhotoChoice();
+    templateOptions.replaceChildren();
+}
+
+function openPhotoChoice(option, selectedButton) {
+    const alreadyOpen = photoChoiceTemplate?.name === option.name
+        && !photoChoicePanel.hidden;
+    photoChoiceTemplate = option;
+    if (!alreadyOpen) photoChoiceWithFrame = true;
+    screens.template.classList.add("photo-choice-open");
+    photoChoicePanel.hidden = false;
+    templateOptions.querySelectorAll(".template-btn").forEach((button) => {
+        button.classList.toggle("active", button === selectedButton);
+    });
+    updateFrameSegments();
+    renderPhotoChoices();
+}
+
+function updateFrameSegments() {
+    frameOn.classList.toggle("active", photoChoiceWithFrame);
+    frameOff.classList.toggle("active", !photoChoiceWithFrame);
+    frameOn.setAttribute("aria-pressed", String(photoChoiceWithFrame));
+    frameOff.setAttribute("aria-pressed", String(!photoChoiceWithFrame));
+    frameOn.disabled = photoChoiceTemplate === null;
+    frameOff.disabled = photoChoiceTemplate === null;
+}
+
+function renderPhotoChoices() {
+    photoChoiceOptions.replaceChildren();
+    if (!photoChoiceTemplate) return;
+
+    photoChoiceTemplate.photo_previews.forEach((choice) => {
+        const photoNumber = choice.photo_index + 1;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "photo-choice-btn";
+        button.setAttribute("aria-label", `Напечатать фото ${photoNumber}`);
+
+        const preview = document.createElement("img");
+        preview.src = photoChoiceWithFrame
+            ? choice.with_frame_url
+            : choice.without_frame_url;
+        preview.alt = `Фото ${photoNumber}`;
+        preview.draggable = false;
+
+        const number = document.createElement("span");
+        number.className = "photo-choice-number";
+        number.textContent = photoNumber;
+        button.append(preview, number);
+        button.addEventListener("click", () => {
+            const sent = send({
+                type: "select_template",
+                template: photoChoiceTemplate.name,
+                photo_index: choice.photo_index,
+                with_frame: photoChoiceWithFrame,
+            });
+            if (sent) lockTemplateSelection();
+        });
+        photoChoiceOptions.appendChild(button);
+    });
+}
+
+frameOn.addEventListener("click", () => {
+    photoChoiceWithFrame = true;
+    updateFrameSegments();
+    renderPhotoChoices();
+});
+
+frameOff.addEventListener("click", () => {
+    photoChoiceWithFrame = false;
+    updateFrameSegments();
+    renderPhotoChoices();
+});
 
 function startTemplateTimer(seconds) {
     let remaining = seconds;
-    templateTimer.textContent = `Авто-выбор через ${remaining}с`;
+    const renderRemaining = () => {
+        const mod100 = remaining % 100;
+        const mod10 = remaining % 10;
+        const unit = mod100 >= 11 && mod100 <= 14
+            ? "секунд"
+            : mod10 === 1
+                ? "секунда"
+                : mod10 >= 2 && mod10 <= 4
+                    ? "секунды"
+                    : "секунд";
+        templateTimer.textContent = `Осталось ${remaining} ${unit}`;
+    };
+    renderRemaining();
     clearInterval(templateTimeout);
     templateTimeout = setInterval(() => {
         remaining--;
         if (remaining <= 0) {
             clearInterval(templateTimeout);
             templateTimer.textContent = "";
+            lockTemplateSelection();
         } else {
-            templateTimer.textContent = `Авто-выбор через ${remaining}с`;
+            renderRemaining();
         }
     }, 1000);
 }

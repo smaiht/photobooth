@@ -45,6 +45,28 @@ class TemplateSpec(NamedTuple):
     preview_split: str
 
 
+class PhotoChoicePreview(NamedTuple):
+    photo_index: int
+    with_frame: Path
+    without_frame: Path
+
+
+class PreviewBatch(dict[str, Path]):
+    """Template previews plus optional per-photo variants.
+
+    It remains a normal mapping so template packs and callers that do not use
+    photo selection keep the previous ``dict[str, Path]`` interface.
+    """
+
+    def __init__(
+        self,
+        templates: dict[str, Path],
+        photo_choices: dict[str, list[PhotoChoicePreview]],
+    ) -> None:
+        super().__init__(templates)
+        self.photo_choices = photo_choices
+
+
 def compose(template_dir: Path, template_name: str, photos: list[str | Path], config: dict) -> Image.Image:
     """Compose photos onto a template. Returns print-ready image."""
     print_size = _validated_print_size(config)
@@ -105,13 +127,27 @@ def compose(template_dir: Path, template_name: str, photos: list[str | Path], co
             image.close()
 
 
+def compose_unframed_photo(
+    photo: str | Path,
+    config: dict,
+) -> Image.Image:
+    """Fill the complete print raster with one photo, without template layers."""
+    print_size = _validated_print_size(config)
+    with Image.open(photo) as source:
+        source_image = _oriented_rgb(source)
+    try:
+        return _cover_photo(source_image, print_size)
+    finally:
+        source_image.close()
+
+
 def generate_template_previews(
     template_dir: Path,
     photos: list[str | Path],
     config: dict,
     output_dir: Path,
     preview_width: int = DEFAULT_PREVIEW_WIDTH,
-) -> dict[str, Path]:
+) -> PreviewBatch:
     """Compose every configured template at screen resolution.
 
     Source photos are decoded and reduced once, kept in memory only for this
@@ -134,28 +170,74 @@ def generate_template_previews(
     output_dir.mkdir(parents=True, exist_ok=True)
     reduced_photos = _load_reduced_photos(photos)
     results: dict[str, Path] = {}
+    photo_choices: dict[str, list[PhotoChoicePreview]] = {}
     try:
+        unframed_paths: list[Path] = []
+        if any(template.get("photo_choice") is True
+               for template in templates.values()
+               if isinstance(template, dict)):
+            for photo_index, photo in enumerate(reduced_photos):
+                output_path = output_dir / f"photo_{photo_index + 1:02d}.jpg"
+                unframed = _cover_photo(
+                    photo,
+                    (
+                        preview_width,
+                        max(1, round(
+                            print_size[1] * preview_width / print_size[0]
+                        )),
+                    ),
+                )
+                try:
+                    _save_jpeg_atomic(unframed, output_path)
+                finally:
+                    unframed.close()
+                unframed_paths.append(output_path)
+
         for index, template_name in enumerate(templates, start=1):
             try:
-                preview = _compose_preview(
-                    template_dir,
-                    template_name,
-                    reduced_photos,
-                    config,
-                    print_size,
-                    preview_width,
-                )
-                output_path = output_dir / f"preview_{index:02d}.jpg"
-                try:
-                    _save_jpeg_atomic(preview, output_path)
-                finally:
-                    preview.close()
-                results[template_name] = output_path
+                template = templates[template_name]
+                if template.get("photo_choice") is True:
+                    choices = []
+                    for photo_index, photo in enumerate(reduced_photos):
+                        preview = _compose_preview(
+                            template_dir,
+                            template_name,
+                            [photo],
+                            config,
+                            print_size,
+                            preview_width,
+                        )
+                        output_path = output_dir / (
+                            f"preview_{index:02d}_photo_{photo_index + 1:02d}.jpg"
+                        )
+                        try:
+                            _save_jpeg_atomic(preview, output_path)
+                        finally:
+                            preview.close()
+                        choices.append(PhotoChoicePreview(
+                            photo_index, output_path, unframed_paths[photo_index]))
+                    results[template_name] = choices[0].with_frame
+                    photo_choices[template_name] = choices
+                else:
+                    preview = _compose_preview(
+                        template_dir,
+                        template_name,
+                        reduced_photos,
+                        config,
+                        print_size,
+                        preview_width,
+                    )
+                    output_path = output_dir / f"preview_{index:02d}.jpg"
+                    try:
+                        _save_jpeg_atomic(preview, output_path)
+                    finally:
+                        preview.close()
+                    results[template_name] = output_path
             except Exception:
                 log.exception("Template preview failed: %s", template_name)
         if not results:
             raise RuntimeError("all template previews failed")
-        return results
+        return PreviewBatch(results, photo_choices)
     finally:
         for image in reduced_photos:
             image.close()
@@ -319,6 +401,18 @@ def _rotation_transpose(rotation: str, context: str):
         raise ValueError(
             f"unsupported rotation {rotation!r} in {context}"
         ) from exc
+
+
+def _cover_photo(
+    photo: Image.Image,
+    target_size: tuple[int, int],
+) -> Image.Image:
+    return ImageOps.fit(
+        photo,
+        target_size,
+        method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.5),
+    )
 
 
 def _load_reduced_photos(photos: list[str | Path]) -> list[Image.Image]:
