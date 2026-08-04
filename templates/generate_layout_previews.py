@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate template background copies with photo slots filled in gray."""
+"""Generate layout previews and oriented single-strip copies."""
 
 import argparse
 import json
@@ -10,6 +10,11 @@ from PIL import Image, ImageDraw
 
 TEMPLATES_DIR = Path(__file__).resolve().parent
 PHOTO_SLOT_COLOR = (189, 189, 189)
+PREVIEW_ROTATIONS = {
+    "none": None,
+    "cw": Image.Transpose.ROTATE_270,
+    "ccw": Image.Transpose.ROTATE_90,
+}
 
 
 def _positive_size(raw, label: str) -> tuple[int, int]:
@@ -186,6 +191,41 @@ def _write_preview(
         temporary.unlink(missing_ok=True)
 
 
+def _write_single_strip_preview(
+    layout_preview_path: Path,
+    output_path: Path,
+    preview_rotation: object,
+) -> None:
+    if (not isinstance(preview_rotation, str)
+            or preview_rotation not in PREVIEW_ROTATIONS):
+        raise ValueError(
+            f"{layout_preview_path}: unsupported preview_rotation "
+            f"{preview_rotation!r}"
+        )
+
+    with Image.open(layout_preview_path) as preview:
+        half_height = preview.height // 2
+        if half_height < 1:
+            raise ValueError(
+                f"{layout_preview_path}: preview is too short to split"
+            )
+        strip = preview.crop((0, 0, preview.width, half_height))
+
+    transpose = PREVIEW_ROTATIONS[preview_rotation]
+    if transpose is not None:
+        rotated = strip.transpose(transpose)
+        strip.close()
+        strip = rotated
+
+    temporary = output_path.with_name(output_path.name + ".tmp")
+    try:
+        strip.save(temporary, "PNG", optimize=True)
+        temporary.replace(output_path)
+    finally:
+        strip.close()
+        temporary.unlink(missing_ok=True)
+
+
 def _config_paths(pack_names: list[str]) -> list[Path]:
     if not pack_names:
         paths = sorted(TEMPLATES_DIR.rglob("config.json"))
@@ -209,7 +249,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Generate full-size template previews with configured photo slots "
-            "filled in gray."
+            "filled in gray, plus single-strip views for split templates."
         )
     )
     parser.add_argument(
@@ -220,6 +260,7 @@ def main() -> None:
     args = parser.parse_args()
 
     generated = 0
+    generated_single_strips = 0
     for config_path in _config_paths(args.packs):
         config = json.loads(config_path.read_text(encoding="utf-8"))
         print_size = _positive_size(
@@ -254,8 +295,25 @@ def main() -> None:
                 f"({len(rectangles)} slot(s))"
             )
 
+            preview_split = template.get("preview_split")
+            if preview_split == "horizontal":
+                single_strip_path = source_path.with_name(
+                    f"{template_name}_single_strip_layout_preview.png")
+                _write_single_strip_preview(
+                    output_path,
+                    single_strip_path,
+                    template.get("preview_rotation"),
+                )
+                generated_single_strips += 1
+                print(
+                    f"{config_path.parent.name}:{template_name}: "
+                    f"{output_path.name} -> {single_strip_path.name} "
+                    f"(first half, rotation={template.get('preview_rotation')})"
+                )
+
     print(
-        f"Generated {generated} layout preview(s) with "
+        f"Generated {generated} layout preview(s) and "
+        f"{generated_single_strips} single-strip preview(s) with "
         f"slot color #{PHOTO_SLOT_COLOR[0]:02x}{PHOTO_SLOT_COLOR[1]:02x}"
         f"{PHOTO_SLOT_COLOR[2]:02x}"
     )

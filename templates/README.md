@@ -36,6 +36,12 @@ python3 templates/generate_layout_previews.py
 `*_preview.jpg` и `*_preview.png`, которые приложение создаёт автоматически для
 экранного выбора шаблона с реальными фотографиями.
 
+Для каждого шаблона с `preview_split: "horizontal"` дополнительно создаётся
+`<template>_single_strip_layout_preview.png`: генератор берёт первую
+горизонтальную половину полного layout preview и поворачивает её по
+`preview_rotation`. Например, `strips_single_strip_layout_preview.png` имеет
+ориентацию одной готовой вертикальной полоски.
+
 ## Print trim overlay
 
 `generate_trim_overlays.py` проходит по всем template packs с файлом
