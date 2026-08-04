@@ -10,6 +10,10 @@ const screens = {
 const liveView = document.getElementById("live-view");
 const countdownNum = document.getElementById("countdown-number");
 const photoCounter = document.getElementById("photo-counter");
+const poseRails = {
+    left: document.getElementById("pose-rail-left"),
+    right: document.getElementById("pose-rail-right"),
+};
 const templateTimer = document.getElementById("template-timer");
 const templateOptions = document.getElementById("template-options");
 const templateSkip = document.getElementById("template-skip");
@@ -37,7 +41,73 @@ let renderedTemplateSignature = "";
 let photoChoiceTemplate = null;
 let photoChoiceWithFrame = true;
 let photoPreviewCycle = null;
+let currentShootingPhotoIndex = 0;
 const sessionLinks = new Map();
+
+let poseExampleUrls = [];
+let poseExamplesPerSide = 0;
+let poseImagePreloaders = [];
+let renderedPoseSignature = "";
+
+function renderPoseExamples(photoIndex = 0) {
+    const parsedIndex = Number(photoIndex);
+    const safeIndex = Number.isFinite(parsedIndex)
+        ? Math.max(0, Math.floor(parsedIndex))
+        : 0;
+    const imagesPerShot = poseExamplesPerSide * 2;
+    if (!imagesPerShot || !poseExampleUrls.length) return;
+
+    const startIndex = (safeIndex * imagesPerShot) % poseExampleUrls.length;
+    const signature = `${startIndex}:${poseExamplesPerSide}:${poseExampleUrls.length}`;
+    if (signature === renderedPoseSignature) return;
+    renderedPoseSignature = signature;
+
+    Object.entries(poseRails).forEach(([side, rail]) => {
+        const sideOffset = side === "left" ? 0 : poseExamplesPerSide;
+        const cards = Array.from({ length: poseExamplesPerSide }, (_, index) => {
+            const imageIndex = (
+                startIndex + sideOffset + index
+            ) % poseExampleUrls.length;
+            const card = document.createElement("img");
+            card.className = "pose-card";
+            card.src = poseExampleUrls[imageIndex];
+            card.alt = `Пример позы ${imageIndex + 1}`;
+            card.draggable = false;
+            card.decoding = "async";
+            return card;
+        });
+        rail.replaceChildren(...cards);
+    });
+}
+
+function configurePoseExamples(cfg) {
+    poseExampleUrls = Array.isArray(cfg.pose_example_urls)
+        ? cfg.pose_example_urls.filter(url => typeof url === "string" && url)
+        : [];
+    poseImagePreloaders = poseExampleUrls.map(url => {
+        const image = new Image();
+        image.decoding = "async";
+        image.src = url;
+        return image;
+    });
+    const configuredCount = Math.floor(Number(cfg.pose_examples_per_side));
+    poseExamplesPerSide = Number.isFinite(configuredCount)
+        ? Math.max(0, configuredCount)
+        : 3;
+    const layoutCount = Math.max(1, poseExamplesPerSide);
+    const gapVh = 0.8;
+    document.documentElement.style.setProperty(
+        "--pose-card-max-height",
+        `calc((100% - ${(layoutCount - 1) * gapVh}vh) / ${layoutCount})`,
+    );
+    const hidden = !poseExamplesPerSide || !poseExampleUrls.length;
+    Object.values(poseRails).forEach(rail => {
+        rail.hidden = hidden;
+        if (hidden) rail.replaceChildren();
+    });
+    renderedPoseSignature = "";
+    if (!hidden) renderPoseExamples(currentShootingPhotoIndex);
+}
 
 // --- WebSocket ---
 let wsReconnectTimer = null;
@@ -255,8 +325,11 @@ function _doSwitch(state, data) {
     }
 
     if (state === "countdown" || state === "shooting") {
-        const idx = (data.photo_index ?? 0) + 1;
+        const photoIndex = data.photo_index ?? 0;
+        currentShootingPhotoIndex = photoIndex;
+        const idx = photoIndex + 1;
         photoCounter.textContent = `${idx} / ${data.total ?? 4}`;
+        renderPoseExamples(photoIndex);
     }
 
     // New session — hide QR
@@ -530,8 +603,9 @@ fetch("/api/config").then(r => r.json()).then(cfg => {
     );
     rootStyle.setProperty(
         "--live-view-margin-bottom",
-        `${safeMargin(cfg.live_view_margin_bottom_percent, 5)}vh`,
+        `${safeMargin(cfg.live_view_margin_bottom_percent, 12)}vh`,
     );
+    configurePoseExamples(cfg);
     rootStyle.setProperty("--warmup", (cfg.live_view_warmup || 0.3) + "s");
     refreshQr();
 });

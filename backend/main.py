@@ -16,6 +16,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -47,6 +48,7 @@ app = FastAPI()
 
 # --- State ---
 STATE = "idle"
+STATE_EXTRA: dict = {}
 SESSION_ID = ""
 SESSION_PHOTOS: list[str] = []
 SESSION_COUNT = 0
@@ -278,6 +280,8 @@ def _state_message(new_state: str) -> dict:
         msg["session_id"] = SESSION_ID
     if SESSION_LINK:
         msg["session_link"] = SESSION_LINK
+    if new_state == STATE and STATE_EXTRA:
+        msg.update(STATE_EXTRA)
     if new_state == "template_select":
         msg["timeout"] = int(CONFIG["template_select_timeout"])
         msg["templates"] = [dict(option) for option in TEMPLATE_OPTIONS]
@@ -285,11 +289,10 @@ def _state_message(new_state: str) -> dict:
 
 
 async def set_state(new_state: str, extra: dict | None = None):
-    global STATE
+    global STATE, STATE_EXTRA
     STATE = new_state
+    STATE_EXTRA = dict(extra or {})
     msg = _state_message(new_state)
-    if extra:
-        msg.update(extra)
     log.info(f"State -> {new_state}")
     await broadcast(msg)
 
@@ -902,7 +905,27 @@ async def script():
 
 @app.get("/api/config")
 async def get_config():
-    return CONFIG
+    response = dict(CONFIG)
+    poses_dir = FRONTEND_DIR / "assets" / "poses"
+    image_extensions = {".jpg", ".jpeg", ".png", ".webp"}
+
+    def natural_key(path: Path):
+        return tuple(
+            (0, int(part)) if part.isdigit() else (1, part.casefold())
+            for part in re.split(r"(\d+)", path.name)
+        )
+
+    pose_files = sorted(
+        (
+            path for path in poses_dir.iterdir()
+            if path.is_file() and path.suffix.casefold() in image_extensions
+        ),
+        key=natural_key,
+    ) if poses_dir.is_dir() else []
+    response["pose_example_urls"] = [
+        f"/assets/poses/{quote(path.name)}" for path in pose_files
+    ]
+    return response
 
 
 @app.get("/api/state")

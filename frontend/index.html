@@ -24,9 +24,24 @@
 
         <!-- SHOOTING: live view + countdown + flash -->
         <div class="screen" id="screen-shooting" hidden>
-            <img id="live-view" alt="">
-            <div id="countdown-number"></div>
-            <div id="photo-counter"></div>
+            <div id="shooting-stage">
+                <aside class="pose-rail" id="pose-rail-left" aria-label="Примеры поз слева"></aside>
+                <div id="live-view-frame">
+                    <img id="live-view" alt="Изображение с камеры">
+                    <div id="countdown-number"></div>
+                    <div id="photo-counter"></div>
+                </div>
+                <aside class="pose-rail" id="pose-rail-right" aria-label="Примеры поз справа"></aside>
+            </div>
+            <div id="lens-hint" aria-label="Смотрите в объектив">
+                <svg class="lens-hint-arrow" viewBox="0 0 32 48" aria-hidden="true" focusable="false">
+                    <path d="M16 2 31 18H22V46H10V18H1Z" />
+                </svg>
+                <span>СМОТРИТЕ В ОБЪЕКТИВ</span>
+                <svg class="lens-hint-arrow" viewBox="0 0 32 48" aria-hidden="true" focusable="false">
+                    <path d="M16 2 31 18H22V46H10V18H1Z" />
+                </svg>
+            </div>
         </div>
 
         <!-- PROCESSING: build real previews from this session -->
