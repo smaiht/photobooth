@@ -372,8 +372,12 @@ class FrontendProtocolTests(unittest.TestCase):
         self.assertIn('"type": "session_link"', backend_source)
         self.assertIn('case "session_link"', frontend_source)
         self.assertIn('new Set(["composing", "printing", "done", "idle"])', frontend_source)
-        self.assertIn("Фото с последней съёмки загружаются сюда", frontend_source)
+        self.assertIn("ОТСКАНИРУЙТЕ, ЧТОБЫ СКАЧАТЬ ФОТО И ВИДЕО", frontend_source)
         self.assertIn("dismissedQrSessionId === currentSessionId", frontend_source)
+        self.assertIn('id="result-qr-panel"', frontend_html)
+        self.assertIn('id="result-qr-code"', frontend_html)
+        self.assertIn("ОРИГИНАЛЫ ФОТО И ВИДЕО", frontend_html)
+        self.assertIn("БУДУТ ДОСТУПНЫ ЗДЕСЬ", frontend_html)
         self.assertIn("object-fit: var(--live-view-fit)",
                       (root / "frontend" / "style.css").read_text(encoding="utf-8"))
         self.assertIn('id="qr-modal-close"', frontend_html)

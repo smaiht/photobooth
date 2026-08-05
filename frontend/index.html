@@ -40,6 +40,9 @@
                     <p class="idle-session-info" id="idle-session-info">
                         4 КАДРА С ТАЙМЕРОМ 5 СЕКУНД
                     </p>
+                    <!-- <p class="idle-delivery-info" id="idle-delivery-info">
+                        ОРИГИНАЛЫ ФОТО И ВИДЕО — ПО QR-КОДУ
+                    </p> -->
                     <div class="tap-prompt">
                         <button class="idle-start-button" id="idle-start-button" type="button" tabindex="-1">
                             НАЧАТЬ
@@ -104,6 +107,13 @@
                 <img src="/assets/dots.svg" class="dots-anim">
                 <div class="done-title">Идёт печать</div>
             </div>
+            <section class="result-qr-panel" id="result-qr-panel" aria-live="polite" hidden>
+                <div id="result-qr-code" aria-label="QR-код для скачивания оригиналов"></div>
+                <p class="result-qr-text">
+                    <span>ОРИГИНАЛЫ ФОТО И ВИДЕО</span>
+                    <span>БУДУТ ДОСТУПНЫ ЗДЕСЬ</span>
+                </p>
+            </section>
         </div>
 
         <!-- QR modal (persists across screens) -->

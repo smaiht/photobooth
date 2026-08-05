@@ -17,6 +17,7 @@ const poseRails = {
 const idlePoseField = document.getElementById("idle-pose-field");
 const idlePoseRows = Array.from(document.querySelectorAll(".idle-pose-row"));
 const idleSessionInfo = document.getElementById("idle-session-info");
+const idleDeliveryInfo = document.getElementById("idle-delivery-info");
 const idlePriceBadge = document.getElementById("idle-price-badge");
 const idlePriceValue = document.getElementById("idle-price-value");
 const idleStartButton = document.getElementById("idle-start-button");
@@ -31,6 +32,8 @@ const qrModal = document.getElementById("qr-modal");
 const qrModalClose = document.getElementById("qr-modal-close");
 const qrModalCode = document.getElementById("qr-modal-code");
 const qrModalText = document.getElementById("qr-modal-text");
+const resultQrPanel = document.getElementById("result-qr-panel");
+const resultQrCode = document.getElementById("result-qr-code");
 const cameraStatusTitle = document.getElementById("camera-status-title");
 const cameraStatusSubtitle = document.getElementById("camera-status-subtitle");
 const tapLockStatus = document.querySelector(".tap-lock-status");
@@ -266,21 +269,37 @@ function beep(freq, duration) {
 }
 
 // --- QR modal ---
-function showQrModal(url, text) {
+function renderQrCodes(url) {
     if (!config.show_qr || !url || typeof qrcode === "undefined") return;
     if (displayedQrUrl !== url) {
         const qr = qrcode(0, "M");
         qr.addData(url);
         qr.make();
-        qrModalCode.innerHTML = qr.createSvgTag(8);
+        const markup = qr.createSvgTag(8);
+        qrModalCode.innerHTML = markup;
+        resultQrCode.innerHTML = markup;
         displayedQrUrl = url;
     }
+    return true;
+}
+
+function showQrModal(url, text) {
+    if (!renderQrCodes(url)) return;
     qrModalText.textContent = text;
     qrModal.hidden = false;
 }
 
 function hideQrModal() {
     qrModal.hidden = true;
+}
+
+function showResultQr(url) {
+    if (!renderQrCodes(url)) return;
+    resultQrPanel.hidden = false;
+}
+
+function hideResultQr() {
+    resultQrPanel.hidden = true;
 }
 
 qrModalClose.addEventListener("click", (event) => {
@@ -299,6 +318,7 @@ function syncSessionContext(state, data = {}) {
             displayedQrUrl = "";
             dismissedQrSessionId = "";
             hideQrModal();
+            hideResultQr();
         }
         if (data.session_link) sessionLinks.set(sessionId, data.session_link);
     }
@@ -306,13 +326,26 @@ function syncSessionContext(state, data = {}) {
 
 function refreshQr() {
     const visibleStates = new Set(["composing", "printing", "done", "idle"]);
+    const resultStates = new Set(["composing", "printing", "done"]);
     const url = sessionLinks.get(currentSessionId);
-    if (!url || !visibleStates.has(currentState)
+    if (!config.show_qr || !url || typeof qrcode === "undefined") {
+        hideQrModal();
+        hideResultQr();
+        return;
+    }
+
+    if (resultStates.has(currentState)) {
+        showResultQr(url);
+    } else {
+        hideResultQr();
+    }
+
+    if (!visibleStates.has(currentState)
             || dismissedQrSessionId === currentSessionId) {
         hideQrModal();
         return;
     }
-    showQrModal(url, "Фото с последней съёмки загружаются сюда");
+    showQrModal(url, "ОТСКАНИРУЙТЕ, ЧТОБЫ СКАЧАТЬ ФОТО И ВИДЕО");
 }
 
 // --- Message handler ---
@@ -436,6 +469,7 @@ function _doSwitch(state, data) {
     // New session — hide QR
     if (state === "countdown" && data.photo_index === 0) {
         hideQrModal();
+        hideResultQr();
     }
 
     if (state === "template_select") {
@@ -688,6 +722,7 @@ screens.idle.addEventListener("click", () => {
 let config = {};
 fetch("/api/config").then(r => r.json()).then(cfg => {
     config = cfg;
+    idleDeliveryInfo.hidden = cfg.show_qr === false;
     configureIdleSessionInfo(cfg);
     const configuredPrice = Math.floor(Number(cfg.technical_event_price_rubles));
     technicalEventPriceRubles = Number.isFinite(configuredPrice)
