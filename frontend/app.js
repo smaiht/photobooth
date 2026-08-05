@@ -14,6 +14,12 @@ const poseRails = {
     left: document.getElementById("pose-rail-left"),
     right: document.getElementById("pose-rail-right"),
 };
+const idlePoseField = document.getElementById("idle-pose-field");
+const idlePoseRows = Array.from(document.querySelectorAll(".idle-pose-row"));
+const idleSessionInfo = document.getElementById("idle-session-info");
+const idlePriceBadge = document.getElementById("idle-price-badge");
+const idlePriceValue = document.getElementById("idle-price-value");
+const idleStartButton = document.getElementById("idle-start-button");
 const templateTimer = document.getElementById("template-timer");
 const templateOptions = document.getElementById("template-options");
 const templateSkip = document.getElementById("template-skip");
@@ -42,12 +48,103 @@ let photoChoiceTemplate = null;
 let photoChoiceWithFrame = true;
 let photoPreviewCycle = null;
 let currentShootingPhotoIndex = 0;
+let technicalEventActive = false;
+let technicalEventPriceRubles = 0;
 const sessionLinks = new Map();
 
 let poseExampleUrls = [];
 let poseExamplesPerSide = 0;
 let poseImagePreloaders = [];
 let renderedPoseSignature = "";
+
+function renderIdlePoseBackdrop() {
+    if (!idlePoseField) return;
+    const hidden = !poseExampleUrls.length;
+    idlePoseField.hidden = hidden;
+    if (hidden) {
+        idlePoseRows.forEach(row => row.replaceChildren());
+        return;
+    }
+
+    const sequenceLength = 12;
+    const sequenceCopies = 6;
+    idlePoseRows.forEach((row, rowIndex) => {
+        const configuredOffset = Math.floor(Number(row.dataset.poseOffset)) || 0;
+        const startIndex = (
+            configuredOffset + rowIndex * sequenceLength
+        ) % poseExampleUrls.length;
+        const urls = Array.from({ length: sequenceLength }, (_, index) => (
+            poseExampleUrls[(startIndex + index) % poseExampleUrls.length]
+        ));
+        const track = document.createElement("div");
+        track.className = "idle-pose-track";
+        for (let copyIndex = 0; copyIndex < sequenceCopies; copyIndex++) {
+            const sequence = document.createElement("div");
+            sequence.className = "idle-pose-sequence";
+            urls.forEach(url => {
+                const image = document.createElement("img");
+                image.className = "idle-pose-tile";
+                image.src = url;
+                image.alt = "";
+                image.draggable = false;
+                image.decoding = "async";
+                sequence.appendChild(image);
+            });
+            track.appendChild(sequence);
+        }
+        row.replaceChildren(track);
+    });
+}
+
+function frameWord(count) {
+    const mod100 = count % 100;
+    const mod10 = count % 10;
+    if (mod100 >= 11 && mod100 <= 14) return "КАДРОВ";
+    if (mod10 === 1) return "КАДР";
+    if (mod10 >= 2 && mod10 <= 4) return "КАДРА";
+    return "КАДРОВ";
+}
+
+function secondWord(count) {
+    const mod100 = count % 100;
+    const mod10 = count % 10;
+    if (mod100 >= 11 && mod100 <= 14) return "СЕКУНД";
+    if (mod10 === 1) return "СЕКУНДА";
+    if (mod10 >= 2 && mod10 <= 4) return "СЕКУНДЫ";
+    return "СЕКУНД";
+}
+
+function configureIdleSessionInfo(cfg) {
+    const configuredPhotos = Math.floor(Number(cfg.num_photos));
+    const photoCount = Number.isFinite(configuredPhotos)
+        ? Math.max(1, configuredPhotos)
+        : 4;
+    const configuredSeconds = Math.floor(Number(cfg.countdown_seconds));
+    const countdownSeconds = Number.isFinite(configuredSeconds)
+        ? Math.max(0, configuredSeconds)
+        : 5;
+    idleSessionInfo.textContent = (
+        `${photoCount} ${frameWord(photoCount)} С ТАЙМЕРОМ `
+        + `${countdownSeconds} ${secondWord(countdownSeconds)}`
+    );
+}
+
+function renderTechnicalEventBadge() {
+    const visible = technicalEventActive && technicalEventPriceRubles > 0;
+    idlePriceBadge.hidden = !visible;
+    if (visible) {
+        idlePriceValue.textContent = (
+            `${technicalEventPriceRubles.toLocaleString("ru-RU")} ₽`
+        );
+    }
+}
+
+function syncTechnicalEvent(data = {}) {
+    if (typeof data.technical_event_active === "boolean") {
+        technicalEventActive = data.technical_event_active;
+        renderTechnicalEventBadge();
+    }
+}
 
 function renderPoseExamples(photoIndex = 0) {
     const parsedIndex = Number(photoIndex);
@@ -107,6 +204,7 @@ function configurePoseExamples(cfg) {
     });
     renderedPoseSignature = "";
     if (!hidden) renderPoseExamples(currentShootingPhotoIndex);
+    renderIdlePoseBackdrop();
 }
 
 // --- WebSocket ---
@@ -135,6 +233,7 @@ setInterval(() => {
             switchScreen(s.state, s);
         } else {
             syncStartLock(s);
+            syncTechnicalEvent(s);
             syncSessionContext(s.state, s);
             if (s.state === "template_select") {
                 renderTemplateOptions(s.templates);
@@ -257,6 +356,7 @@ function syncStartLock(data = {}) {
     if (typeof data.start_locked !== "boolean") return;
     startLocked = data.start_locked;
     tapLockStatus.hidden = !startLocked;
+    idleStartButton.disabled = startLocked;
     screens.idle.classList.toggle("start-locked", startLocked);
     screens.idle.setAttribute("aria-disabled", String(startLocked));
 }
@@ -273,6 +373,7 @@ function setLiveView(active) {
 
 function switchScreen(state, data = {}) {
     syncStartLock(data);
+    syncTechnicalEvent(data);
     syncSessionContext(state, data);
 
     // First countdown of a new session — delay screen switch, animate tap prompt
@@ -587,6 +688,12 @@ screens.idle.addEventListener("click", () => {
 let config = {};
 fetch("/api/config").then(r => r.json()).then(cfg => {
     config = cfg;
+    configureIdleSessionInfo(cfg);
+    const configuredPrice = Math.floor(Number(cfg.technical_event_price_rubles));
+    technicalEventPriceRubles = Number.isFinite(configuredPrice)
+        ? Math.max(0, configuredPrice)
+        : 0;
+    renderTechnicalEventBadge();
     if (cfg.mirror_live_view) liveView.style.transform = "scaleX(-1)";
     const rootStyle = document.documentElement.style;
     const fit = cfg.live_view_fit === "cover" ? "cover" : "contain";

@@ -26,6 +26,8 @@
     "_show_qr_comment": "Show a direct Yandex.Disk link to the current <event>_by_sessions folder while media uploads.",
     "technical_event_name": "Кафе",
     "_technical_event_name_comment": "When this exact event is active, the idle screen stays locked until an admin grants sessions with /unblock.",
+    "technical_event_price_rubles": 100,
+    "_technical_event_price_rubles_comment": "Price shown on the idle-screen badge only while technical_event_name is the active event. Set 0 to hide the badge.",
     "print_enabled": true,
     "keep_custom_print_files": true,
     "_keep_custom_print_files_comment": "Keep Telegram source images and prepared 4x6 JPEGs under photos_print_jobs/<job_id> after printing.",

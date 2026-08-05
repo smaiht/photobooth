@@ -16,9 +16,37 @@
 
         <!-- IDLE -->
         <div class="screen start-locked" id="screen-idle" aria-disabled="true">
-            <div class="tap-prompt">
-                <div>НАЖМИ ЧТОБЫ НАЧАТЬ</div>
-                <div class="tap-lock-status">(ЗАБЛОКИРОВАНО)</div>
+            <div class="idle-pose-field" id="idle-pose-field" aria-hidden="true">
+                <div class="idle-pose-row move-left" data-pose-offset="0"></div>
+                <div class="idle-pose-row move-right" data-pose-offset="3"></div>
+                <div class="idle-pose-row move-left-slow" data-pose-offset="6"></div>
+                <div class="idle-pose-row move-right-slow" data-pose-offset="9"></div>
+                <div class="idle-pose-row move-left" data-pose-offset="2"></div>
+                <div class="idle-pose-row move-right" data-pose-offset="5"></div>
+                <div class="idle-pose-row move-left-slow" data-pose-offset="8"></div>
+            </div>
+
+            <div class="idle-hero-wrap">
+                <div class="idle-center-fade" aria-hidden="true"></div>
+                <section class="idle-hero">
+                    <div class="idle-price-badge" id="idle-price-badge" hidden>
+                        <span>ЦЕНА:</span>
+                        <strong id="idle-price-value">100 ₽</strong>
+                    </div>
+                    <h1>
+                        <span class="idle-title-main">ФОТОБУДКА</span>
+                        <span class="idle-title-sub">С МОМЕНТАЛЬНОЙ ПЕЧАТЬЮ</span>
+                    </h1>
+                    <p class="idle-session-info" id="idle-session-info">
+                        4 КАДРА С ТАЙМЕРОМ 5 СЕКУНД
+                    </p>
+                    <div class="tap-prompt">
+                        <button class="idle-start-button" id="idle-start-button" type="button" tabindex="-1">
+                            НАЧАТЬ
+                        </button>
+                        <div class="tap-lock-status">(ЗАБЛОКИРОВАНО)</div>
+                    </div>
+                </section>
             </div>
         </div>
 

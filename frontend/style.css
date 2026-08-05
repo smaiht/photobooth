@@ -10,6 +10,9 @@
     --live-view-margin-top: 5vh;
     --live-view-margin-bottom: 12vh;
     --pose-card-max-height: calc((100% - 1.6vh) / 3);
+    --idle-pose-size: clamp(145px, 11.3vw, 218px);
+    --idle-pose-gap: clamp(14px, 1.2vw, 26px);
+    --idle-hero-motion-duration: 54s;
 }
 
 * {
@@ -55,22 +58,212 @@ html, body {
 .error-sub { font-size: 2vw; opacity: 0.5; }
 
 /* IDLE */
+#screen-idle {
+    overflow: hidden;
+    isolation: isolate;
+    background: linear-gradient(145deg, #faf9f6, #e9e5dc);
+}
+
+.idle-pose-field {
+    position: absolute;
+    z-index: 0;
+    inset: -25% -18%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--idle-pose-gap);
+    overflow: hidden;
+    transform: rotate(-8deg) scale(1.06);
+    transform-origin: center;
+    pointer-events: none;
+}
+
+.idle-pose-field[hidden] { display: none; }
+
+.idle-pose-row {
+    flex: 0 0 var(--idle-pose-size);
+    width: 116%;
+    margin-left: -8%;
+    overflow: hidden;
+}
+
+.idle-pose-track {
+    display: flex;
+    width: max-content;
+    will-change: transform;
+}
+
+.idle-pose-sequence {
+    flex: 0 0 auto;
+    display: flex;
+    gap: var(--idle-pose-gap);
+    padding-right: var(--idle-pose-gap);
+}
+
+.idle-pose-tile {
+    flex: 0 0 auto;
+    display: block;
+    width: var(--idle-pose-size);
+    height: var(--idle-pose-size);
+    object-fit: contain;
+    border-radius: clamp(10px, 0.9vw, 18px);
+    box-shadow: 0 0.7vh 1.8vh rgba(0, 0, 0, 0.22);
+}
+
+.idle-pose-row.move-left .idle-pose-track {
+    animation: idle-track-left 28s linear infinite;
+}
+
+.idle-pose-row.move-right .idle-pose-track {
+    animation: idle-track-right 31s linear infinite;
+}
+
+.idle-pose-row.move-left-slow .idle-pose-track {
+    animation: idle-track-left 37s linear infinite;
+}
+
+.idle-pose-row.move-right-slow .idle-pose-track {
+    animation: idle-track-right 41s linear infinite;
+}
+
+@keyframes idle-track-left {
+    from { transform: translate3d(0, 0, 0); }
+    to { transform: translate3d(-16.6667%, 0, 0); }
+}
+
+@keyframes idle-track-right {
+    from { transform: translate3d(-16.6667%, 0, 0); }
+    to { transform: translate3d(0, 0, 0); }
+}
+
+.idle-hero-wrap {
+    position: absolute;
+    z-index: 2;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    transform-origin: center center;
+    isolation: isolate;
+    will-change: transform, opacity;
+    /*
+     * The old idle prompt pulsed in place.  Keep the motion on the whole
+     * central composition instead: the white card, fade and optional price
+     * badge all move together, spreading static high-contrast pixels over a
+     * small area during a long unattended run.
+     */
+    animation: idle-hero-breathe var(--idle-hero-motion-duration) ease-in-out infinite;
+}
+
+.idle-center-fade {
+    position: absolute;
+    z-index: -1;
+    inset: -1%;
+    border-radius: clamp(38px, 3.8vw, 74px);
+    background: rgba(250, 249, 246, 0.92);
+    filter: blur(clamp(22px, 2.3vw, 44px));
+}
+
+.idle-hero {
+    position: relative;
+    width: min(70vw, 1280px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: clamp(46px, 5.2vh, 68px) clamp(58px, 5vw, 100px);
+    border: 2px solid rgba(24, 24, 24, 0.1);
+    border-radius: clamp(28px, 2.8vw, 54px);
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 2vh 5vh rgba(24, 24, 24, 0.17);
+    text-align: center;
+}
+
+.idle-hero h1 {
+    margin: 0;
+    line-height: 1.05;
+}
+
+.idle-title-main,
+.idle-title-sub {
+    display: block;
+}
+
+.idle-title-main {
+    color: #181818;
+    font-size: clamp(72px, 6.8vw, 132px);
+    font-weight: 700;
+    letter-spacing: 0.07em;
+}
+
+.idle-title-sub {
+    margin-top: 1.3vh;
+    color: #3f3c37;
+    font-size: clamp(34px, 3.15vw, 61px);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+}
+
+.idle-session-info {
+    margin: 3.2vh 0 3.8vh;
+    color: #5b5750;
+    font-size: clamp(21px, 1.65vw, 33px);
+    font-weight: 700;
+    letter-spacing: 0.09em;
+}
+
+.idle-price-badge {
+    position: absolute;
+    z-index: 3;
+    top: 0;
+    right: 0;
+    transform: translate(24%, -38%) rotate(6deg);
+    padding: 0.75em 1.15em;
+    border: 4px solid #fff;
+    border-radius: clamp(38px, 1.8vw, 48px);
+    background: #d83434;
+    box-shadow: 0 0.8vh 1.8vh rgba(126, 18, 18, 0.28);
+    color: #fff;
+    display: flex;
+    align-items: baseline;
+    gap: 0.38em;
+    font-size: clamp(24px, 1.8vw, 36px);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+}
+
+.idle-price-badge[hidden] { display: none; }
+
+.idle-price-badge strong {
+    font-size: 1.28em;
+    font-weight: 900;
+    letter-spacing: 0.01em;
+}
+
 .tap-prompt {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1.5vh;
-    font-size: 5vw;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    animation: pulse 2s ease-in-out infinite;
+    gap: 1.3vh;
+}
+
+.idle-start-button {
+    width: min(42vw, 760px);
+    min-height: clamp(92px, 11vh, 126px);
+    padding: 0.7em 1.1em;
+    border: 0;
+    border-radius: 999px;
+    background: #191919;
+    box-shadow: 0 1.2vh 2.8vh rgba(0, 0, 0, 0.2);
+    color: #fff;
+    font: 700 clamp(34px, 2.8vw, 54px) 'Comfortaa', sans-serif;
+    letter-spacing: 0.07em;
 }
 
 .tap-lock-status {
-    font-size: 0.42em;
+    color: #57534d;
+    font-size: clamp(17px, 1.2vw, 24px);
     font-weight: 600;
     letter-spacing: 0.08em;
-    opacity: 0.55;
 }
 
 #screen-idle.start-locked {
@@ -81,13 +274,42 @@ html, body {
     animation: tap-exit var(--warmup) ease-in forwards;
 }
 
-@keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.75; transform: scale(1.15); }
+@keyframes idle-hero-breathe {
+    0%, 100% {
+        transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1);
+        opacity: 1;
+    }
+    16% {
+        transform: translate(-50%, -50%) translate3d(18px, -10px, 0) scale(1.014);
+        opacity: 0.96;
+    }
+    33% {
+        transform: translate(-50%, -50%) translate3d(-13px, -18px, 0) scale(0.992);
+        opacity: 0.93;
+    }
+    50% {
+        transform: translate(-50%, -50%) translate3d(-20px, 10px, 0) scale(1.01);
+        opacity: 0.9;
+    }
+    67% {
+        transform: translate(-50%, -50%) translate3d(10px, 18px, 0) scale(0.99);
+        opacity: 0.93;
+    }
+    84% {
+        transform: translate(-50%, -50%) translate3d(20px, -5px, 0) scale(1.012);
+        opacity: 0.96;
+    }
 }
 
 @keyframes tap-exit {
     to { opacity: 0; transform: scale(7); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .idle-pose-track,
+    .idle-hero-wrap {
+        animation-play-state: paused !important;
+    }
 }
 
 #screen-shooting { 

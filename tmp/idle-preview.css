@@ -1,0 +1,30 @@
+@font-face {
+    font-family: "Comfortaa";
+    src: url("../frontend/assets/fonts/Comfortaa-VariableFont_wght.ttf") format("truetype");
+    font-weight: 300 700;
+}
+
+html,
+body {
+    cursor: default;
+    font-family: "Comfortaa", sans-serif;
+}
+
+:root {
+    /* The booth uses 54s; the preview is accelerated so the drift is obvious. */
+    --idle-hero-motion-duration: 9s;
+}
+
+#screen-idle {
+    display: flex;
+}
+
+#screen-idle .idle-hero-wrap,
+#screen-idle .idle-pose-track {
+    animation-play-state: running !important;
+}
+
+.idle-start-button {
+    pointer-events: auto;
+    cursor: pointer;
+}

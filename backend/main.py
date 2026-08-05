@@ -274,6 +274,7 @@ def _state_message(new_state: str) -> dict:
         "type": "state",
         "state": new_state,
         "start_locked": _start_locked(),
+        "technical_event_active": _is_technical_event(),
         "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
     }
     if SESSION_ID:
