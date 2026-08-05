@@ -175,6 +175,88 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
         delete_command.assert_awaited_once_with(item["name"])
 
 
+class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reports_both_windows_print_queues(self):
+        records = [
+            {
+                "target": "grid",
+                "printer_name": "DS-RX1",
+                "jobs": 2,
+                "error": None,
+            },
+            {
+                "target": "strips",
+                "printer_name": "DS-RX1 Strips",
+                "jobs": 1,
+                "error": None,
+            },
+        ]
+        with patch(
+            "backend.printer.get_windows_print_queues",
+            return_value=records,
+        ) as inspect:
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "print_queue",
+                "data": None,
+            })
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("Grid (DS-RX1): заданий в очереди — 2", result["message"])
+        self.assertIn(
+            "Strips (DS-RX1 Strips): заданий в очереди — 1",
+            result["message"],
+        )
+        inspect.assert_called_once_with(main.CONFIG)
+
+    async def test_clear_reports_partial_failure_across_both_queues(self):
+        records = [
+            {
+                "target": "grid",
+                "printer_name": "DS-RX1",
+                "jobs_before": 2,
+                "jobs_after": 0,
+                "cleared": 2,
+                "error": None,
+            },
+            {
+                "target": "strips",
+                "printer_name": "DS-RX1 Strips",
+                "jobs_before": 3,
+                "jobs_after": 1,
+                "cleared": 2,
+                "error": "после очистки осталось заданий: 1",
+            },
+        ]
+        with patch(
+            "backend.printer.clear_windows_print_queues",
+            return_value=records,
+        ) as clear:
+            result = await main.handle_disk_command({
+                "command_id": "b" * 32,
+                "command": "clear_print_queue",
+                "data": None,
+            })
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("удалено 2, осталось 1", result["message"])
+        clear.assert_called_once_with(main.CONFIG)
+
+    async def test_rejects_any_argument_before_touching_windows(self):
+        with patch(
+            "backend.printer.clear_windows_print_queues",
+        ) as clear:
+            result = await main.handle_disk_command({
+                "command_id": "c" * 32,
+                "command": "clear_print_queue",
+                "data": {"target": "receipts"},
+            })
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("не принимает аргументы", result["message"])
+        clear.assert_not_called()
+
+
 class EventCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_switches_event_and_persists_config(self):
         command = {

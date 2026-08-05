@@ -1009,11 +1009,116 @@ def _clear_local_logs() -> None:
             handler.release()
 
 
+_PRINT_QUEUE_LABELS = {
+    "grid": "Grid",
+    "strips": "Strips",
+}
+
+
+def _print_queue_status_message(records: list[dict]) -> tuple[str, bool]:
+    lines = ["Очереди печати Windows:"]
+    has_error = False
+    for record in records:
+        target = _PRINT_QUEUE_LABELS.get(
+            record.get("target"),
+            record.get("target", "?"),
+        )
+        printer_name = record.get("printer_name") or "неизвестен"
+        error = record.get("error")
+        if error:
+            has_error = True
+            lines.append(f"• {target} ({printer_name}): ошибка — {error}")
+            continue
+        jobs = record.get("jobs")
+        if type(jobs) is not int or jobs < 0:
+            has_error = True
+            lines.append(
+                f"• {target} ({printer_name}): число заданий неизвестно"
+            )
+        else:
+            lines.append(
+                f"• {target} ({printer_name}): заданий в очереди — {jobs}"
+            )
+    return "\n".join(lines), has_error
+
+
+def _print_queue_clear_message(records: list[dict]) -> tuple[str, bool]:
+    lines = ["Очистка очередей печати Windows:"]
+    has_error = False
+    for record in records:
+        target = _PRINT_QUEUE_LABELS.get(
+            record.get("target"),
+            record.get("target", "?"),
+        )
+        printer_name = record.get("printer_name") or "неизвестен"
+        shared_with = record.get("shared_with")
+        if shared_with:
+            shared_label = _PRINT_QUEUE_LABELS.get(shared_with, shared_with)
+            lines.append(
+                f"• {target} ({printer_name}): та же Windows-очередь; "
+                f"результат указан в {shared_label}"
+            )
+            continue
+        error = record.get("error")
+        before = record.get("jobs_before")
+        after = record.get("jobs_after")
+        cleared = record.get("cleared")
+        if error:
+            has_error = True
+            if before is None:
+                lines.append(f"• {target} ({printer_name}): ошибка — {error}")
+            else:
+                lines.append(
+                    f"• {target} ({printer_name}): удалено {cleared or 0}, "
+                    f"осталось {after if after is not None else '?'} — {error}"
+                )
+            continue
+        lines.append(
+            f"• {target} ({printer_name}): было {before or 0}, "
+            f"удалено {cleared or 0}, осталось {after or 0}"
+        )
+    return "\n".join(lines), has_error
+
+
 async def handle_disk_command(command: dict) -> dict:
     """Execute one validated Disk command and return its response payload."""
     cmd = command["command"]
     data = command.get("data")
     command_id = command["command_id"]
+
+    if cmd in ("print_queue", "clear_print_queue"):
+        if data is not None:
+            return {
+                "status": "error",
+                "message": "Команда очереди печати не принимает аргументы",
+            }
+        try:
+            from .printer import (
+                clear_windows_print_queues,
+                get_windows_print_queues,
+            )
+            if cmd == "print_queue":
+                records = await asyncio.to_thread(
+                    get_windows_print_queues,
+                    CONFIG,
+                )
+                message, has_error = _print_queue_status_message(records)
+            else:
+                records = await asyncio.to_thread(
+                    clear_windows_print_queues,
+                    CONFIG,
+                )
+                message, has_error = _print_queue_clear_message(records)
+            return {
+                "status": "error" if has_error else "ok",
+                "message": message,
+            }
+        except Exception as exc:
+            action = "просмотреть" if cmd == "print_queue" else "очистить"
+            return {
+                "status": "error",
+                "message": f"Очереди печати не удалось {action}: {exc}",
+            }
 
     if cmd == "print_image":
         if not CONFIG.get("print_enabled"):

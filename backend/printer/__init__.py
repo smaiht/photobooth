@@ -11,6 +11,7 @@ import locale
 import logging
 import os
 import subprocess
+import threading
 from collections import deque
 from pathlib import Path
 
@@ -26,8 +27,241 @@ except Exception as exc:
 
 _print_queue: deque[dict] = deque()
 _printing = False
+# Printing and administrative spooler operations must not overlap, otherwise
+# the reported before/after counts could be sampled while the Windows image
+# handler is still submitting a job.
+_windows_spooler_lock = threading.Lock()
 DEFAULT_CUSTOM_PRINT_SIZE = (3688, 2480)
 MAX_CUSTOM_PRINT_PIXELS = 100_000_000
+
+
+def _win32print():
+    """Import pywin32 lazily so the booth can still run on development hosts."""
+    try:
+        import win32print
+    except ImportError as exc:
+        raise RuntimeError("Windows printing requires pywin32") from exc
+    return win32print
+
+
+def _resolved_queue_names(config: dict, win32print) -> list[tuple[str, str]]:
+    """Return the concrete Windows queue for each logical print target."""
+    default_name: str | None = None
+    result: list[tuple[str, str]] = []
+    for target in ("grid", "strips"):
+        name = _printer_name(config, target)
+        if not name:
+            if default_name is None:
+                default_name = str(win32print.GetDefaultPrinter() or "").strip()
+            name = default_name
+        if not name:
+            raise RuntimeError(
+                f"Не задано имя Windows-принтера для очереди {target}"
+            )
+        result.append((target, name))
+    return result
+
+
+def _queue_job_count(win32print, handle) -> int:
+    """Read a printer's current spooler job count."""
+    info = win32print.GetPrinter(handle, 2)
+    count = info.get("cJobs") if isinstance(info, dict) else None
+    if type(count) is int and count >= 0:
+        return count
+    # ``cJobs`` is present for normal level-2 records, but enumerating is a
+    # safe fallback for drivers which omit it.
+    jobs = win32print.EnumJobs(handle, 0, 0x7FFFFFFF, 1)
+    return len(jobs)
+
+
+def _open_for_clear(win32print, printer_name):
+    """Open a queue with administer access, falling back to normal access.
+
+    A kiosk account may be allowed to delete its own jobs without the
+    administrator right.  The fallback lets the per-job deletion path work in
+    that configuration while still allowing a true queue-wide purge whenever
+    Windows grants it.
+    """
+    desired_access = getattr(win32print, "PRINTER_ACCESS_ADMINISTER", None)
+    if desired_access is not None:
+        try:
+            return win32print.OpenPrinter(
+                printer_name,
+                {"DesiredAccess": desired_access},
+            )
+        except Exception as exc:
+            log.info(
+                "Could not open printer %s with administer access; "
+                "trying normal access: %s",
+                printer_name,
+                exc,
+            )
+    return win32print.OpenPrinter(printer_name)
+
+
+def _delete_jobs_individually(win32print, handle) -> tuple[int, list[str]]:
+    """Delete jobs one by one for queues where purge access is unavailable."""
+    try:
+        jobs = win32print.EnumJobs(handle, 0, 0x7FFFFFFF, 1)
+    except Exception as exc:
+        return 0, [str(exc)]
+    deleted = 0
+    errors: list[str] = []
+    command = getattr(win32print, "JOB_CONTROL_DELETE", 5)
+    for job in jobs:
+        job_id = job.get("JobId") if isinstance(job, dict) else None
+        if type(job_id) is not int:
+            errors.append("Windows returned a job without JobId")
+            continue
+        try:
+            win32print.SetJob(handle, job_id, 0, None, command)
+            deleted += 1
+        except Exception as exc:
+            errors.append(f"job {job_id}: {exc}")
+    return deleted, errors
+
+
+def get_windows_print_queues(
+    config: dict,
+) -> list[dict]:
+    """Return Windows spooler counts for the grid and strips queues.
+
+    The returned records intentionally contain both the logical target and the
+    resolved Windows queue name.  This makes a fallback to the default printer
+    visible to an administrator instead of silently reporting an ambiguous
+    number.
+    """
+    win32print = _win32print()
+    queue_names = _resolved_queue_names(dict(config or {}), win32print)
+    records: list[dict] = []
+    with _windows_spooler_lock:
+        for logical_target, printer_name in queue_names:
+            handle = None
+            record = {
+                "target": logical_target,
+                "printer_name": printer_name,
+                "jobs": None,
+                "error": None,
+            }
+            try:
+                handle = win32print.OpenPrinter(printer_name)
+                record["jobs"] = _queue_job_count(win32print, handle)
+            except Exception as exc:
+                record["error"] = str(exc)
+                log.warning(
+                    "Could not inspect Windows printer queue %s (%s): %s",
+                    logical_target,
+                    printer_name,
+                    exc,
+                )
+            finally:
+                if handle is not None:
+                    try:
+                        win32print.ClosePrinter(handle)
+                    except Exception:
+                        log.exception("Could not close printer handle %s", printer_name)
+            records.append(record)
+    return records
+
+
+def _clear_one_windows_queue(win32print, printer_name: str) -> dict:
+    handle = None
+    record = {
+        "printer_name": printer_name,
+        "jobs_before": None,
+        "jobs_after": None,
+        "cleared": 0,
+        "error": None,
+    }
+    try:
+        handle = _open_for_clear(win32print, printer_name)
+        record["jobs_before"] = _queue_job_count(win32print, handle)
+        failure_detail = None
+        if record["jobs_before"]:
+            purge_command = getattr(win32print, "PRINTER_CONTROL_PURGE", 3)
+            purge_error = None
+            try:
+                win32print.SetPrinter(handle, 0, None, purge_command)
+            except Exception as exc:
+                purge_error = exc
+
+            # Some Windows accounts can manage their own jobs but cannot use
+            # PRINTER_CONTROL_PURGE.  Fall back to deleting every enumerated
+            # job, then report any jobs which remained inaccessible.
+            if purge_error is not None:
+                log.info(
+                    "Printer-wide purge failed for %s; deleting jobs one by one: %s",
+                    printer_name,
+                    purge_error,
+                )
+                deleted, deletion_errors = _delete_jobs_individually(
+                    win32print,
+                    handle,
+                )
+                log.info(
+                    "Individual Windows job deletion for %s: deleted=%d errors=%d",
+                    printer_name,
+                    deleted,
+                    len(deletion_errors),
+                )
+                if deletion_errors:
+                    failure_detail = deletion_errors[0]
+
+        record["jobs_after"] = _queue_job_count(win32print, handle)
+        before = record["jobs_before"] or 0
+        after = record["jobs_after"] or 0
+        record["cleared"] = max(0, before - after)
+        if after:
+            suffix = f"; {failure_detail}" if failure_detail else ""
+            record["error"] = (
+                f"после очистки осталось заданий: {after}{suffix}"
+            )
+    except Exception as exc:
+        record["error"] = str(exc)
+        log.warning(
+            "Could not clear Windows printer queue %s: %s",
+            printer_name,
+            exc,
+        )
+    finally:
+        if handle is not None:
+            try:
+                win32print.ClosePrinter(handle)
+            except Exception:
+                log.exception("Could not close printer handle %s", printer_name)
+    return record
+
+
+def clear_windows_print_queues(
+    config: dict,
+) -> list[dict]:
+    """Clear both Windows spooler queues and return before/after counts."""
+    win32print = _win32print()
+    queue_names = _resolved_queue_names(dict(config or {}), win32print)
+    selected: list[str] = []
+    for _logical_target, printer_name in queue_names:
+        if printer_name not in selected:
+            selected.append(printer_name)
+
+    by_name: dict[str, dict] = {}
+    with _windows_spooler_lock:
+        for printer_name in selected:
+            by_name[printer_name] = _clear_one_windows_queue(
+                win32print,
+                printer_name,
+            )
+
+    records = []
+    first_target_by_name: dict[str, str] = {}
+    for logical_target, printer_name in queue_names:
+        record = dict(by_name[printer_name])
+        record["target"] = logical_target
+        if printer_name in first_target_by_name:
+            record["shared_with"] = first_target_by_name[printer_name]
+        else:
+            first_target_by_name[printer_name] = logical_target
+        records.append(record)
+    return records
 
 
 def prepare_custom_print(
@@ -320,4 +554,5 @@ def _print_driver(image_path: str, config: dict, template_name: str = ""):
 
 def _do_print(image_path: str, config: dict, template_name: str = ""):
     """Submit one print in a worker thread."""
-    _print_driver(image_path, config, template_name)
+    with _windows_spooler_lock:
+        _print_driver(image_path, config, template_name)

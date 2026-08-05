@@ -19,7 +19,13 @@ from backend.composer import (
 )
 from backend import composer as composer_module
 from backend import main
-from backend.printer import _print_driver, _printer_name, prepare_custom_print
+from backend.printer import (
+    _print_driver,
+    _printer_name,
+    clear_windows_print_queues,
+    get_windows_print_queues,
+    prepare_custom_print,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -720,6 +726,153 @@ class PrinterQueueTests(unittest.TestCase):
                     "USB001",
                 ],
             )
+
+    def test_reports_grid_and_strips_windows_job_counts(self):
+        job_counts = {
+            "DNP Cards": 3,
+            "DNP Strips": 1,
+        }
+        win32print = Mock()
+        win32print.OpenPrinter.side_effect = lambda name: name
+        win32print.GetPrinter.side_effect = (
+            lambda handle, _level: {"cJobs": job_counts[handle]}
+        )
+
+        with patch.dict(sys.modules, {"win32print": win32print}):
+            records = get_windows_print_queues({
+                "printer_name": "DNP Cards",
+                "printer_name_strips": "DNP Strips",
+            })
+
+        self.assertEqual(records, [
+            {
+                "target": "grid",
+                "printer_name": "DNP Cards",
+                "jobs": 3,
+                "error": None,
+            },
+            {
+                "target": "strips",
+                "printer_name": "DNP Strips",
+                "jobs": 1,
+                "error": None,
+            },
+        ])
+        self.assertEqual(win32print.ClosePrinter.call_count, 2)
+
+    def test_clears_both_windows_queues_and_reports_before_after(self):
+        job_counts = {
+            "DNP Cards": 3,
+            "DNP Strips": 1,
+        }
+        win32print = Mock()
+        win32print.PRINTER_ACCESS_ADMINISTER = 4
+        win32print.PRINTER_CONTROL_PURGE = 3
+        win32print.OpenPrinter.side_effect = lambda name, *_args: name
+        win32print.GetPrinter.side_effect = (
+            lambda handle, _level: {"cJobs": job_counts[handle]}
+        )
+
+        def purge(handle, _level, _printer, command):
+            self.assertEqual(command, 3)
+            job_counts[handle] = 0
+
+        win32print.SetPrinter.side_effect = purge
+
+        with patch.dict(sys.modules, {"win32print": win32print}):
+            records = clear_windows_print_queues({
+                "printer_name": "DNP Cards",
+                "printer_name_strips": "DNP Strips",
+            })
+
+        self.assertEqual(records, [
+            {
+                "printer_name": "DNP Cards",
+                "jobs_before": 3,
+                "jobs_after": 0,
+                "cleared": 3,
+                "error": None,
+                "target": "grid",
+            },
+            {
+                "printer_name": "DNP Strips",
+                "jobs_before": 1,
+                "jobs_after": 0,
+                "cleared": 1,
+                "error": None,
+                "target": "strips",
+            },
+        ])
+        self.assertEqual(win32print.SetPrinter.call_count, 2)
+
+    def test_clear_falls_back_to_deleting_owned_jobs_without_admin_access(self):
+        jobs = {
+            "DNP Cards": [101, 102],
+            "DNP Strips": [],
+        }
+        win32print = Mock()
+        win32print.PRINTER_ACCESS_ADMINISTER = 4
+        win32print.PRINTER_CONTROL_PURGE = 3
+        win32print.JOB_CONTROL_DELETE = 5
+
+        def open_printer(name, *defaults):
+            if defaults:
+                raise PermissionError("admin access denied")
+            return name
+
+        win32print.OpenPrinter.side_effect = open_printer
+        win32print.GetPrinter.side_effect = (
+            lambda handle, _level: {"cJobs": len(jobs[handle])}
+        )
+        win32print.SetPrinter.side_effect = PermissionError("purge denied")
+        win32print.EnumJobs.side_effect = (
+            lambda handle, *_args: [
+                {"JobId": job_id} for job_id in jobs[handle]
+            ]
+        )
+
+        def delete_job(handle, job_id, _level, _job, command):
+            self.assertEqual(command, 5)
+            jobs[handle].remove(job_id)
+
+        win32print.SetJob.side_effect = delete_job
+
+        with patch.dict(sys.modules, {"win32print": win32print}):
+            records = clear_windows_print_queues({
+                "printer_name": "DNP Cards",
+                "printer_name_strips": "DNP Strips",
+            })
+
+        self.assertEqual(records[0]["cleared"], 2)
+        self.assertEqual(records[0]["jobs_after"], 0)
+        self.assertIsNone(records[0]["error"])
+        self.assertEqual(win32print.SetJob.call_count, 2)
+
+    def test_same_physical_queue_is_purged_only_once(self):
+        job_count = 2
+        win32print = Mock()
+        win32print.PRINTER_ACCESS_ADMINISTER = 4
+        win32print.PRINTER_CONTROL_PURGE = 3
+        win32print.OpenPrinter.side_effect = lambda name, *_args: name
+        win32print.GetPrinter.side_effect = (
+            lambda _handle, _level: {"cJobs": job_count}
+        )
+
+        def purge(*_args):
+            nonlocal job_count
+            job_count = 0
+
+        win32print.SetPrinter.side_effect = purge
+
+        with patch.dict(sys.modules, {"win32print": win32print}):
+            records = clear_windows_print_queues({
+                "printer_name": "DNP Cards",
+                "printer_name_strips": "",
+            })
+
+        self.assertEqual(win32print.SetPrinter.call_count, 1)
+        self.assertNotIn("shared_with", records[0])
+        self.assertEqual(records[1]["shared_with"], "grid")
 
 
 class CustomPrintPreparationTests(unittest.TestCase):
