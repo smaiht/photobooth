@@ -1,6 +1,6 @@
 @font-face {
     font-family: 'Comfortaa';
-    src: url('/assets/fonts/Comfortaa-VariableFont_wght.ttf') format('truetype');
+    src: url('assets/fonts/Comfortaa-VariableFont_wght.ttf') format('truetype');
     font-weight: 300 700;
     font-display: block;
 }
@@ -452,8 +452,18 @@ html, body {
 .processing-title { font-size: 3.5vw; font-weight: 600; color: #FF2973; }
 
 #screen-template {
+    justify-content: center;
     gap: 3vh;
     padding: 3vh 2vw;
+}
+
+.template-main {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3vh;
+    will-change: transform;
 }
 
 #template-skip {
@@ -519,25 +529,40 @@ html, body {
     border-radius: 0.5vw;
 }
 
-#template-timer { font-size: 2.5vw; opacity: 0.6; }
+#template-timer {
+    position: absolute;
+    bottom: 4vh;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 2.5vw;
+    opacity: 0.6;
+    white-space: nowrap;
+}
 
 .photo-choice-panel {
-    position: absolute;
-    z-index: 10;
-    right: 3vw;
-    bottom: 1.5vh;
-    left: 3vw;
-    width: auto;
+    margin-top: 1vh;
+    flex: 0 0 auto;
+    width: 94vw;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 1.2vh;
-    background: #fff;
+    animation: photo-choice-reveal 0.22s ease-out;
 }
 .photo-choice-panel[hidden] { display: none; }
 
+@keyframes photo-choice-reveal {
+    from {
+        opacity: 0;
+        transform: translateY(1vh);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 .photo-choice-header {
-    position: relative;
     flex: 0 0 auto;
     width: 100%;
     min-height: 4.8vh;
@@ -545,16 +570,6 @@ html, body {
     align-items: center;
     justify-content: center;
     gap: 3vw;
-}
-
-.photo-choice-timer {
-    position: absolute;
-    top: 50%;
-    left: 0;
-    transform: translateY(-50%);
-    font-size: 1.25vw;
-    opacity: 0.6;
-    white-space: nowrap;
 }
 
 .photo-choice-header h2 {
@@ -590,8 +605,7 @@ html, body {
 .frame-segment:disabled { opacity: 0.55; }
 
 .photo-choice-options {
-    flex: 1 1 auto;
-    min-height: 0;
+    flex: 0 0 auto;
     width: 100%;
     display: flex;
     align-items: center;
@@ -601,11 +615,8 @@ html, body {
 
 .photo-choice-btn {
     position: relative;
-    flex: 0 1 auto;
-    width: auto;
-    max-width: calc((100% - 4.2vw) / 4);
-    height: 100%;
-    max-height: 14.9667vw;
+    flex: 0 1 calc((100% - 4.2vw) / 4);
+    width: calc((100% - 4.2vw) / 4);
     aspect-ratio: 3 / 2;
     min-width: 0;
     appearance: none;
@@ -643,8 +654,6 @@ html, body {
     font-size: 1.6vw;
     font-weight: 700;
 }
-
-.photo-choice-open #template-timer { visibility: hidden; }
 
 /* DONE */
 #screen-done { gap: 3vh; }

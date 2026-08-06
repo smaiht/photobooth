@@ -662,6 +662,71 @@ class PreviewLifecycleTests(unittest.TestCase):
 
 
 class FrontendPreviewTests(unittest.TestCase):
+    def test_hash_preview_runs_without_backend_and_covers_every_screen(self):
+        html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        preview_script = (
+            ROOT / "frontend" / "assets" / "dev" / "preview.js"
+        ).read_text(encoding="utf-8")
+
+        for relative_asset in (
+            'href="style.css"',
+            'src="assets/qrcode.min.js"',
+            'src="assets/dev/preview.js"',
+            'src="app.js"',
+        ):
+            with self.subTest(relative_asset=relative_asset):
+                self.assertIn(relative_asset, html)
+
+        for route in (
+            '"no-camera": "no_camera"',
+            '"camera-searching": "camera_searching"',
+            'idle: "idle"',
+            '"idle-locked": "idle_locked"',
+            'shooting: "shooting"',
+            'processing: "processing"',
+            'template: "template"',
+            '"photo-choice": "photo_choice"',
+            'done: "done"',
+        ):
+            with self.subTest(route=route):
+                self.assertIn(route, preview_script)
+
+        self.assertIn("if (!previewMode) {", script)
+        self.assertIn("window.photoboothPreview", script)
+        self.assertIn(
+            'window.addEventListener("hashchange", () => location.reload());',
+            script,
+        )
+        self.assertNotIn("loadBackendState", script)
+        self.assertNotIn("stopBackendConnectionForPreview", script)
+        self.assertNotIn("clearPreviewSession", script)
+        self.assertIn('new URL("config_app.json", projectUrl)', preview_script)
+        self.assertIn("templates/${encodeURIComponent(pack)}/config.json", preview_script)
+        self.assertIn("Object.entries(definitions)", preview_script)
+        self.assertIn('session_id: "preview-session"', preview_script)
+        self.assertNotIn("const previewConfig =", script)
+        self.assertNotIn('name: "strips"', preview_script)
+        self.assertNotIn('"2 полоски"', preview_script)
+        self.assertNotIn('"Открытка"', preview_script)
+        self.assertNotIn("data:image/svg+xml", script)
+        self.assertNotIn("<svg", preview_script)
+
+        dev_assets = ROOT / "frontend" / "assets" / "dev"
+        expected_assets = {
+            "live-view.svg",
+            "template-grid.svg",
+            "template-strips.svg",
+        }
+        expected_assets.update(
+            f"photo-{index}-{variant}.svg"
+            for index in range(1, 5)
+            for variant in ("framed", "unframed")
+        )
+        for filename in expected_assets:
+            with self.subTest(filename=filename):
+                self.assertTrue((dev_assets / filename).is_file())
+
     def test_template_choices_are_dynamic_and_processing_has_own_screen(self):
         html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
         script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")

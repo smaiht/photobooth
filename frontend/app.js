@@ -7,6 +7,9 @@ const screens = {
     done: document.getElementById("screen-done"),
 };
 
+const previewController = window.photoboothPreview;
+const previewMode = previewController?.isActive() === true;
+
 const liveView = document.getElementById("live-view");
 const countdownNum = document.getElementById("countdown-number");
 const photoCounter = document.getElementById("photo-counter");
@@ -21,7 +24,7 @@ const idlePriceBadge = document.getElementById("idle-price-badge");
 const idlePriceValue = document.getElementById("idle-price-value");
 const idleStartButton = document.getElementById("idle-start-button");
 const templateTimer = document.getElementById("template-timer");
-const photoChoiceTimer = document.getElementById("photo-choice-timer");
+const templateMain = document.getElementById("template-main");
 const templateOptions = document.getElementById("template-options");
 const templateSkip = document.getElementById("template-skip");
 const photoChoicePanel = document.getElementById("photo-choice-panel");
@@ -231,22 +234,24 @@ function connect() {
 }
 
 // State sync — catch missed WS messages
-setInterval(() => {
-    fetch(`/api/state?frontend=${currentState}`).then(r => r.json()).then(s => {
-        if (s.state !== currentState) {
-            console.warn(`State desync: frontend=${currentState} backend=${s.state}, fixing`);
-            switchScreen(s.state, s);
-        } else {
-            syncStartLock(s);
-            syncTechnicalEvent(s);
-            syncSessionContext(s.state, s);
-            if (s.state === "template_select") {
-                renderTemplateOptions(s.templates);
+if (!previewMode) {
+    setInterval(() => {
+        fetch(`/api/state?frontend=${currentState}`).then(r => r.json()).then(s => {
+            if (s.state !== currentState) {
+                console.warn(`State desync: frontend=${currentState} backend=${s.state}, fixing`);
+                switchScreen(s.state, s);
+            } else {
+                syncStartLock(s);
+                syncTechnicalEvent(s);
+                syncSessionContext(s.state, s);
+                if (s.state === "template_select") {
+                    renderTemplateOptions(s.templates);
+                }
+                refreshQr();
             }
-            refreshQr();
-        }
-    }).catch(() => {});
-}, 1000);
+        }).catch(() => {});
+    }, 1000);
+}
 
 function send(msg) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
@@ -398,7 +403,7 @@ function setLiveView(active) {
     if (active === liveViewStarted) return;
     liveViewStarted = active;
     if (active) {
-        liveView.src = "/live";
+        liveView.src = previewMode ? previewController.liveViewUrl : "/live";
     } else {
         liveView.removeAttribute("src");
     }
@@ -495,6 +500,31 @@ function showCountdown(value) {
 }
 
 // --- Template selection ---
+let templateMainAnimation = null;
+
+function animateTemplateMainFrom(previousTop) {
+    templateMainAnimation?.cancel();
+
+    const nextTop = templateMain.getBoundingClientRect().top;
+    const offset = previousTop - nextTop;
+    if (screens.template.hidden || Math.abs(offset) < 1) {
+        templateMainAnimation = null;
+        return;
+    }
+
+    const animation = templateMain.animate([
+        { transform: `translateY(${offset}px)` },
+        { transform: "translateY(0)" },
+    ], {
+        duration: 320,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+    });
+    templateMainAnimation = animation;
+    animation.addEventListener("finish", () => {
+        if (templateMainAnimation === animation) templateMainAnimation = null;
+    }, { once: true });
+}
+
 function lockTemplateSelection() {
     clearInterval(templateTimeout);
     setTemplateTimerText("");
@@ -605,12 +635,14 @@ function startPhotoPreviewCycle() {
 }
 
 function closePhotoChoice() {
+    const wasOpen = !photoChoicePanel.hidden;
+    const previousTop = wasOpen
+        ? templateMain.getBoundingClientRect().top
+        : null;
     photoChoiceTemplate = null;
     photoChoiceWithFrame = true;
     photoChoicePanel.hidden = true;
-    photoChoicePanel.style.removeProperty("top");
     photoChoiceOptions.replaceChildren();
-    screens.template.classList.remove("photo-choice-open");
     templateOptions.querySelectorAll(".template-btn").forEach((button) => {
         button.classList.remove("active");
         if (button.dataset.photoChoice === "true") {
@@ -618,6 +650,7 @@ function closePhotoChoice() {
         }
     });
     updateFrameSegments();
+    if (previousTop !== null) animateTemplateMainFrom(previousTop);
 }
 
 function resetPhotoChoice() {
@@ -633,9 +666,9 @@ function resetTemplateSelection() {
 }
 
 function openPhotoChoice(option, selectedButton) {
+    const previousTop = templateMain.getBoundingClientRect().top;
     photoChoiceTemplate = option;
     photoChoiceWithFrame = true;
-    screens.template.classList.add("photo-choice-open");
     photoChoicePanel.hidden = false;
     templateOptions.querySelectorAll(".template-btn").forEach((button) => {
         button.classList.toggle("active", button === selectedButton);
@@ -645,15 +678,7 @@ function openPhotoChoice(option, selectedButton) {
     });
     updateFrameSegments();
     renderPhotoChoices();
-    positionPhotoChoicePanel();
-}
-
-function positionPhotoChoicePanel() {
-    if (photoChoicePanel.hidden) return;
-    const screenRect = screens.template.getBoundingClientRect();
-    const optionsRect = templateOptions.getBoundingClientRect();
-    const gap = window.innerHeight * 0.015;
-    photoChoicePanel.style.top = `${optionsRect.bottom - screenRect.top + gap}px`;
+    animateTemplateMainFrom(previousTop);
 }
 
 function updateFrameSegments() {
@@ -721,11 +746,8 @@ screens.template.addEventListener("click", (event) => {
     closePhotoChoice();
 });
 
-window.addEventListener("resize", positionPhotoChoicePanel);
-
 function setTemplateTimerText(text) {
     templateTimer.textContent = text;
-    photoChoiceTimer.textContent = text;
 }
 
 function startTemplateTimer(seconds) {
@@ -764,7 +786,8 @@ idleStartButton.addEventListener("click", () => {
 
 // --- Config ---
 let config = {};
-fetch("/api/config").then(r => r.json()).then(cfg => {
+
+function applyConfig(cfg) {
     config = cfg;
     configureIdleSessionInfo(cfg);
     const configuredPrice = Math.floor(Number(cfg.technical_event_price_rubles));
@@ -793,6 +816,13 @@ fetch("/api/config").then(r => r.json()).then(cfg => {
     configurePoseExamples(cfg);
     rootStyle.setProperty("--warmup", (cfg.live_view_warmup || 0.3) + "s");
     refreshQr();
-});
+}
 
-connect();
+window.addEventListener("hashchange", () => location.reload());
+
+if (previewMode) {
+    previewController.render({ applyConfig, switchScreen });
+} else {
+    fetch("/api/config").then(response => response.json()).then(applyConfig);
+    connect();
+}
