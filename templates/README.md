@@ -13,7 +13,7 @@
 Запуск для одного template pack:
 
 ```bash
-python3 templates/generate_layout_previews.py kvas01aug26
+python3 templates/generate_layout_previews.py park08082026
 ```
 
 На Windows с embedded Python:

@@ -25,7 +25,7 @@ PUBLISH_SPEC.loader.exec_module(publish_release)
 
 
 class DeterministicReleaseTests(unittest.TestCase):
-    def test_content_sha_ignores_source_timestamps(self):
+    def test_folder_sha_ignores_source_timestamps(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             stage = root / "stage"
@@ -35,12 +35,12 @@ class DeterministicReleaseTests(unittest.TestCase):
             nested.parent.mkdir()
             nested.write_text("body { color: red; }\n", encoding="utf-8")
 
-            first = build_release.content_sha256(stage)
+            first = build_release.folder_sha256(stage)
 
             for index, path in enumerate(sorted(stage.rglob("*"))):
                 timestamp = 1_700_000_000 + index * 86_400
                 os.utime(path, (timestamp, timestamp))
-            second = build_release.content_sha256(stage)
+            second = build_release.folder_sha256(stage)
 
             self.assertEqual(first, second)
 
@@ -88,8 +88,16 @@ class DeterministicReleaseTests(unittest.TestCase):
             )
             full_path = output / build_release.ARCHIVE_NAMES["full"]
             self.assertEqual(
-                artifacts["full"]["sha256"],
+                metadata["full"]["sha256"],
                 hashlib.sha256(full_path.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(metadata["full"]["hash_type"], "zip")
+            self.assertTrue(all(
+                metadata[name]["hash_type"] == "folder"
+                for name in metadata if name != "full"
+            ))
+            self.assertEqual(
+                artifacts["full"]["sha256"], metadata["full"]["sha256"],
             )
             self.assertEqual(
                 artifacts["python"]["sha256"],
@@ -100,6 +108,7 @@ class DeterministicReleaseTests(unittest.TestCase):
         artifact = {
             "name": "python",
             "sha256": "a" * 64,
+            "hash_type": "folder",
         }
         previous = {
             "artifacts": {
@@ -114,7 +123,9 @@ class DeterministicReleaseTests(unittest.TestCase):
 
         record = publish_release.reusable_record(previous, artifact)
 
-        self.assertEqual(record, previous["artifacts"]["python"])
+        self.assertEqual(record["path"], previous["artifacts"]["python"]["path"])
+        self.assertEqual(record["sha256"], "a" * 64)
+        self.assertEqual(record["hash_type"], "folder")
         record["size"] = 999
         self.assertEqual(previous["artifacts"]["python"]["size"], 123)
 

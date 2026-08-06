@@ -122,7 +122,7 @@ def _stage_files(stage_root: Path) -> list[Path]:
     return files
 
 
-def content_sha256(stage_root: Path) -> str:
+def folder_sha256(stage_root: Path) -> str:
     """Hash sorted relative paths and file bytes, ignoring filesystem metadata."""
     stage_root = stage_root.resolve()
     digest = hashlib.sha256()
@@ -136,6 +136,14 @@ def content_sha256(stage_root: Path) -> str:
         digest.update(b"  ")
         digest.update(name)
         digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(COPY_CHUNK_SIZE):
+            digest.update(chunk)
     return digest.hexdigest()
 
 
@@ -180,22 +188,26 @@ def build_archives(stage_root: Path, output_root: Path) -> dict[str, dict]:
 
     def build(name: str, source: Path) -> set[str]:
         destination = output_root / ARCHIVE_NAMES[name]
-        sha256 = content_sha256(source)
         prefix = "" if source == stage_root else source.relative_to(stage_root).as_posix()
+        sha256 = None if name == "full" else folder_sha256(source)
         count, size, release_names = create_zip(
             source,
             destination,
             archive_prefix=prefix,
         )
+        hash_type = "zip" if name == "full" else "folder"
+        if sha256 is None:
+            sha256 = file_sha256(destination)
         result[name] = {
             "file": destination.name,
             "size": size,
             "sha256": sha256,
+            "hash_type": hash_type,
             "entries": count,
         }
         print(
             f"Built {name}: {destination.name}, {size / 1048576:.2f} MiB, "
-            f"content_sha256={sha256[:16]}, entries={count}",
+            f"{hash_type}_sha256={sha256[:16]}, entries={count}",
             flush=True,
         )
         return release_names
