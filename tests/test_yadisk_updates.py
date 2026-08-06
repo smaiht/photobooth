@@ -773,6 +773,7 @@ class UpdateMarkerTests(unittest.TestCase):
             for name in (
                 ".update_download.123.zip",
                 ".update_apply.123.ps1",
+                ".update_args.123.json",
                 ".update_in_progress.json.123.tmp",
                 ".update_hash.tmp",
             ):
