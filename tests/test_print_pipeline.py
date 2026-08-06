@@ -689,6 +689,26 @@ class FrontendPreviewTests(unittest.TestCase):
         counter_block = counter_css.split("#photo-counter {", 1)[1].split("}", 1)[0]
         self.assertIn("color: #fff", counter_block)
 
+    def test_photo_choice_opens_without_reflow_and_can_be_closed(self):
+        script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "frontend" / "style.css").read_text(encoding="utf-8")
+
+        def rule(selector):
+            return styles.split(f"{selector} {{", 1)[1].split("}", 1)[0]
+
+        for selector in (".template-btn", ".photo-choice-btn"):
+            with self.subTest(selector=selector):
+                self.assertIn("border: 0", rule(selector))
+                self.assertIn("padding: 0", rule(selector))
+
+        self.assertIn("position: absolute", rule(".photo-choice-panel"))
+        self.assertNotIn(".photo-choice-open .template-options", styles)
+        self.assertNotIn(".photo-choice-open .template-btn", styles)
+        self.assertIn("const PHOTO_PREVIEW_CYCLE_MS = 500;", script)
+        self.assertIn("if (isOpen)", script)
+        self.assertIn('screens.template.addEventListener("click"', script)
+        self.assertIn("closePhotoChoice();", script)
+
 
 class PrinterQueueTests(unittest.TestCase):
     def test_selects_optional_strips_queue(self):

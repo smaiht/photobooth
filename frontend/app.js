@@ -21,6 +21,7 @@ const idlePriceBadge = document.getElementById("idle-price-badge");
 const idlePriceValue = document.getElementById("idle-price-value");
 const idleStartButton = document.getElementById("idle-start-button");
 const templateTimer = document.getElementById("template-timer");
+const photoChoiceTimer = document.getElementById("photo-choice-timer");
 const templateOptions = document.getElementById("template-options");
 const templateSkip = document.getElementById("template-skip");
 const photoChoicePanel = document.getElementById("photo-choice-panel");
@@ -58,6 +59,8 @@ let poseExampleUrls = [];
 let poseExamplesPerSide = 0;
 let poseImagePreloaders = [];
 let renderedPoseSignature = "";
+
+const PHOTO_PREVIEW_CYCLE_MS = 500;
 
 function renderIdlePoseBackdrop() {
     if (!idlePoseField) return;
@@ -475,7 +478,7 @@ function _doSwitch(state, data) {
         startTemplateTimer(data.timeout ?? config.template_select_timeout ?? 5);
     } else {
         clearInterval(templateTimeout);
-        templateTimer.textContent = "";
+        setTemplateTimerText("");
         resetTemplateSelection();
     }
 
@@ -494,7 +497,7 @@ function showCountdown(value) {
 // --- Template selection ---
 function lockTemplateSelection() {
     clearInterval(templateTimeout);
-    templateTimer.textContent = "";
+    setTemplateTimerText("");
     templateSkip.disabled = true;
     templateOptions.querySelectorAll("button").forEach((item) => {
         item.disabled = true;
@@ -547,6 +550,10 @@ function renderTemplateOptions(options) {
             && Array.isArray(option.photo_previews)
             && option.photo_previews.length > 0;
         button.dataset.photoChoice = String(isPhotoChoice);
+        if (isPhotoChoice) {
+            button.setAttribute("aria-expanded", "false");
+            button.setAttribute("aria-controls", "photo-choice-panel");
+        }
 
         const preview = document.createElement("img");
         preview.className = "template-preview";
@@ -562,6 +569,12 @@ function renderTemplateOptions(options) {
         }
         button.addEventListener("click", () => {
             if (isPhotoChoice) {
+                const isOpen = photoChoiceTemplate?.name === option.name
+                    && !photoChoicePanel.hidden;
+                if (isOpen) {
+                    closePhotoChoice();
+                    return;
+                }
                 openPhotoChoice(option, button);
                 return;
             }
@@ -588,19 +601,27 @@ function startPhotoPreviewCycle() {
             const preview = previews[index % previews.length];
             button.querySelector("img").src = preview.with_frame_url;
         });
-    }, 1000);
+    }, PHOTO_PREVIEW_CYCLE_MS);
 }
 
-function resetPhotoChoice() {
+function closePhotoChoice() {
     photoChoiceTemplate = null;
     photoChoiceWithFrame = true;
     photoChoicePanel.hidden = true;
+    photoChoicePanel.style.removeProperty("top");
     photoChoiceOptions.replaceChildren();
     screens.template.classList.remove("photo-choice-open");
     templateOptions.querySelectorAll(".template-btn").forEach((button) => {
         button.classList.remove("active");
+        if (button.dataset.photoChoice === "true") {
+            button.setAttribute("aria-expanded", "false");
+        }
     });
     updateFrameSegments();
+}
+
+function resetPhotoChoice() {
+    closePhotoChoice();
 }
 
 function resetTemplateSelection() {
@@ -612,17 +633,27 @@ function resetTemplateSelection() {
 }
 
 function openPhotoChoice(option, selectedButton) {
-    const alreadyOpen = photoChoiceTemplate?.name === option.name
-        && !photoChoicePanel.hidden;
     photoChoiceTemplate = option;
-    if (!alreadyOpen) photoChoiceWithFrame = true;
+    photoChoiceWithFrame = true;
     screens.template.classList.add("photo-choice-open");
     photoChoicePanel.hidden = false;
     templateOptions.querySelectorAll(".template-btn").forEach((button) => {
         button.classList.toggle("active", button === selectedButton);
+        if (button.dataset.photoChoice === "true") {
+            button.setAttribute("aria-expanded", String(button === selectedButton));
+        }
     });
     updateFrameSegments();
     renderPhotoChoices();
+    positionPhotoChoicePanel();
+}
+
+function positionPhotoChoicePanel() {
+    if (photoChoicePanel.hidden) return;
+    const screenRect = screens.template.getBoundingClientRect();
+    const optionsRect = templateOptions.getBoundingClientRect();
+    const gap = window.innerHeight * 0.015;
+    photoChoicePanel.style.top = `${optionsRect.bottom - screenRect.top + gap}px`;
 }
 
 function updateFrameSegments() {
@@ -681,6 +712,22 @@ frameOff.addEventListener("click", () => {
     renderPhotoChoices();
 });
 
+screens.template.addEventListener("click", (event) => {
+    if (photoChoicePanel.hidden) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || target.closest(".template-btn, .photo-choice-panel, #template-skip")) {
+        return;
+    }
+    closePhotoChoice();
+});
+
+window.addEventListener("resize", positionPhotoChoicePanel);
+
+function setTemplateTimerText(text) {
+    templateTimer.textContent = text;
+    photoChoiceTimer.textContent = text;
+}
+
 function startTemplateTimer(seconds) {
     let remaining = seconds;
     const renderRemaining = () => {
@@ -693,7 +740,7 @@ function startTemplateTimer(seconds) {
                 : mod10 >= 2 && mod10 <= 4
                     ? "секунды"
                     : "секунд";
-        templateTimer.textContent = `Осталось ${remaining} ${unit}`;
+        setTemplateTimerText(`Осталось ${remaining} ${unit}`);
     };
     renderRemaining();
     clearInterval(templateTimeout);
@@ -701,7 +748,7 @@ function startTemplateTimer(seconds) {
         remaining--;
         if (remaining <= 0) {
             clearInterval(templateTimeout);
-            templateTimer.textContent = "";
+            setTemplateTimerText("");
             lockTemplateSelection();
         } else {
             renderRemaining();
