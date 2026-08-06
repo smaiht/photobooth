@@ -1504,7 +1504,17 @@ async def handle_disk_command(command: dict) -> dict:
 
     if cmd == "status":
         hash_path = ROOT_DIR / ".update_hash"
-        version = hash_path.read_text(encoding="utf-8").strip() if hash_path.exists() else "unknown"
+        version = "unknown"
+        if hash_path.exists():
+            raw_version = hash_path.read_text(encoding="utf-8").strip()
+            try:
+                version_state = json.loads(raw_version)
+            except ValueError:
+                version_state = None
+            if isinstance(version_state, dict):
+                version = str(version_state.get("full") or "unknown")
+            elif raw_version:
+                version = raw_version
         connected = bool(camera and camera.is_connected)
         event = yadisk_cloud.current_event_folder() or str(CONFIG.get("yadisk_folder", ""))
         viewer_urls = await asyncio.to_thread(_viewer_urls)

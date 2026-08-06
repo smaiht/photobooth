@@ -35,13 +35,13 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.12.10'
 
       # Build embedded Python with all packages
       - name: Build python/ folder
         shell: pwsh
         run: |
-          $pyver = python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')"
+          $pyver = "3.12.10"
           $url = "https://www.python.org/ftp/python/$pyver/python-$pyver-embed-amd64.zip"
           Write-Host "Downloading $url"
           Invoke-WebRequest -Uri $url -OutFile python-embed.zip
@@ -55,26 +55,33 @@ jobs:
           Set-Content $pth.FullName $content
           # Install pip + packages
           Invoke-WebRequest -Uri https://bootstrap.pypa.io/get-pip.py -OutFile get-pip.py
-          python/python.exe get-pip.py --no-warn-script-location
-          python/python.exe -m pip install setuptools --no-warn-script-location
-          python/python.exe -m pip install -r requirements.txt --no-warn-script-location
+          python/python.exe get-pip.py --no-warn-script-location --no-compile
+          python/python.exe -m pip install `
+            --force-reinstall --no-compile --no-warn-script-location `
+            pip==26.2.1 setuptools==83.0.0 wheel==0.46.3
+          python/python.exe -m pip install `
+            --no-compile --no-warn-script-location -r requirements-win.lock
           Remove-Item get-pip.py
 
       - name: Run tests
         shell: pwsh
-        run: python/python.exe -m unittest discover -s tests -v
+        run: |
+          $env:PYTHONDONTWRITEBYTECODE = "1"
+          python/python.exe -m unittest discover -s tests -v
 
-      # ZIP the entire repo (with .git and python/)
-      - name: Create ZIP
+      - name: Build full and component ZIPs
         shell: pwsh
         run: |
-          Compress-Archive -Path * -DestinationPath ../photobooth-win.zip
-          Move-Item ../photobooth-win.zip .
+          python/python.exe .github/scripts/build_release.py `
+            --stage (Join-Path $env:RUNNER_TEMP "photobooth-release-stage") `
+            --output dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: photobooth-win
-          path: photobooth-win.zip
+          name: photobooth-release
+          path: |
+            dist/*.zip
+            dist/release-metadata.json
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -83,7 +90,7 @@ jobs:
           name: Latest Build
           body: "Auto-built from main branch"
           prerelease: true
-          files: photobooth-win.zip
+          files: dist/*.zip
 
       - name: Publish release to Yandex.Disk
         id: publish
@@ -91,11 +98,13 @@ jobs:
         shell: pwsh
         env:
           YADISK_TOKEN: ${{ secrets.YADISK_TOKEN }}
-          RELEASE_URL: https://github.com/${{ github.repository }}/releases/download/latest/photobooth-win.zip
+          RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download/latest
         run: |
           python/python.exe .github/scripts/publish_release.py `
-            --file photobooth-win.zip `
-            --source-url $env:RELEASE_URL `
+            --dist-dir dist `
+            --metadata dist/release-metadata.json `
+            --source-base-url $env:RELEASE_BASE_URL `
+            --commit ${{ github.sha }} `
             --folder photobooth_system/updates
 
       - name: Notify Telegram about successful release
@@ -107,17 +116,20 @@ jobs:
           RELEASE_SHA: ${{ steps.publish.outputs.sha256 }}
           RELEASE_SIZE: ${{ steps.publish.outputs.size_mib }}
           PUBLISH_METHOD: ${{ steps.publish.outputs.method }}
+          CHANGED_COMPONENTS: ${{ steps.publish.outputs.changed }}
         run: |
           $shortSha = $env:RELEASE_SHA.Substring(0, 16)
-          $method = if ($env:PUBLISH_METHOD -eq "server-side-import") {
-            "импорт по GitHub-ссылке"
-          } else {
-            "прямая загрузка с GitHub Actions"
+          $method = switch ($env:PUBLISH_METHOD) {
+            "server-side-import" { "импорт по GitHub-ссылке" }
+            "direct-upload" { "прямая загрузка с GitHub Actions" }
+            "mixed" { "импорт + прямая загрузка" }
+            default { "архивы уже были опубликованы" }
           }
           $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           $text = "✅ Новый релиз фотобудки опубликован на Яндекс.Диск`n" +
                   "ZIP: $env:RELEASE_SIZE MiB`n" +
                   "SHA: $shortSha`n" +
+                  "Изменились: $env:CHANGED_COMPONENTS`n" +
                   "Способ: $method`n`n" +
                   "Для установки отправь /restart`n`n$runUrl"
           $body = @{ chat_id = $env:TG_ADMIN_ID; text = $text } | ConvertTo-Json -Compress

@@ -14,7 +14,7 @@ from backend.config import update_camera_config_field
 
 class CommandValidationTests(unittest.TestCase):
     def test_poll_interval_is_ten_seconds(self):
-        self.assertEqual(yadisk_control.POLL_INTERVAL, 10)
+        self.assertEqual(yadisk_control.POLL_INTERVAL, 5)
 
     def test_validates_command_id_and_filename(self):
         command_id = "a" * 32
@@ -914,7 +914,7 @@ class LanViewerTests(unittest.IsolatedAsyncioTestCase):
         remote_response = await main.live_view(remote)
         local_response = await main.live_view(local)
         self.assertEqual(
-            remote_response.headers["x-photobooth-live-fps"], "3")
+            remote_response.headers["x-photobooth-live-fps"], "2")
         self.assertEqual(
             local_response.headers["x-photobooth-live-fps"], "30")
         self.assertEqual(

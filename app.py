@@ -6,6 +6,7 @@ Shows loading screen instantly, switches to app when server is ready.
 
 import sys
 import os
+import json
 import threading
 import time
 from pathlib import Path
@@ -190,6 +191,15 @@ _APP_DIR = Path(__file__).resolve().parent
 _HASH_FILE = str(_APP_DIR / ".update_hash")
 _UPDATE_MARKER = _APP_DIR / ".update_in_progress.json"
 
+_UPDATE_COMPONENTS = ("app", "python", "bin", "templates", "edsdk", "drivers")
+_COMPONENT_ROOTS = {
+    "python": "python",
+    "bin": "bin",
+    "templates": "templates",
+    "edsdk": "EDSDK_Win",
+    "drivers": "drivers",
+}
+
 _ES_SYSTEM_REQUIRED = 0x00000001
 _ES_DISPLAY_REQUIRED = 0x00000002
 _ES_CONTINUOUS = 0x80000000
@@ -351,6 +361,7 @@ def _cleanup_stale_update_artifacts(app_dir: Path = _APP_DIR) -> None:
     file_patterns = (
         ".update_download.*.zip",
         ".update_apply.*.ps1",
+        ".update_args.*.json",
         ".update_in_progress.json.*.tmp",
         ".update_hash.tmp",
     )
@@ -412,10 +423,20 @@ def _extract_update(zip_path: str, app_dir: str) -> None:
                 dst.write(src.read())
 
 
-def _prepare_update_stage(zip_path: Path, stage_path: Path) -> int:
-    """Extract a full release before the visible application is closed."""
+def _prepare_update_stage(
+    archives: Path | list[tuple[str, Path]],
+    stage_path: Path,
+) -> int:
+    """Extract one full ZIP or several non-overlapping component ZIPs."""
     import shutil
     import zipfile
+
+    if isinstance(archives, Path):
+        archive_items = [("full", archives)]
+    else:
+        archive_items = list(archives)
+    if not archive_items:
+        raise ValueError("update does not contain archives")
 
     stage_path = stage_path.resolve()
     if stage_path.exists():
@@ -423,38 +444,80 @@ def _prepare_update_stage(zip_path: Path, stage_path: Path) -> int:
     stage_path.mkdir(parents=True)
     stage_root = os.path.realpath(stage_path)
     extracted_files = 0
+    seen_files: set[str] = set()
     try:
-        with zipfile.ZipFile(zip_path) as archive:
-            for info in archive.infolist():
-                member = info.filename.replace("\\", "/")
-                target = os.path.realpath(os.path.join(stage_path, member))
-                if os.path.commonpath((stage_root, target)) != stage_root:
-                    raise ValueError(
-                        f"ZIP path escapes update stage: {info.filename}")
-                if info.is_dir():
-                    os.makedirs(target, exist_ok=True)
-                    continue
-                os.makedirs(os.path.dirname(target), exist_ok=True)
-                with archive.open(info) as source, open(target, "wb") as destination:
-                    shutil.copyfileobj(source, destination, length=1024 * 1024)
-                extracted_files += 1
-        if not (stage_path / "app.py").is_file():
-            raise ValueError("full update does not contain app.py at ZIP root")
+        for component, zip_path in archive_items:
+            if component not in {"full", *_UPDATE_COMPONENTS}:
+                raise ValueError(f"unknown update component: {component}")
+            archive_files: set[str] = set()
+            with zipfile.ZipFile(zip_path) as archive:
+                bad_member = archive.testzip()
+                if bad_member:
+                    raise ValueError(f"{component} ZIP CRC failed: {bad_member}")
+                for info in archive.infolist():
+                    member = info.filename.replace("\\", "/")
+                    if not member or member.endswith("/"):
+                        continue
+                    top = member.split("/", 1)[0]
+                    if component in _COMPONENT_ROOTS:
+                        expected_root = _COMPONENT_ROOTS[component]
+                        if top != expected_root:
+                            raise ValueError(
+                                f"{component} ZIP contains path outside "
+                                f"{expected_root}: {info.filename}"
+                            )
+                    elif component == "app" and top in _COMPONENT_ROOTS.values():
+                        raise ValueError(
+                            f"app ZIP overlaps component folder: {info.filename}")
+                    normalized = member.casefold()
+                    if normalized in seen_files:
+                        raise ValueError(f"update ZIPs overlap: {info.filename}")
+                    target = os.path.realpath(os.path.join(stage_path, member))
+                    if os.path.commonpath((stage_root, target)) != stage_root:
+                        raise ValueError(
+                            f"ZIP path escapes update stage: {info.filename}")
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with archive.open(info) as source, open(
+                        target, "wb",
+                    ) as destination:
+                        shutil.copyfileobj(
+                            source, destination, length=1024 * 1024,
+                        )
+                    seen_files.add(normalized)
+                    archive_files.add(member)
+                    extracted_files += 1
+            if component in {"full", "app"} and "app.py" not in archive_files:
+                raise ValueError(
+                    f"{component} update does not contain app.py at ZIP root")
         return extracted_files
     except Exception:
         shutil.rmtree(stage_path, ignore_errors=True)
         raise
 
 
-def _schedule_full_update(stage_path: Path, app_dir: Path, version: str) -> bool:
+def _schedule_staged_update(
+    stage_path: Path,
+    app_dir: Path,
+    versions: dict[str, str],
+    components: list[str],
+) -> bool:
     """Start the one external installer; return False if one already owns it."""
-    import json
     import subprocess
+
+    allowed_components = {"full", *_UPDATE_COMPONENTS}
+    if (not components or len(set(components)) != len(components)
+            or not set(components).issubset(allowed_components)
+            or ("full" in components and len(components) != 1)):
+        raise ValueError("invalid staged update component plan")
+    if ("full" not in versions or not _valid_update_sha(versions["full"])
+            or not all(_valid_update_sha(value) for value in versions.values())):
+        raise ValueError("invalid staged update versions")
 
     app_dir = app_dir.resolve()
     stage_path = stage_path.resolve()
     suffix = str(os.getpid())
     script_path = app_dir / f".update_apply.{suffix}.ps1"
+    plan_path = app_dir / f".update_args.{suffix}.json"
     marker_path = app_dir / ".update_in_progress.json"
     marker_temp_path = app_dir / f".update_in_progress.json.{suffix}.tmp"
 
@@ -484,11 +547,19 @@ def _schedule_full_update(stage_path: Path, app_dir: Path, version: str) -> bool
         if marker_fd is not None:
             with os.fdopen(marker_fd, "w", encoding="utf-8") as marker_file:
                 json.dump(marker, marker_file)
+        plan_path.write_text(
+            json.dumps(
+                {"components": components, "versions": versions},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            encoding="ascii",
+        )
         script_path.write_text(r'''param(
     [int]$ParentPid,
     [string]$AppDir,
     [string]$StagePath,
-    [string]$Version,
+    [string]$PlanPath,
     [string]$PythonExe,
     [ValidateSet("kiosk", "dev")]
     [string]$Mode,
@@ -498,6 +569,9 @@ $ErrorActionPreference = "Stop"
 $stage = $StagePath
 $logPath = Join-Path $AppDir "photobooth.log"
 $installed = $false
+$applied = @()
+$rollbackFailed = $false
+$backupRoot = Join-Path $AppDir (".update_backup." + $PID)
 
 function Write-UpdateLog([string]$Message, [string]$Level = "INFO") {
     try {
@@ -520,8 +594,68 @@ function Get-PhotoboothProcesses {
     })
 }
 
+function Install-StagedEntry(
+    [string]$Source,
+    [string]$Target,
+    [string]$Backup
+) {
+    if (-not (Test-Path -LiteralPath $Source)) {
+        throw ("Prepared update entry is missing: " + $Source)
+    }
+    $hadExisting = Test-Path -LiteralPath $Target
+    if ($hadExisting) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $Backup) `
+            -Force | Out-Null
+        Move-Item -LiteralPath $Target -Destination $Backup -Force
+    }
+    try {
+        Move-Item -LiteralPath $Source -Destination $Target -Force
+    } catch {
+        if ($hadExisting -and (Test-Path -LiteralPath $Backup)) {
+            Move-Item -LiteralPath $Backup -Destination $Target -Force `
+                -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+    return [PSCustomObject]@{
+        Target = $Target
+        Backup = $Backup
+        HadExisting = $hadExisting
+    }
+}
+
+function Rollback-StagedEntries {
+    for ($index = $applied.Count - 1; $index -ge 0; $index--) {
+        $entry = $applied[$index]
+        try {
+            Remove-Item -LiteralPath $entry.Target -Recurse -Force `
+                -ErrorAction SilentlyContinue
+            if ($entry.HadExisting -and (Test-Path -LiteralPath $entry.Backup)) {
+                Move-Item -LiteralPath $entry.Backup -Destination $entry.Target `
+                    -Force -ErrorAction Stop
+            }
+        } catch {
+            $script:rollbackFailed = $true
+            Write-UpdateLog (
+                "Rollback failed for " + $entry.Target + ": " +
+                $_.Exception.Message
+            ) "ERROR"
+        }
+    }
+}
+
 try {
-    Write-UpdateLog ("Full installer started for " + $Version.Substring(0, 16))
+    $plan = Get-Content -Raw -Encoding ASCII -LiteralPath $PlanPath | `
+        ConvertFrom-Json
+    $components = @($plan.components)
+    $targetFull = [string]$plan.versions.full
+    if ($targetFull.Length -ne 64) {
+        throw "Prepared update plan has an invalid full hash"
+    }
+    Write-UpdateLog (
+        "Installer started for " + $targetFull.Substring(0, 16) +
+        "; components=" + ($components -join ",")
+    )
     Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue
     Write-UpdateLog "Parent application stopped"
 
@@ -538,42 +672,72 @@ try {
             (($otherProcesses | ForEach-Object { $_.ProcessId }) -join ", "))
     }
 
-    if (-not (Test-Path -LiteralPath (Join-Path $stage "app.py") -PathType Leaf)) {
-        throw "Prepared update stage does not contain app.py"
+    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    if ($components -contains "full") {
+        if (-not (Test-Path -LiteralPath (Join-Path $stage "app.py") -PathType Leaf)) {
+            throw "Prepared full stage does not contain app.py"
+        }
+        $entries = @(Get-ChildItem -LiteralPath $stage -Force)
+        foreach ($source in $entries) {
+            $applied += Install-StagedEntry `
+                -Source $source.FullName `
+                -Target (Join-Path $AppDir $source.Name) `
+                -Backup (Join-Path $backupRoot $source.Name)
+        }
+    } else {
+        $folderMap = @{
+            python = "python"
+            bin = "bin"
+            templates = "templates"
+            edsdk = "EDSDK_Win"
+            drivers = "drivers"
+        }
+        foreach ($component in $components) {
+            if ($component -eq "app") {
+                continue
+            }
+            $folder = [string]$folderMap[$component]
+            if ([string]::IsNullOrWhiteSpace($folder)) {
+                throw ("Unknown folder component: " + $component)
+            }
+            $applied += Install-StagedEntry `
+                -Source (Join-Path $stage $folder) `
+                -Target (Join-Path $AppDir $folder) `
+                -Backup (Join-Path $backupRoot $folder)
+        }
+        if ($components -contains "app") {
+            if (-not (Test-Path -LiteralPath (Join-Path $stage "app.py") -PathType Leaf)) {
+                throw "Prepared app stage does not contain app.py"
+            }
+            $entries = @(Get-ChildItem -LiteralPath $stage -Force)
+            foreach ($source in $entries) {
+                $applied += Install-StagedEntry `
+                -Source $source.FullName `
+                -Target (Join-Path $AppDir $source.Name) `
+                -Backup (Join-Path (Join-Path $backupRoot "app") $source.Name)
+            }
+        }
     }
-    Write-UpdateLog "Prepared full release found"
-    $preserve = @(
-        ".git", ".env", ".ENV", "photos", "photos_print_jobs", "yadisk_queue.json",
-        "cafe_unlock_state.json", "cafe_unlock_state.json.tmp",
-        "photobooth.log", ".update_hash"
-    )
-    foreach ($name in $preserve) {
-        Remove-Item -LiteralPath (Join-Path $stage $name) -Recurse -Force `
-            -ErrorAction SilentlyContinue
-    }
-    Get-ChildItem -LiteralPath $stage -Filter "photobooth.log*" -Force `
-        -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    Get-ChildItem -LiteralPath $stage -Force -ErrorAction SilentlyContinue | `
-        Where-Object { $_.Name -like ".update*" } | `
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-
-    Write-UpdateLog "Copying release files"
-    & robocopy.exe $stage $AppDir /E /COPY:DAT /DCOPY:DAT /R:20 /W:1 `
-        /NFL /NDL /NJH /NJS /NP | Out-Null
-    $copyExitCode = $LASTEXITCODE
-    if ($copyExitCode -ge 8) {
-        throw ("robocopy failed with exit code " + $copyExitCode)
-    }
-    Write-UpdateLog ("Release files copied, robocopy exit code " + $copyExitCode)
 
     $hashPath = Join-Path $AppDir ".update_hash"
     $hashTempPath = Join-Path $AppDir ".update_hash.tmp"
-    Set-Content -LiteralPath $hashTempPath -Value $Version -NoNewline -Encoding ascii
+    $stateJson = $plan.versions | ConvertTo-Json -Compress
+    Set-Content -LiteralPath $hashTempPath -Value $stateJson `
+        -NoNewline -Encoding ascii
     Move-Item -LiteralPath $hashTempPath -Destination $hashPath -Force
     $installed = $true
-    Write-UpdateLog ("Full update installed " + $Version.Substring(0, 16))
+    Remove-Item -LiteralPath $backupRoot -Recurse -Force `
+        -ErrorAction SilentlyContinue
+    Write-UpdateLog ("Update installed " + $targetFull.Substring(0, 16))
 } catch {
-    Write-UpdateLog ("Full update failed: " + $_.Exception.Message) "ERROR"
+    Write-UpdateLog ("Update failed: " + $_.Exception.Message) "ERROR"
+    Rollback-StagedEntries
+    if ($rollbackFailed) {
+        Write-UpdateLog ("Rollback backup preserved at " + $backupRoot) "ERROR"
+    } else {
+        Remove-Item -LiteralPath $backupRoot -Recurse -Force `
+            -ErrorAction SilentlyContinue
+    }
 } finally {
     Remove-Item -LiteralPath (Join-Path $AppDir ".update_hash.tmp") `
         -Force -ErrorAction SilentlyContinue
@@ -588,6 +752,7 @@ if ($Mode -eq "dev") {
 # The next process is an ordinary application launch. Remove installer
 # ownership first so it performs the normal status.json version check.
 Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $PlanPath -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
 
@@ -617,7 +782,7 @@ try {
                 "-ParentPid", str(os.getpid()),
                 "-AppDir", str(app_dir),
                 "-StagePath", str(stage_path),
-                "-Version", version,
+                "-PlanPath", str(plan_path),
                 "-PythonExe", sys.executable,
                 "-Mode", "dev" if "--dev" in sys.argv else "kiosk",
                 "-MarkerPath", str(marker_path),
@@ -635,7 +800,7 @@ try {
                 process.terminate()
             except Exception:
                 pass
-        for path in (marker_temp_path, marker_path, script_path):
+        for path in (marker_temp_path, marker_path, plan_path, script_path):
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -643,7 +808,15 @@ try {
         raise
 
 
-def _full_update(status: dict) -> dict:
+def _valid_update_sha(value) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _release_artifacts(status: dict) -> dict[str, dict]:
     if not isinstance(status, dict) or status.get("schema_version") != 1:
         raise ValueError("invalid update status")
     if status.get("active") != "full":
@@ -651,10 +824,90 @@ def _full_update(status: dict) -> dict:
     artifacts = status.get("artifacts")
     if not isinstance(artifacts, dict):
         raise ValueError("invalid update status")
-    artifact = artifacts.get("full")
-    if not isinstance(artifact, dict):
+    full = artifacts.get("full")
+    if not isinstance(full, dict):
         raise ValueError("full update artifact is missing")
-    return artifact
+
+    present_components = [
+        name for name in _UPDATE_COMPONENTS if name in artifacts
+    ]
+    if present_components and len(present_components) != len(_UPDATE_COMPONENTS):
+        raise ValueError("update status contains an incomplete component set")
+
+    selected = {"full": full}
+    for name in present_components:
+        artifact = artifacts.get(name)
+        if not isinstance(artifact, dict):
+            raise ValueError(f"{name} update artifact is invalid")
+        selected[name] = artifact
+    for name, artifact in selected.items():
+        path = artifact.get("path")
+        size = artifact.get("size")
+        sha256 = artifact.get("sha256")
+        if (not isinstance(path, str) or not path.startswith("/")
+                or ".." in path.split("/") or not path.endswith(".zip")):
+            raise ValueError(f"{name} update path is invalid")
+        if not isinstance(size, int) or size < 1:
+            raise ValueError(f"{name} update size is invalid")
+        if not _valid_update_sha(sha256):
+            raise ValueError(f"{name} update SHA-256 is invalid")
+    return selected
+
+
+def _full_update(status: dict) -> dict:
+    return _release_artifacts(status)["full"]
+
+
+def _read_update_versions(path: Path) -> dict[str, str] | str | None:
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    if _valid_update_sha(raw):
+        return raw
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    expected = {"full", *_UPDATE_COMPONENTS}
+    if (not isinstance(payload, dict)
+            or set(payload) not in ({"full"}, expected)
+            or not all(_valid_update_sha(value) for value in payload.values())):
+        return None
+    return payload
+
+
+def _write_update_versions(path: Path, versions: dict[str, str]) -> None:
+    temp_path = path.with_name(f"{path.name}.tmp")
+    temp_path.write_text(
+        json.dumps(versions, sort_keys=True, separators=(",", ":")),
+        encoding="ascii",
+    )
+    os.replace(temp_path, path)
+
+
+def _target_update_versions(artifacts: dict[str, dict]) -> dict[str, str]:
+    return {name: artifact["sha256"] for name, artifact in artifacts.items()}
+
+
+def _select_update_archives(
+    artifacts: dict[str, dict],
+    installed: dict[str, str] | str | None,
+) -> tuple[list[str], dict[str, str]]:
+    target = _target_update_versions(artifacts)
+    if set(_UPDATE_COMPONENTS).issubset(artifacts):
+        if isinstance(installed, dict):
+            changed = [
+                name for name in _UPDATE_COMPONENTS
+                if installed.get(name) != target[name]
+            ]
+            return changed, target
+        if isinstance(installed, str) and installed == target["full"]:
+            return [], target
+        return ["full"], target
+
+    current_full = installed.get("full") if isinstance(installed, dict) else installed
+    return ([] if current_full == target["full"] else ["full"]), target
 
 
 def _format_download_progress(
@@ -677,13 +930,99 @@ def _format_download_progress(
     return text
 
 
-def _update_from_disk() -> str | None:
-    """Download and install the latest VPS-published Disk artifact."""
-    import json
-    from backend.yadisk_updates import download_artifact, read_status
+def _download_update_archive(name: str, artifact: dict, destination: Path) -> int:
+    from backend.yadisk_updates import download_artifact
 
-    config_path = Path(__file__).resolve().parent / "config_app.json"
-    config = json.loads(config_path.read_text(encoding="utf-8"))
+    downloaded_by_attempt: dict[int, int] = {}
+    last_ui_time = 0.0
+    last_log_percent = -10
+
+    def report_progress(downloaded, total, speed, attempt, attempts):
+        nonlocal last_ui_time, last_log_percent
+        downloaded_by_attempt[attempt] = downloaded
+        now = time.monotonic()
+        if (downloaded <= 0 or downloaded >= total
+                or now - last_ui_time >= 0.25):
+            _ui_progress(
+                f"{name}: "
+                f"{_format_download_progress(downloaded, total, speed, attempt, attempts)}"
+            )
+            last_ui_time = now
+        percent = min(100, int(downloaded * 100 / max(total, 1)))
+        if downloaded and (downloaded >= total or percent >= last_log_percent + 10):
+            log.info(
+                "Disk update: %s %d%%, %.1f/%.1f MiB, %.1f MiB/s",
+                name, percent, downloaded / 1048576, total / 1048576,
+                speed / 1048576,
+            )
+            last_log_percent = percent
+
+    def report_retry(attempt, attempts, delay, exc):
+        downloaded = downloaded_by_attempt.get(attempt, 0)
+        log.warning(
+            "Disk update: %s attempt %d/%d failed after %.1f MiB: %s; "
+            "retrying in %.0fs",
+            name, attempt, attempts, downloaded / 1048576, exc, delay,
+        )
+        _ui_progress(
+            f"{name}: сбой после {downloaded / 1048576:.1f} МБ · "
+            f"повтор {attempt + 1}/{attempts} через {delay:.0f} с"
+        )
+
+    started = time.monotonic()
+    size, _ = download_artifact(
+        artifact,
+        destination,
+        progress=report_progress,
+        on_retry=report_retry,
+        verify_sha256=name == "full",
+    )
+    elapsed = max(time.monotonic() - started, 0.001)
+    log.info(
+        "Disk update: %s downloaded, %.1f MiB in %.1fs (%.1f MiB/s)",
+        name, size / 1048576, elapsed, size / 1048576 / elapsed,
+    )
+    return size
+
+
+def _apply_stage_in_process(
+    stage_path: Path,
+    app_dir: Path,
+    components: list[str],
+) -> None:
+    import shutil
+
+    if "full" not in components:
+        for component in components:
+            if component == "app":
+                continue
+            folder = _COMPONENT_ROOTS[component]
+            source = stage_path / folder
+            target = app_dir / folder
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+            shutil.move(str(source), str(target))
+        if "app" not in components:
+            return
+    for source in list(stage_path.iterdir()):
+        target = app_dir / source.name
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+        shutil.move(str(source), str(target))
+
+
+def _update_from_disk() -> str | None:
+    """Download and install changed release folders, or full for a clean install."""
+    from backend.yadisk_updates import read_status
+
+    app_dir = Path(__file__).resolve().parent
+    config = json.loads(
+        (app_dir / "config_app.json").read_text(encoding="utf-8")
+    )
     folder = config.get("yadisk_updates_folder", "photobooth_system/updates")
     log.info("Disk update: checking %s/status.json", folder.rstrip("/"))
     status = read_status(folder)
@@ -692,156 +1031,84 @@ def _update_from_disk() -> str | None:
         _ui_log("На Диске нет обновлений")
         return None
 
-    artifact = _full_update(status)
-    version = artifact.get("sha256")
-    if not isinstance(version, str) or len(version) != 64:
-        raise ValueError("invalid update sha256")
-    local_hash = Path(_HASH_FILE).read_text(encoding="utf-8").strip() \
-        if os.path.exists(_HASH_FILE) else ""
-    if version == local_hash:
-        log.info(f"Disk update: already current ({version[:16]}, full)")
+    artifacts = _release_artifacts(status)
+    hash_path = Path(_HASH_FILE)
+    installed = _read_update_versions(hash_path)
+    selected, target_versions = _select_update_archives(artifacts, installed)
+    if not selected:
+        if installed != target_versions and len(target_versions) > 1:
+            _write_update_versions(hash_path, target_versions)
+            log.info("Disk update: migrated local hash to component mapping")
+        version = target_versions["full"]
+        log.info("Disk update: already current (%s)", version[:16])
         _ui_log(f"Версия актуальна ({version[:16]})")
         return None
 
-    _ui(f"setStatus('Обновление')")
-    _ui_log(f"Новая полная версия на Диске: {version[:16]}")
-    app_dir = Path(__file__).resolve().parent
-    temp_path = app_dir / f".update_download.{os.getpid()}.zip"
-    stage_path = app_dir / f".update_stage.{os.getpid()}"
+    _ui("setStatus('Обновление')")
+    _ui_log("Нужно скачать: " + ", ".join(selected))
+    pid = os.getpid()
+    stage_path = app_dir / f".update_stage.{pid}"
+    temp_paths: list[Path] = []
+    archive_items: list[tuple[str, Path]] = []
     external_owns_stage = False
     try:
-        _ui_log("Скачивание с Яндекс Диска...")
-        expected_size = int(artifact.get("size") or 0)
-        log.info("Disk update: downloading full %s (%.1f MiB)",
-                 version[:16], expected_size / 1048576)
-        download_started = time.monotonic()
-        last_log_time = 0.0
-        last_log_percent = -10
-        last_attempt = 0
-        last_ui_time = 0.0
-        last_ui_attempt = 0
-        downloaded_by_attempt = {}
-
-        def report_progress(downloaded, total, speed, attempt, attempts):
-            nonlocal last_log_time, last_log_percent, last_attempt
-            nonlocal last_ui_time, last_ui_attempt
-            downloaded_by_attempt[attempt] = downloaded
-            now = time.monotonic()
-            should_update_ui = (
-                attempt != last_ui_attempt
-                or downloaded <= 0
-                or downloaded >= total
-                or now - last_ui_time >= 0.25
-            )
-            if should_update_ui:
-                _ui_progress(_format_download_progress(
-                    downloaded, total, speed, attempt, attempts))
-                last_ui_time = now
-                last_ui_attempt = attempt
-            if attempt != last_attempt:
-                last_attempt = attempt
-                last_log_time = 0.0
-                last_log_percent = -10
-                log.info(
-                    "Disk update: download attempt %d/%d, expected %.1f MiB",
-                    attempt, attempts, total / 1048576,
-                )
-            if downloaded <= 0:
-                return
-            percent = min(100, int(downloaded * 100 / max(total, 1)))
-            if (downloaded >= total
-                    or percent >= last_log_percent + 10
-                    or now - last_log_time >= 5):
-                log.info(
-                    "Disk update: download %d%%, %.1f/%.1f MiB, %.1f MiB/s "
-                    "(attempt %d/%d)",
-                    percent,
-                    downloaded / 1048576,
-                    total / 1048576,
-                    speed / 1048576,
-                    attempt,
-                    attempts,
-                )
-                last_log_time = now
-                last_log_percent = percent
-
-        def report_retry(attempt, attempts, delay, exc):
-            downloaded = downloaded_by_attempt.get(attempt, 0)
-            log.warning(
-                "Disk update: download attempt %d/%d failed after %.1f MiB: "
-                "%s: %s; "
-                "retrying in %.0fs",
-                attempt,
-                attempts,
-                downloaded / 1048576,
-                type(exc).__name__,
-                exc,
-                delay,
-            )
-            failure = "Сбой скачивания"
-            if downloaded:
-                failure += f" после {downloaded / 1048576:.1f} МБ"
-            _ui_progress(
-                f"{failure} · повтор {attempt + 1}/{attempts} через {delay:.0f} с")
-
-        size, _ = download_artifact(
-            artifact,
-            temp_path,
-            progress=report_progress,
-            on_retry=report_retry,
-        )
-        elapsed = max(time.monotonic() - download_started, 0.001)
-        log.info("Disk update: download complete, %.1f MiB in %.1fs (%.1f MiB/s)",
-                 size / 1048576, elapsed, size / 1048576 / elapsed)
-        _ui_progress(
-            f"Скачано {size / 1048576:.1f} МБ · "
-            f"{size / 1048576 / elapsed:.1f} МБ/с")
-        if sys.platform == "win32":
-            _ui_log("Проверка архива...")
-            log.info("Disk update: validating ZIP CRC and paths")
-            # Validate paths and CRC before handing the archive to PowerShell.
-            import zipfile
-            root = os.path.realpath(app_dir)
-            with zipfile.ZipFile(temp_path) as archive:
-                bad_member = archive.testzip()
-                if bad_member:
-                    raise ValueError(f"ZIP CRC failed: {bad_member}")
-                for info in archive.infolist():
-                    member = info.filename.replace("\\", "/")
-                    target = os.path.realpath(os.path.join(app_dir, member))
-                    if os.path.commonpath((root, target)) != root:
-                        raise ValueError(
-                            f"ZIP path escapes application directory: {info.filename}")
-                log.info("Disk update: ZIP valid, %d entries", len(archive.infolist()))
-            _ui_log("Подготовка файлов обновления...")
-            log.info("Disk update: preparing full release before application exit")
-            prepare_started = time.monotonic()
-            extracted_files = _prepare_update_stage(temp_path, stage_path)
+        for name in selected:
+            destination = app_dir / f".update_download.{pid}.{name}.zip"
+            temp_paths.append(destination)
+            artifact = artifacts[name]
             log.info(
-                "Disk update: full release prepared, %d files in %.1fs",
-                extracted_files, time.monotonic() - prepare_started,
+                "Disk update: downloading %s %s (%.1f MiB)",
+                name, artifact["sha256"][:16], artifact["size"] / 1048576,
             )
-            if _schedule_full_update(stage_path, app_dir, version):
+            _download_update_archive(name, artifact, destination)
+            archive_items.append((name, destination))
+
+        _ui_log("Проверка и подготовка архивов...")
+        prepare_started = time.monotonic()
+        extracted_files = _prepare_update_stage(archive_items, stage_path)
+        log.info(
+            "Disk update: prepared %d files from %s in %.1fs",
+            extracted_files, ",".join(selected),
+            time.monotonic() - prepare_started,
+        )
+
+        if selected == ["full"]:
+            apply_components = (
+                list(_UPDATE_COMPONENTS)
+                if len(artifacts) > 1 else ["full"]
+            )
+        else:
+            apply_components = selected
+
+        if sys.platform == "win32":
+            if _schedule_staged_update(
+                stage_path, app_dir, target_versions, apply_components,
+            ):
                 external_owns_stage = True
-                log.info(f"Disk update: scheduled full {version[:16]}")
+                log.info(
+                    "Disk update: scheduled components %s",
+                    ",".join(apply_components),
+                )
                 _ui_log("Приложение сейчас закроется и откроется автоматически")
             else:
-                log.info("Disk update: yielding to the installer already in progress")
+                log.info("Disk update: another installer is already in progress")
                 _ui_log("Установка уже выполняется другим процессом")
             return "external"
 
-        _ui_log("Распаковка...")
-        _extract_update(str(temp_path), str(app_dir))
-        Path(_HASH_FILE).write_text(version, encoding="utf-8")
-        log.info(f"Disk update: installed full {version[:16]}")
+        _apply_stage_in_process(stage_path, app_dir, apply_components)
+        _write_update_versions(hash_path, target_versions)
+        log.info("Disk update: installed components %s", ",".join(apply_components))
         _ui_log("Обновление установлено!")
         return "restart"
     finally:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except OSError as exc:
-            log.warning("Disk update: could not remove temporary download %s: %s",
-                        temp_path, exc)
+        for temp_path in temp_paths:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError as exc:
+                log.warning(
+                    "Disk update: could not remove download %s: %s",
+                    temp_path, exc,
+                )
         if not external_owns_stage:
             import shutil
             try:
@@ -849,8 +1116,10 @@ def _update_from_disk() -> str | None:
             except FileNotFoundError:
                 pass
             except OSError as exc:
-                log.warning("Disk update: could not remove prepared stage %s: %s",
-                            stage_path, exc)
+                log.warning(
+                    "Disk update: could not remove stage %s: %s",
+                    stage_path, exc,
+                )
 
 
 def auto_update():

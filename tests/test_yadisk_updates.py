@@ -84,6 +84,33 @@ class DiskUpdateDownloadTests(unittest.TestCase):
                     retry_delays=(),
                 )
 
+    def test_component_download_uses_size_without_comparing_folder_sha_to_zip(self):
+        payload = b"valid ZIP bytes would be checked by the extraction stage"
+        artifact = {
+            "path": "/photobooth_system/updates/artifacts/app.zip",
+            "size": len(payload),
+            "sha256": "f" * 64,
+        }
+        api_response = io.BytesIO(
+            json.dumps({"href": "https://download.test/app"}).encode()
+        )
+        file_response = io.BytesIO(payload)
+
+        with TemporaryDirectory() as tmpdir, \
+             patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch("backend.yadisk_updates._request", return_value=api_response), \
+             patch.object(urllib.request, "urlopen", return_value=file_response):
+            destination = Path(tmpdir) / "app.zip"
+            size, archive_sha = yadisk_updates.download_artifact(
+                artifact,
+                destination,
+                retry_delays=(),
+                verify_sha256=False,
+            )
+
+        self.assertEqual(size, len(payload))
+        self.assertEqual(archive_sha, hashlib.sha256(payload).hexdigest())
+
     def test_retries_with_fresh_link_and_discards_partial_file(self):
         class FailingResponse(io.BytesIO):
             def __init__(self, payload):
@@ -225,8 +252,76 @@ class DiskUpdateDownloadTests(unittest.TestCase):
                 destination.write_bytes(payload)
                 return len(payload), digest
 
-            def schedule(stage, _app_dir, _version):
+            def schedule(stage, _app_dir, versions, components):
                 scheduled_stages.append(stage)
+                self.assertEqual((stage / "app.py").read_text(), "updated")
+                self.assertEqual(versions, {"full": digest})
+                self.assertEqual(components, ["full"])
+                return False
+
+            with patch.object(app, "__file__", str(fake_app)), \
+                 patch.object(app, "_HASH_FILE", str(root / ".update_hash")), \
+                 patch.object(app.sys, "platform", "win32"), \
+                 patch.object(app.os, "getpid", return_value=4242), \
+                 patch("backend.yadisk_updates.read_status", return_value=status), \
+                 patch("backend.yadisk_updates.download_artifact", side_effect=download), \
+                 patch.object(app, "_schedule_staged_update", side_effect=schedule):
+                self.assertEqual(app._update_from_disk(), "external")
+
+            expected_download = root.resolve() / ".update_download.4242.full.zip"
+            expected_stage = root.resolve() / ".update_stage.4242"
+            self.assertEqual(destinations, [expected_download])
+            self.assertEqual(scheduled_stages, [expected_stage])
+            self.assertFalse(destinations[0].exists())
+            self.assertFalse(expected_stage.exists())
+
+    def test_windows_downloads_only_changed_app_component(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_app = root / "app.py"
+            fake_app.write_text("old", encoding="utf-8")
+            (root / "config_app.json").write_text("{}", encoding="utf-8")
+            archive_bytes = io.BytesIO()
+            with zipfile.ZipFile(archive_bytes, "w") as zf:
+                zf.writestr("app.py", "updated")
+                zf.writestr("backend/main.py", "updated")
+            payload = archive_bytes.getvalue()
+            versions = {
+                "full": "0" * 64,
+                "app": "1" * 64,
+                "python": "2" * 64,
+                "bin": "3" * 64,
+                "templates": "4" * 64,
+                "edsdk": "5" * 64,
+                "drivers": "6" * 64,
+            }
+            artifacts = {
+                name: {
+                    "path": f"/updates/artifacts/{name}.zip",
+                    "size": len(payload) if name == "app" else 10,
+                    "sha256": version,
+                }
+                for name, version in versions.items()
+            }
+            status = {
+                "schema_version": 1,
+                "active": "full",
+                "artifacts": artifacts,
+            }
+            installed = versions.copy()
+            installed["full"] = "a" * 64
+            installed["app"] = "b" * 64
+            app._write_update_versions(root / ".update_hash", installed)
+            downloads = []
+            schedules = []
+
+            def download(artifact, destination, **kwargs):
+                downloads.append((artifact, destination, kwargs))
+                destination.write_bytes(payload)
+                return len(payload), hashlib.sha256(payload).hexdigest()
+
+            def schedule(stage, _app_dir, target, components):
+                schedules.append((target, components))
                 self.assertEqual((stage / "app.py").read_text(), "updated")
                 return False
 
@@ -236,15 +331,14 @@ class DiskUpdateDownloadTests(unittest.TestCase):
                  patch.object(app.os, "getpid", return_value=4242), \
                  patch("backend.yadisk_updates.read_status", return_value=status), \
                  patch("backend.yadisk_updates.download_artifact", side_effect=download), \
-                 patch.object(app, "_schedule_full_update", side_effect=schedule):
+                 patch.object(app, "_schedule_staged_update", side_effect=schedule):
                 self.assertEqual(app._update_from_disk(), "external")
 
-            expected_download = root.resolve() / ".update_download.4242.zip"
-            expected_stage = root.resolve() / ".update_stage.4242"
-            self.assertEqual(destinations, [expected_download])
-            self.assertEqual(scheduled_stages, [expected_stage])
-            self.assertFalse(destinations[0].exists())
-            self.assertFalse(expected_stage.exists())
+            self.assertEqual(len(downloads), 1)
+            self.assertIs(downloads[0][0], artifacts["app"])
+            self.assertTrue(downloads[0][1].name.endswith(".app.zip"))
+            self.assertFalse(downloads[0][2]["verify_sha256"])
+            self.assertEqual(schedules, [(versions, ["app"])])
 
 
 class UpdateExtractionTests(unittest.TestCase):
@@ -333,8 +427,130 @@ class UpdateExtractionTests(unittest.TestCase):
             self.assertFalse(stage.exists())
             self.assertFalse((root / "outside.txt").exists())
 
+    def test_prepares_multiple_folder_archives_in_one_stage(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            app_archive = root / "app.zip"
+            python_archive = root / "python.zip"
+            stage = root / ".update_stage.4242"
+            with zipfile.ZipFile(app_archive, "w") as zf:
+                zf.writestr("app.py", "updated")
+                zf.writestr("backend/main.py", "updated backend")
+            with zipfile.ZipFile(python_archive, "w") as zf:
+                zf.writestr("python/python.exe", b"runtime")
 
-class FullUpdateSchedulingTests(unittest.TestCase):
+            extracted = app._prepare_update_stage(
+                [("app", app_archive), ("python", python_archive)],
+                stage,
+            )
+
+            self.assertEqual(extracted, 3)
+            self.assertEqual((stage / "app.py").read_text(), "updated")
+            self.assertEqual(
+                (stage / "python" / "python.exe").read_bytes(), b"runtime",
+            )
+
+    def test_rejects_component_archive_outside_its_folder(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            archive = root / "python.zip"
+            stage = root / ".update_stage.4242"
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("app.py", "not python")
+
+            with self.assertRaisesRegex(ValueError, "outside python"):
+                app._prepare_update_stage([("python", archive)], stage)
+
+            self.assertFalse(stage.exists())
+
+
+class UpdateVersionStateTests(unittest.TestCase):
+    @staticmethod
+    def _artifacts(**versions):
+        return {
+            name: {
+                "path": f"/updates/artifacts/{name}.zip",
+                "size": 10,
+                "sha256": version,
+            }
+            for name, version in versions.items()
+        }
+
+    def test_hash_file_round_trips_component_json(self):
+        versions = {
+            "full": "0" * 64,
+            "app": "1" * 64,
+            "python": "2" * 64,
+            "bin": "3" * 64,
+            "templates": "4" * 64,
+            "edsdk": "5" * 64,
+            "drivers": "6" * 64,
+        }
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / ".update_hash"
+            app._write_update_versions(path, versions)
+
+            self.assertEqual(app._read_update_versions(path), versions)
+            self.assertEqual(json.loads(path.read_text(encoding="ascii")), versions)
+
+    def test_missing_hash_selects_full(self):
+        versions = {
+            "full": "0" * 64,
+            "app": "1" * 64,
+            "python": "2" * 64,
+            "bin": "3" * 64,
+            "templates": "4" * 64,
+            "edsdk": "5" * 64,
+            "drivers": "6" * 64,
+        }
+        selected, target = app._select_update_archives(
+            self._artifacts(**versions), None,
+        )
+
+        self.assertEqual(selected, ["full"])
+        self.assertEqual(target, versions)
+
+    def test_selects_only_changed_folder(self):
+        target = {
+            "full": "0" * 64,
+            "app": "1" * 64,
+            "python": "2" * 64,
+            "bin": "3" * 64,
+            "templates": "4" * 64,
+            "edsdk": "5" * 64,
+            "drivers": "6" * 64,
+        }
+        installed = target.copy()
+        installed["full"] = "a" * 64
+        installed["app"] = "b" * 64
+
+        selected, versions = app._select_update_archives(
+            self._artifacts(**target), installed,
+        )
+
+        self.assertEqual(selected, ["app"])
+        self.assertEqual(versions, target)
+
+    def test_old_full_hash_migrates_without_download(self):
+        target = {
+            "full": "0" * 64,
+            "app": "1" * 64,
+            "python": "2" * 64,
+            "bin": "3" * 64,
+            "templates": "4" * 64,
+            "edsdk": "5" * 64,
+            "drivers": "6" * 64,
+        }
+
+        selected, versions = app._select_update_archives(
+            self._artifacts(**target), target["full"],
+        )
+
+        self.assertEqual(selected, [])
+        self.assertEqual(versions, target)
+
+
+class StagedUpdateSchedulingTests(unittest.TestCase):
     def test_creates_one_shot_windows_apply_script(self):
         with TemporaryDirectory() as tmpdir, \
              patch("subprocess.Popen") as popen, \
@@ -349,20 +565,20 @@ class FullUpdateSchedulingTests(unittest.TestCase):
             self.assertTrue(app._claim_update_marker(
                 root / ".update_in_progress.json"))
 
-            scheduled = app._schedule_full_update(stage, root, "a" * 64)
+            scheduled = app._schedule_staged_update(
+                stage, root, {"full": "a" * 64}, ["full"],
+            )
 
             self.assertTrue(scheduled)
             script = (root / ".update_apply.4242.ps1").read_text(encoding="utf-8")
             self.assertIn("Wait-Process -Id $ParentPid", script)
             self.assertNotIn("Expand-Archive", script)
-            self.assertIn('Write-UpdateLog "Prepared full release found"', script)
-            self.assertNotIn('"config_app.json"', script)
-            self.assertIn('".git"', script)
-            self.assertIn('"cafe_unlock_state.json"', script)
             self.assertIn("Get-PhotoboothProcesses", script)
-            self.assertIn("robocopy.exe", script)
-            self.assertIn("if ($copyExitCode -ge 8)", script)
+            self.assertIn("Install-StagedEntry", script)
+            self.assertIn("Rollback-StagedEntries", script)
+            self.assertNotIn("robocopy.exe", script)
             self.assertIn('Move-Item -LiteralPath $hashTempPath', script)
+            self.assertIn("ConvertTo-Json -Compress", script)
             self.assertIn('$relaunchArgumentLine += " --dev"', script)
             self.assertIn('if ($installed)', script)
             self.assertNotIn("--post-installer", script)
@@ -386,9 +602,13 @@ class FullUpdateSchedulingTests(unittest.TestCase):
             self.assertIn("-ParentPid", args)
             self.assertIn("-StagePath", args)
             self.assertEqual(args[args.index("-StagePath") + 1], str(stage.resolve()))
+            self.assertIn("-PlanPath", args)
+            plan_path = Path(args[args.index("-PlanPath") + 1])
+            plan = json.loads(plan_path.read_text(encoding="ascii"))
+            self.assertEqual(plan["components"], ["full"])
+            self.assertEqual(plan["versions"], {"full": "a" * 64})
             self.assertEqual(args[args.index("-Mode") + 1], "dev")
             self.assertIn("-MarkerPath", args)
-            self.assertNotIn("-ArgsPath", args)
 
     def test_existing_marker_prevents_a_second_installer(self):
         with TemporaryDirectory() as tmpdir, \
@@ -399,7 +619,9 @@ class FullUpdateSchedulingTests(unittest.TestCase):
             stage.mkdir()
             (root / ".update_in_progress.json").write_text("{}", encoding="utf-8")
 
-            self.assertFalse(app._schedule_full_update(stage, root, "a" * 64))
+            self.assertFalse(app._schedule_staged_update(
+                stage, root, {"full": "a" * 64}, ["full"],
+            ))
             popen.assert_not_called()
             self.assertFalse((root / ".update_apply.4242.ps1").exists())
 
@@ -413,10 +635,13 @@ class FullUpdateSchedulingTests(unittest.TestCase):
             stage.mkdir()
 
             with self.assertRaisesRegex(OSError, "no PowerShell"):
-                app._schedule_full_update(stage, root, "a" * 64)
+                app._schedule_staged_update(
+                    stage, root, {"full": "a" * 64}, ["full"],
+                )
 
             self.assertFalse((root / ".update_in_progress.json").exists())
             self.assertFalse((root / ".update_apply.4242.ps1").exists())
+            self.assertFalse((root / ".update_args.4242.json").exists())
 
 
 class UpdateMarkerTests(unittest.TestCase):

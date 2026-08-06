@@ -21,6 +21,25 @@ IMPORT_ATTEMPTS = 5
 IMPORT_BACKOFF_SECONDS = (2, 4, 8, 16)
 OPERATION_ATTEMPTS = 300
 VERIFY_ATTEMPTS = 12
+HASH_CHUNK_SIZE = 1024 * 1024
+
+ARTIFACT_FILES = {
+    "full": "photobooth-win.zip",
+    "app": "photobooth-app.zip",
+    "python": "photobooth-python.zip",
+    "bin": "photobooth-bin.zip",
+    "templates": "photobooth-templates.zip",
+    "edsdk": "photobooth-edsdk.zip",
+    "drivers": "photobooth-drivers.zip",
+}
+
+COMPONENT_ROOTS = {
+    "python": "python/",
+    "bin": "bin/",
+    "templates": "templates/",
+    "edsdk": "EDSDK_Win/",
+    "drivers": "drivers/",
+}
 
 
 def log(message: str) -> None:
@@ -34,22 +53,64 @@ def normalize_folder(value: str) -> str:
     return f"/{name}"
 
 
-def validate_release(path: Path) -> bytes:
-    payload = path.read_bytes()
-    if not payload:
-        raise ValueError("release ZIP is empty")
+def _valid_sha256(value) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def validate_artifact(name: str, path: Path, metadata: dict) -> dict:
+    size = path.stat().st_size
+    if size < 1:
+        raise ValueError(f"{name} ZIP is empty")
+    if metadata.get("file") != path.name or metadata.get("size") != size:
+        raise ValueError(f"{name} ZIP does not match release metadata")
+    content_sha = metadata.get("sha256")
+    if not _valid_sha256(content_sha):
+        raise ValueError(f"{name} content SHA-256 is invalid")
+
+    md5 = hashlib.md5()
+    archive_sha = hashlib.sha256() if name == "full" else None
+    with path.open("rb") as source:
+        while chunk := source.read(HASH_CHUNK_SIZE):
+            md5.update(chunk)
+            if archive_sha is not None:
+                archive_sha.update(chunk)
+
     with zipfile.ZipFile(path) as archive:
         failed = archive.testzip()
         if failed:
-            raise ValueError(f"release ZIP CRC failed: {failed}")
-        names = {name.replace("\\", "/") for name in archive.namelist()}
-    if "app.py" not in names:
-        raise ValueError("release ZIP does not contain app.py at its root")
+            raise ValueError(f"{name} ZIP CRC failed: {failed}")
+        names = {
+            entry.replace("\\", "/")
+            for entry in archive.namelist()
+            if not entry.endswith(("/", "\\"))
+        }
+    if name in {"full", "app"}:
+        if "app.py" not in names:
+            raise ValueError(f"{name} ZIP does not contain app.py at its root")
+    else:
+        prefix = COMPONENT_ROOTS[name]
+        invalid = sorted(entry for entry in names if not entry.startswith(prefix))
+        if invalid:
+            raise ValueError(f"{name} ZIP contains path outside {prefix}: {invalid[0]}")
+
+    # Legacy clients validate full against its archive hash. Component hashes
+    # deliberately identify sorted folder contents and ignore ZIP timestamps.
+    status_sha = archive_sha.hexdigest() if archive_sha is not None else content_sha
     log(
-        f"Release validated: {path.name}, {len(payload) / 1048576:.1f} MiB, "
+        f"Artifact validated: {path.name}, {size / 1048576:.1f} MiB, "
         f"{len(names)} entries"
     )
-    return payload
+    return {
+        "name": name,
+        "path": path,
+        "size": size,
+        "md5": md5.hexdigest(),
+        "sha256": status_sha,
+    }
 
 
 async def response_error(response: aiohttp.ClientResponse) -> str:
@@ -118,6 +179,55 @@ async def resource_matches(
                 )
         await asyncio.sleep(min(attempt, 5))
     return False
+
+
+async def resource_size_matches(
+    session: aiohttp.ClientSession,
+    path: str,
+    expected_size: int,
+) -> bool:
+    async with session.get(
+        f"{API}/resources",
+        params={"path": path, "fields": "size"},
+    ) as response:
+        if response.status == 404:
+            return False
+        if response.status != 200:
+            raise RuntimeError(
+                f"cannot inspect {path}: {await response_error(response)}"
+            )
+        metadata = await response.json()
+    return metadata.get("size") == expected_size
+
+
+async def read_json_resource(
+    api_session: aiohttp.ClientSession,
+    transfer_session: aiohttp.ClientSession,
+    path: str,
+) -> dict | None:
+    async with api_session.get(
+        f"{API}/resources/download",
+        params={"path": path},
+    ) as response:
+        if response.status == 404:
+            return None
+        if response.status != 200:
+            raise RuntimeError(
+                f"cannot request download URL for {path}: "
+                f"{await response_error(response)}"
+            )
+        href = (await response.json()).get("href")
+    if not href:
+        raise RuntimeError(f"download URL is missing for {path}")
+    async with transfer_session.get(href) as response:
+        if response.status != 200:
+            raise RuntimeError(
+                f"cannot download {path}: {await response_error(response)}"
+            )
+        payload = json.loads(await response.read())
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} root must be an object")
+    return payload
 
 
 async def delete_staging(session: aiohttp.ClientSession, path: str) -> None:
@@ -263,7 +373,12 @@ async def upload_bytes(
         raise RuntimeError(f"uploaded resource did not verify: {destination}")
 
 
-def write_action_outputs(sha256: str, size: int, method: str) -> None:
+def write_action_outputs(
+    sha256: str,
+    size: int,
+    method: str,
+    changed: list[str],
+) -> None:
     output_path = os.environ.get("GITHUB_OUTPUT")
     if not output_path:
         return
@@ -271,75 +386,141 @@ def write_action_outputs(sha256: str, size: int, method: str) -> None:
         output.write(f"sha256={sha256}\n")
         output.write(f"size_mib={size / 1048576:.1f}\n")
         output.write(f"method={method}\n")
+        output.write(f"changed={','.join(changed) or 'none'}\n")
+
+
+def load_artifacts(dist_dir: Path, metadata_path: Path) -> dict[str, dict]:
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict) or set(metadata) != set(ARTIFACT_FILES):
+        raise ValueError("release metadata does not list the expected artifacts")
+    artifacts = {}
+    for name, filename in ARTIFACT_FILES.items():
+        entry = metadata.get(name)
+        if not isinstance(entry, dict):
+            raise ValueError(f"release metadata for {name} is invalid")
+        artifacts[name] = validate_artifact(
+            name,
+            (dist_dir / filename).resolve(),
+            entry,
+        )
+    return artifacts
+
+
+def reusable_record(previous_status: dict | None, artifact: dict) -> dict | None:
+    if not isinstance(previous_status, dict):
+        return None
+    previous_artifacts = previous_status.get("artifacts")
+    if not isinstance(previous_artifacts, dict):
+        return None
+    record = previous_artifacts.get(artifact["name"])
+    if not isinstance(record, dict):
+        return None
+    if record.get("sha256") != artifact["sha256"]:
+        return None
+    path = record.get("path")
+    size = record.get("size")
+    if (not isinstance(path, str) or not path.startswith("/")
+            or not path.endswith(".zip") or not isinstance(size, int) or size < 1):
+        return None
+    return record.copy()
 
 
 async def publish(args) -> None:
     token = os.environ.get("YADISK_TOKEN", "").strip()
     if not token:
         raise RuntimeError("YADISK_TOKEN is not configured")
-    source_path = Path(args.file).resolve()
-    payload = validate_release(source_path)
-    size = len(payload)
-    md5 = hashlib.md5(payload).hexdigest()
-    sha256 = hashlib.sha256(payload).hexdigest()
+    dist_dir = Path(args.dist_dir).resolve()
+    metadata_path = Path(args.metadata).resolve()
+    artifacts = load_artifacts(dist_dir, metadata_path)
     root = normalize_folder(args.folder)
-    artifact_path = f"{root}/artifacts/full.zip"
     status_path = f"{root}/status.json"
     updated_at = datetime.now(timezone.utc).isoformat()
-    status = {
-        "schema_version": 1,
-        "active": "full",
-        "artifacts": {
-            "full": {
-                "path": artifact_path,
-                "size": size,
-                "sha256": sha256,
-                "updated_at": updated_at,
-            },
-        },
-    }
-    status_payload = json.dumps(
-        status, ensure_ascii=False, separators=(",", ":"),
-    ).encode("utf-8")
 
     headers = {"Authorization": f"OAuth {token}"}
     api_timeout = aiohttp.ClientTimeout(total=90, connect=20)
     transfer_timeout = aiohttp.ClientTimeout(total=30 * 60, connect=30)
-    method = "server-side-import"
+    methods: set[str] = set()
+    changed: list[str] = []
+    status_artifacts: dict[str, dict] = {}
     async with aiohttp.ClientSession(
         headers=headers, timeout=api_timeout,
     ) as api_session, aiohttp.ClientSession(
         timeout=transfer_timeout,
     ) as transfer_session:
         await ensure_directories(api_session, root)
-        for attempt in range(1, IMPORT_ATTEMPTS + 1):
-            log(f"Server-side import attempt {attempt}/{IMPORT_ATTEMPTS}")
-            try:
-                await import_release_url(
-                    api_session,
-                    args.source_url,
-                    artifact_path,
-                    size,
-                    md5,
+        previous_status = await read_json_resource(
+            api_session, transfer_session, status_path,
+        )
+
+        for name in ARTIFACT_FILES:
+            artifact = artifacts[name]
+            previous = reusable_record(previous_status, artifact)
+            if previous and await resource_size_matches(
+                api_session, previous["path"], previous["size"],
+            ):
+                status_artifacts[name] = previous
+                log(f"Artifact unchanged; reusing {name}: {previous['path']}")
+                continue
+
+            changed.append(name)
+            artifact_path = (
+                f"{root}/artifacts/{name}-{artifact['sha256'][:16]}.zip"
+            )
+            source_url = (
+                f"{args.source_base_url.rstrip('/')}/{ARTIFACT_FILES[name]}"
+            )
+            artifact_method = "server-side-import"
+            for attempt in range(1, IMPORT_ATTEMPTS + 1):
+                log(
+                    f"{name}: server-side import attempt "
+                    f"{attempt}/{IMPORT_ATTEMPTS}"
                 )
-                break
-            except Exception as exc:
-                log(f"Server-side import attempt {attempt}/{IMPORT_ATTEMPTS} failed: {exc}")
-                if attempt == IMPORT_ATTEMPTS:
-                    method = "direct-upload"
-                    log("Fast import attempts exhausted; uploading local runner ZIP directly")
-                    await upload_file(
+                try:
+                    await import_release_url(
                         api_session,
-                        transfer_session,
+                        source_url,
                         artifact_path,
-                        source_path,
-                        size,
-                        md5,
+                        artifact["size"],
+                        artifact["md5"],
                     )
                     break
-                delay = IMPORT_BACKOFF_SECONDS[attempt - 1]
-                log(f"Retrying server-side import in {delay}s")
-                await asyncio.sleep(delay)
+                except Exception as exc:
+                    log(
+                        f"{name}: server-side import attempt "
+                        f"{attempt}/{IMPORT_ATTEMPTS} failed: {exc}"
+                    )
+                    if attempt == IMPORT_ATTEMPTS:
+                        artifact_method = "direct-upload"
+                        log(f"{name}: importing failed; uploading runner ZIP")
+                        await upload_file(
+                            api_session,
+                            transfer_session,
+                            artifact_path,
+                            artifact["path"],
+                            artifact["size"],
+                            artifact["md5"],
+                        )
+                        break
+                    delay = IMPORT_BACKOFF_SECONDS[attempt - 1]
+                    log(f"{name}: retrying import in {delay}s")
+                    await asyncio.sleep(delay)
+            methods.add(artifact_method)
+            status_artifacts[name] = {
+                "path": artifact_path,
+                "size": artifact["size"],
+                "sha256": artifact["sha256"],
+                "updated_at": updated_at,
+            }
+
+        status = {
+            "schema_version": 1,
+            "active": "full",
+            "source_commit": args.commit,
+            "artifacts": status_artifacts,
+        }
+        status_payload = json.dumps(
+            status, ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8")
 
         log("Artifact verified; publishing status.json last")
         await upload_bytes(
@@ -349,17 +530,31 @@ async def publish(args) -> None:
             status_payload,
         )
 
-    write_action_outputs(sha256, size, method)
+    if not methods:
+        method = "unchanged"
+    elif methods == {"server-side-import"}:
+        method = "server-side-import"
+    elif methods == {"direct-upload"}:
+        method = "direct-upload"
+    else:
+        method = "mixed"
+    full = status_artifacts["full"]
+    write_action_outputs(
+        full["sha256"], full["size"], method, changed,
+    )
     log(
-        f"Release published successfully: sha256={sha256[:16]}, "
-        f"size={size / 1048576:.1f} MiB, method={method}"
+        f"Release published successfully: full={full['sha256'][:16]}, "
+        f"size={full['size'] / 1048576:.1f} MiB, method={method}, "
+        f"changed={','.join(changed) or 'none'}"
     )
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--file", required=True)
-    parser.add_argument("--source-url", required=True)
+    parser.add_argument("--dist-dir", required=True)
+    parser.add_argument("--metadata", required=True)
+    parser.add_argument("--source-base-url", required=True)
+    parser.add_argument("--commit", required=True)
     parser.add_argument("--folder", default="photobooth_system/updates")
     return parser.parse_args()
 

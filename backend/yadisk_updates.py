@@ -116,6 +116,7 @@ def _download_artifact_once(
     progress: ProgressCallback | None,
     attempt: int,
     attempts: int,
+    verify_sha256: bool,
 ) -> tuple[int, str]:
     path = artifact["path"]
     size = artifact["size"]
@@ -157,7 +158,7 @@ def _download_artifact_once(
                     progress(total, size, total / elapsed, attempt, attempts)
 
     actual_sha = digest.hexdigest()
-    if total != size or actual_sha != expected_sha:
+    if total != size or (verify_sha256 and actual_sha != expected_sha):
         raise ArtifactIntegrityError(
             f"update checksum mismatch: size {total}/{size}, "
             f"sha {actual_sha}/{expected_sha}")
@@ -171,6 +172,7 @@ def download_artifact(
     progress: ProgressCallback | None = None,
     on_retry: RetryCallback | None = None,
     retry_delays: Sequence[float] = DOWNLOAD_RETRY_DELAYS,
+    verify_sha256: bool = True,
 ) -> tuple[int, str]:
     """Download and verify an artifact, retrying transient storage failures.
 
@@ -206,6 +208,7 @@ def download_artifact(
                 progress=progress,
                 attempt=attempt,
                 attempts=attempts,
+                verify_sha256=verify_sha256,
             )
         except Exception as exc:
             destination.unlink(missing_ok=True)

@@ -21,7 +21,7 @@ API = "https://cloud-api.yandex.net/v1/disk"
 # agents can receive heavily throttled uploader URLs for some file types.
 YADISK_API_USER_AGENT = 'Yandex.Disk {"os":"windows"}'
 SCHEMA_VERSION = 3
-POLL_INTERVAL = 10
+POLL_INTERVAL = 5
 PAGE_SIZE = 100
 # Normal snapshots are about 400 KB.  The larger ceiling allows one legacy
 # 1 MB segment to be delivered immediately after upgrading the rotation size.

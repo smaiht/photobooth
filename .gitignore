@@ -27,6 +27,7 @@ build/
 .update_hash.tmp
 .update_stage/
 .update_stage.*/
+.update_backup.*/
 
 
 photobooth.log*
