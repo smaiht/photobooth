@@ -197,7 +197,7 @@ html, body {
 .idle-title-sub {
     margin-top: 2vh;
     color: #3f3c37;
-    font-size: clamp(28px, 3.15vw, 61px);
+    font-size: clamp(28px, 3.15vw, 50px);
     font-weight: 600;
     letter-spacing: 0.06em;
 }
