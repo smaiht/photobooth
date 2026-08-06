@@ -372,7 +372,14 @@ class FrontendProtocolTests(unittest.TestCase):
         self.assertIn('"type": "session_link"', backend_source)
         self.assertIn('case "session_link"', frontend_source)
         self.assertIn('new Set(["composing", "printing", "done", "idle"])', frontend_source)
-        self.assertIn("ОТСКАНИРУЙТЕ, ЧТОБЫ СКАЧАТЬ ФОТО И ВИДЕО", frontend_source)
+        self.assertIn(
+            "ФОТО И ВИДЕО С ПОСЛЕДНЕЙ СЪЕМКИ ЗАГРУЖАЮТСЯ СЮДА",
+            frontend_source,
+        )
+        # The delivery hint is intentionally omitted from the idle markup;
+        # configuration must still continue so the pose carousel is rendered.
+        self.assertIn("if (idleDeliveryInfo)", frontend_source)
+        self.assertIn("configurePoseExamples(cfg)", frontend_source)
         self.assertIn("dismissedQrSessionId === currentSessionId", frontend_source)
         self.assertIn('id="result-qr-panel"', frontend_html)
         self.assertIn('id="result-qr-code"', frontend_html)

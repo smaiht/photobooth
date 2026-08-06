@@ -345,7 +345,7 @@ function refreshQr() {
         hideQrModal();
         return;
     }
-    showQrModal(url, "ОТСКАНИРУЙТЕ, ЧТОБЫ СКАЧАТЬ ФОТО И ВИДЕО");
+    showQrModal(url, "ФОТО И ВИДЕО С ПОСЛЕДНЕЙ СЪЕМКИ ЗАГРУЖАЮТСЯ СЮДА");
 }
 
 // --- Message handler ---
@@ -722,7 +722,7 @@ screens.idle.addEventListener("click", () => {
 let config = {};
 fetch("/api/config").then(r => r.json()).then(cfg => {
     config = cfg;
-    idleDeliveryInfo.hidden = cfg.show_qr === false;
+    if (idleDeliveryInfo) idleDeliveryInfo.hidden = cfg.show_qr === false;
     configureIdleSessionInfo(cfg);
     const configuredPrice = Math.floor(Number(cfg.technical_event_price_rubles));
     technicalEventPriceRubles = Number.isFinite(configuredPrice)

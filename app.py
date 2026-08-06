@@ -53,10 +53,13 @@ def _build_loading_html():
             {DOTS_SVG}
             <span id="status" style="font-size:3.5vw; font-weight:600; color:#FF2973">Загрузка</span>
         </div>
+        <div id="progress" style="min-height:1.8em; font-size:1.5vw; font-weight:600;
+             color:#555; text-align:center"></div>
         <div id="log" style="font-size:1.2vw; color:#999; text-align:center; line-height:1.8"></div>
     </div>
     <script>
     function setStatus(text) {{ document.getElementById('status').textContent = text; }}
+    function setProgress(text) {{ document.getElementById('progress').textContent = text; }}
     function addLog(text) {{
         var el = document.getElementById('log');
         el.innerHTML += text + '<br>';
@@ -167,8 +170,18 @@ def _ui(js):
     except Exception:
         pass
 
+
+def _ui_text(function, text):
+    import json
+    _ui(f"{function}({json.dumps(str(text), ensure_ascii=False)})")
+
+
 def _ui_log(text):
-    _ui(f"addLog('{text}')")
+    _ui_text("addLog", text)
+
+
+def _ui_progress(text):
+    _ui_text("setProgress", text)
 
 _APP_DIR = Path(__file__).resolve().parent
 _HASH_FILE = str(_APP_DIR / ".update_hash")
@@ -641,6 +654,26 @@ def _full_update(status: dict) -> dict:
     return artifact
 
 
+def _format_download_progress(
+    downloaded: int,
+    total: int,
+    speed: float,
+    attempt: int,
+    attempts: int,
+) -> str:
+    if downloaded <= 0:
+        return f"Подключение к Яндекс Диску · попытка {attempt}/{attempts}"
+    percent = min(100, round(downloaded * 100 / max(total, 1)))
+    text = (
+        f"Скачивание {percent}% · "
+        f"{downloaded / 1048576:.1f}/{total / 1048576:.1f} МБ · "
+        f"{speed / 1048576:.1f} МБ/с"
+    )
+    if attempt > 1:
+        text += f" · попытка {attempt}/{attempts}"
+    return text
+
+
 def _update_from_disk() -> str | None:
     """Download and install the latest VPS-published Disk artifact."""
     import json
@@ -679,11 +712,87 @@ def _update_from_disk() -> str | None:
         log.info("Disk update: downloading full %s (%.1f MiB)",
                  version[:16], expected_size / 1048576)
         download_started = time.monotonic()
-        size, _ = download_artifact(artifact, temp_path)
+        last_log_time = 0.0
+        last_log_percent = -10
+        last_attempt = 0
+        last_ui_time = 0.0
+        last_ui_attempt = 0
+        downloaded_by_attempt = {}
+
+        def report_progress(downloaded, total, speed, attempt, attempts):
+            nonlocal last_log_time, last_log_percent, last_attempt
+            nonlocal last_ui_time, last_ui_attempt
+            downloaded_by_attempt[attempt] = downloaded
+            now = time.monotonic()
+            should_update_ui = (
+                attempt != last_ui_attempt
+                or downloaded <= 0
+                or downloaded >= total
+                or now - last_ui_time >= 0.25
+            )
+            if should_update_ui:
+                _ui_progress(_format_download_progress(
+                    downloaded, total, speed, attempt, attempts))
+                last_ui_time = now
+                last_ui_attempt = attempt
+            if attempt != last_attempt:
+                last_attempt = attempt
+                last_log_time = 0.0
+                last_log_percent = -10
+                log.info(
+                    "Disk update: download attempt %d/%d, expected %.1f MiB",
+                    attempt, attempts, total / 1048576,
+                )
+            if downloaded <= 0:
+                return
+            percent = min(100, int(downloaded * 100 / max(total, 1)))
+            if (downloaded >= total
+                    or percent >= last_log_percent + 10
+                    or now - last_log_time >= 5):
+                log.info(
+                    "Disk update: download %d%%, %.1f/%.1f MiB, %.1f MiB/s "
+                    "(attempt %d/%d)",
+                    percent,
+                    downloaded / 1048576,
+                    total / 1048576,
+                    speed / 1048576,
+                    attempt,
+                    attempts,
+                )
+                last_log_time = now
+                last_log_percent = percent
+
+        def report_retry(attempt, attempts, delay, exc):
+            downloaded = downloaded_by_attempt.get(attempt, 0)
+            log.warning(
+                "Disk update: download attempt %d/%d failed after %.1f MiB: "
+                "%s: %s; "
+                "retrying in %.0fs",
+                attempt,
+                attempts,
+                downloaded / 1048576,
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+            failure = "Сбой скачивания"
+            if downloaded:
+                failure += f" после {downloaded / 1048576:.1f} МБ"
+            _ui_progress(
+                f"{failure} · повтор {attempt + 1}/{attempts} через {delay:.0f} с")
+
+        size, _ = download_artifact(
+            artifact,
+            temp_path,
+            progress=report_progress,
+            on_retry=report_retry,
+        )
         elapsed = max(time.monotonic() - download_started, 0.001)
         log.info("Disk update: download complete, %.1f MiB in %.1fs (%.1f MiB/s)",
                  size / 1048576, elapsed, size / 1048576 / elapsed)
-        _ui_log(f"Получено {size / 1048576:.0f} МБ")
+        _ui_progress(
+            f"Скачано {size / 1048576:.1f} МБ · "
+            f"{size / 1048576 / elapsed:.1f} МБ/с")
         if sys.platform == "win32":
             _ui_log("Проверка архива...")
             log.info("Disk update: validating ZIP CRC and paths")
@@ -761,6 +870,7 @@ def auto_update():
             os._exit(0)
     except Exception as e:
         log.exception("Disk update failed")
+        _ui_progress("Обновление не скачано — запускаем текущую версию")
         _ui_log(f"Ошибка обновления: {e}")
 
 

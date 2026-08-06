@@ -4,6 +4,7 @@ import io
 import json
 import sys
 import unittest
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -38,17 +39,29 @@ class DiskUpdateDownloadTests(unittest.TestCase):
         }
         api_response = io.BytesIO(json.dumps({"href": "https://download.test/file"}).encode())
         file_response = io.BytesIO(payload)
+        progress = []
 
         with TemporaryDirectory() as tmpdir, \
              patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
              patch("backend.yadisk_updates._request", return_value=api_response), \
-             patch.object(urllib.request, "urlopen", return_value=file_response):
+             patch.object(urllib.request, "urlopen", return_value=file_response), \
+             patch("backend.yadisk_updates.time.monotonic",
+                   side_effect=[10.0, 12.0]):
             destination = Path(tmpdir) / "update.zip"
-            size, digest = yadisk_updates.download_artifact(status, destination)
+            with self.assertLogs("update", level="INFO") as logs:
+                size, digest = yadisk_updates.download_artifact(
+                    status,
+                    destination,
+                    progress=lambda *values: progress.append(values),
+                )
 
             self.assertEqual(destination.read_bytes(), payload)
             self.assertEqual(size, len(payload))
             self.assertEqual(digest, status["sha256"])
+            self.assertEqual(progress[0], (0, len(payload), 0.0, 1, 5))
+            self.assertEqual(progress[-1][:2], (len(payload), len(payload)))
+            self.assertAlmostEqual(progress[-1][2], len(payload) / 2)
+            self.assertIn("storage host download.test", "\n".join(logs.output))
 
     def test_rejects_bad_hash(self):
         payload = b"corrupt"
@@ -65,7 +78,122 @@ class DiskUpdateDownloadTests(unittest.TestCase):
              patch("backend.yadisk_updates._request", return_value=api_response), \
              patch.object(urllib.request, "urlopen", return_value=file_response):
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                yadisk_updates.download_artifact(
+                    status,
+                    Path(tmpdir) / "update.zip",
+                    retry_delays=(),
+                )
+
+    def test_retries_with_fresh_link_and_discards_partial_file(self):
+        class FailingResponse(io.BytesIO):
+            def __init__(self, payload):
+                super().__init__(payload)
+                self._read_once = False
+
+            def read(self, size=-1):
+                if self._read_once:
+                    raise urllib.error.URLError("storage connection refused")
+                self._read_once = True
+                return super().read(size)
+
+        payload = b"complete update"
+        status = {
+            "path": "/photobooth_system/updates/artifacts/test-full.zip",
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        links = [
+            io.BytesIO(json.dumps({"href": "https://download.test/first"}).encode()),
+            io.BytesIO(json.dumps({"href": "https://download.test/second"}).encode()),
+        ]
+        downloads = [FailingResponse(b"partial"), io.BytesIO(payload)]
+        retries = []
+        progress = []
+
+        with TemporaryDirectory() as tmpdir, \
+             patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch("backend.yadisk_updates._request", side_effect=links) as request_link, \
+             patch.object(urllib.request, "urlopen", side_effect=downloads) as urlopen, \
+             patch("backend.yadisk_updates.time.sleep") as sleep:
+            destination = Path(tmpdir) / "update.zip"
+            destination.write_bytes(b"stale bytes")
+            size, digest = yadisk_updates.download_artifact(
+                status,
+                destination,
+                progress=lambda *values: progress.append(values),
+                on_retry=lambda *values: retries.append(values),
+                retry_delays=(0,),
+            )
+            downloaded = destination.read_bytes()
+
+        self.assertEqual(size, len(payload))
+        self.assertEqual(digest, status["sha256"])
+        self.assertEqual(downloaded, payload)
+        self.assertEqual(request_link.call_count, 2)
+        self.assertEqual(
+            [call.args[0].full_url for call in urlopen.call_args_list],
+            ["https://download.test/first", "https://download.test/second"],
+        )
+        self.assertEqual(len(retries), 1)
+        self.assertEqual(retries[0][:3], (1, 2, 0.0))
+        self.assertEqual([item[3] for item in progress if item[0] == 0], [1, 2])
+        sleep.assert_called_once_with(0.0)
+
+    def test_does_not_retry_permanent_http_error(self):
+        status = {
+            "path": "/photobooth_system/updates/artifacts/test-full.zip",
+            "size": 10,
+            "sha256": "a" * 64,
+        }
+        error = urllib.error.HTTPError(
+            "https://cloud-api.yandex.net", 404, "not found", {}, None)
+
+        with TemporaryDirectory() as tmpdir, \
+             patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch("backend.yadisk_updates._request", side_effect=error) as request_link, \
+             patch("backend.yadisk_updates.time.sleep") as sleep:
+            destination = Path(tmpdir) / "update.zip"
+            destination.write_bytes(b"stale bytes")
+            with self.assertRaises(urllib.error.HTTPError):
+                yadisk_updates.download_artifact(
+                    status, destination, retry_delays=(0,))
+            self.assertFalse(destination.exists())
+
+        request_link.assert_called_once()
+        sleep.assert_not_called()
+        error.close()
+
+    def test_transient_connection_uses_five_attempts_and_exponential_backoff(self):
+        status = {
+            "path": "/photobooth_system/updates/artifacts/test-full.zip",
+            "size": 10,
+            "sha256": "a" * 64,
+        }
+        error = urllib.error.URLError("storage connection refused")
+
+        with TemporaryDirectory() as tmpdir, \
+             patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch("backend.yadisk_updates._request", side_effect=error) as request_link, \
+             patch("backend.yadisk_updates.time.sleep") as sleep:
+            with self.assertRaises(urllib.error.URLError):
                 yadisk_updates.download_artifact(status, Path(tmpdir) / "update.zip")
+
+        self.assertEqual(request_link.call_count, 5)
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            [2.0, 4.0, 8.0, 16.0],
+        )
+
+    def test_formats_download_progress_for_loading_screen(self):
+        self.assertEqual(
+            app._format_download_progress(0, 125 * 1048576, 0, 1, 5),
+            "Подключение к Яндекс Диску · попытка 1/5",
+        )
+        self.assertEqual(
+            app._format_download_progress(
+                53 * 1048576, 126 * 1048576, 4.3 * 1048576, 2, 5),
+            "Скачивание 42% · 53.0/126.0 МБ · 4.3 МБ/с · попытка 2/5",
+        )
 
     def test_windows_download_is_unique_and_yields_to_existing_installer(self):
         with TemporaryDirectory() as tmpdir:
@@ -90,7 +218,9 @@ class DiskUpdateDownloadTests(unittest.TestCase):
             destinations = []
             scheduled_stages = []
 
-            def download(_artifact, destination):
+            def download(_artifact, destination, **kwargs):
+                self.assertTrue(callable(kwargs.get("progress")))
+                self.assertTrue(callable(kwargs.get("on_retry")))
                 destinations.append(destination)
                 destination.write_bytes(payload)
                 return len(payload), digest
