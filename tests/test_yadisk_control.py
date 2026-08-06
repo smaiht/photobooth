@@ -66,6 +66,12 @@ class CommandValidationTests(unittest.TestCase):
 
 
 class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        yadisk_control._pending_command_results.clear()
+
+    def tearDown(self):
+        yadisk_control._pending_command_results.clear()
+
     async def test_uploads_config_export_to_command_specific_path(self):
         command_id = "a" * 32
         with patch(
@@ -156,6 +162,92 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
         handler.assert_not_awaited()
         delete_command.assert_not_awaited()
 
+    async def test_response_upload_retry_reuses_first_command_result(self):
+        command_id = "d" * 32
+        body = json.dumps({
+            "schema_version": 3,
+            "message_type": "command",
+            "command_id": command_id,
+            "command": "clear_print_queue",
+            "data": None,
+            "reply_target": {
+                "provider": "telegram",
+                "conversation_id": "123",
+            },
+        }).encode()
+        item = {
+            "name": f"{command_id}.json",
+            "path": f"disk:/control/to_booth/{command_id}.json",
+        }
+        handler = AsyncMock(return_value={
+            "status": "ok",
+            "message": "было 3, удалено 3, осталось 0",
+        })
+        uploaded_payloads = []
+
+        async def upload(payload, _path):
+            uploaded_payloads.append(json.loads(payload))
+            if len(uploaded_payloads) == 1:
+                raise TimeoutError("uploader connection timeout")
+
+        with patch.object(yadisk_control, "_root", "/control"), \
+             patch("backend.yadisk_control._download_bytes", AsyncMock(return_value=body)), \
+             patch("backend.yadisk_control._upload_bytes", side_effect=upload), \
+             patch("backend.yadisk_control._delete_command", AsyncMock(return_value=True)) as delete:
+            with self.assertRaisesRegex(TimeoutError, "connection timeout"):
+                await yadisk_control._process_command(item, handler)
+
+            self.assertTrue(await yadisk_control._process_command(item, handler))
+
+        handler.assert_awaited_once()
+        delete.assert_awaited_once_with(item["name"])
+        self.assertEqual(len(uploaded_payloads), 2)
+        self.assertEqual(uploaded_payloads[0], uploaded_payloads[1])
+        self.assertIn("удалено 3", uploaded_payloads[1]["message"])
+        self.assertNotIn(command_id, yadisk_control._pending_command_results)
+
+    async def test_response_retry_defers_post_action_until_ack(self):
+        command_id = "e" * 32
+        body = json.dumps({
+            "schema_version": 3,
+            "message_type": "command",
+            "command_id": command_id,
+            "command": "restart",
+            "data": None,
+            "reply_target": {
+                "provider": "telegram",
+                "conversation_id": "123",
+            },
+        }).encode()
+        item = {
+            "name": f"{command_id}.json",
+            "path": f"disk:/control/to_booth/{command_id}.json",
+        }
+        post_action = AsyncMock()
+        handler = AsyncMock(return_value={
+            "status": "ok",
+            "message": "Перезапуск подтверждён",
+            "_post_action": post_action,
+        })
+        upload = AsyncMock(side_effect=[
+            TimeoutError("uploader connection timeout"),
+            None,
+        ])
+
+        with patch.object(yadisk_control, "_root", "/control"), \
+             patch("backend.yadisk_control._download_bytes", AsyncMock(return_value=body)), \
+             patch("backend.yadisk_control._upload_bytes", upload), \
+             patch("backend.yadisk_control._delete_command", AsyncMock(return_value=True)):
+            with self.assertRaises(TimeoutError):
+                await yadisk_control._process_command(item, handler)
+            post_action.assert_not_awaited()
+
+            self.assertTrue(await yadisk_control._process_command(item, handler))
+            await __import__("asyncio").sleep(0)
+
+        handler.assert_awaited_once()
+        post_action.assert_awaited_once()
+
     async def test_downloaded_invalid_json_is_deleted(self):
         command_id = "c" * 32
         item = {
@@ -173,6 +265,30 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
                 item, AsyncMock()))
 
         delete_command.assert_awaited_once_with(item["name"])
+
+
+class ControlConnectionSettingsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_control_upload_links_use_desktop_client_user_agent(self):
+        api_session = MagicMock(closed=False)
+        transfer_session = MagicMock(closed=False)
+        with patch.object(yadisk_control, "_configured", True), \
+             patch.object(yadisk_control, "_token", "secret"), \
+             patch.object(yadisk_control, "_root", "/control"), \
+             patch.object(yadisk_control, "_session", None), \
+             patch.object(yadisk_control, "_transfer_session", None), \
+             patch("backend.yadisk_control.aiohttp.ClientSession", side_effect=[
+                 api_session,
+                 transfer_session,
+             ]) as client_session, \
+             patch("backend.yadisk_control._ensure_directory", AsyncMock()):
+            self.assertTrue(await yadisk_control._connect())
+
+        headers = client_session.call_args_list[0].kwargs["headers"]
+        self.assertEqual(
+            headers["User-Agent"],
+            yadisk_control.YADISK_API_USER_AGENT,
+        )
+        self.assertEqual(headers["Authorization"], "OAuth secret")
 
 
 class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):

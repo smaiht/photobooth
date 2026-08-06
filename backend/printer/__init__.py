@@ -482,30 +482,40 @@ def _print_driver(image_path: str, config: dict, template_name: str = ""):
 
     if devmode is not None:
         paper_size = int(getattr(devmode, "PaperSize", 0))
+        form_name = str(getattr(devmode, "FormName", "") or "")
         orientation = int(getattr(devmode, "Orientation", 0))
         quality = int(getattr(devmode, "PrintQuality", 0))
         y_resolution = int(getattr(devmode, "YResolution", 0))
         copies = int(getattr(devmode, "Copies", 0))
         log.info(
-            "Printer queue defaults: printer=%s paper_size=%s orientation=%s "
-            "quality=%sx%s copies=%s",
+            "Printer level-2 defaults (diagnostic only): printer=%s "
+            "paper_size=%s form=%r orientation=%s quality=%sx%s copies=%s",
             selected_printer,
             paper_size,
+            form_name,
             {1: "portrait", 2: "landscape"}.get(orientation, orientation),
             quality,
             y_resolution,
             copies,
         )
-        # DNP's official V1.13 table maps a 3688x2480 raster to the (6x4)
-        # paper form (ID 202) with the seemingly counter-intuitive Portrait
-        # orientation.  PR(4x6) is a different, vertical 2480x3688 form.
-        if paper_size != 202 or orientation != 1:
-            log.warning(
-                "DNP queue defaults do not match horizontal 3688x2480 output: "
-                "printer=%s expected paper_size=202 ((6x4)) and "
-                "orientation=portrait",
-                selected_printer,
-            )
+        # PRINTER_INFO_2 contains generic queue defaults, not necessarily the
+        # effective per-user settings consumed by Windows' image handler for
+        # this job.  Keep these values for diagnostics, but do not validate a
+        # working print path against driver-specific PaperSize numeric IDs.
+
+
+        # # PREV THOUGHT LOGIC:
+        # # DNP's official V1.13 table maps a 3688x2480 raster to the (6x4)
+        # # paper form (ID 202) with the seemingly counter-intuitive Portrait
+        # # orientation.  PR(4x6) is a different, vertical 2480x3688 form.
+        # if paper_size != 202 or orientation != 1:
+        #     log.warning(
+        #         "DNP queue defaults do not match horizontal 3688x2480 output: "
+        #         "printer=%s expected paper_size=202 ((6x4)) and "
+        #         "orientation=portrait",
+        #         selected_printer,
+        #     )
+
 
     system_root = os.environ.get("SystemRoot", r"C:\Windows")
     rundll32 = Path(system_root) / "System32" / "rundll32.exe"

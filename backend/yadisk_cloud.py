@@ -26,6 +26,10 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 API = "https://cloud-api.yandex.net/v1/disk"
+# Yandex.Disk can assign throttled upload links to generic REST clients for
+# some media types (notably video). yadisk 3.3+ and rclone use the same
+# desktop-client User-Agent workaround when requesting an upload URL.
+YADISK_API_USER_AGENT = 'Yandex.Disk {"os":"windows"}'
 SCHEMA_VERSION = 2
 STORAGE_LAYOUT = "event_sibling_v1"
 RETRY_MIN_SECONDS = 5
@@ -353,7 +357,12 @@ async def _connect() -> bool:
     await _close_sessions()
     timeout = aiohttp.ClientTimeout(total=60, connect=15)
     _session = aiohttp.ClientSession(
-        headers={"Authorization": f"OAuth {_token}"}, timeout=timeout)
+        headers={
+            "Authorization": f"OAuth {_token}",
+            "User-Agent": YADISK_API_USER_AGENT,
+        },
+        timeout=timeout,
+    )
     _transfer_session = aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=600, connect=30))
 

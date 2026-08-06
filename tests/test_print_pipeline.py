@@ -754,6 +754,48 @@ class PrinterQueueTests(unittest.TestCase):
                 ],
             )
 
+    def test_driver_paper_size_id_is_logged_without_configuration_warning(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            system32 = root / "System32"
+            system32.mkdir()
+            (system32 / "rundll32.exe").write_bytes(b"exe")
+            (system32 / "shimgvw.dll").write_bytes(b"dll")
+            source = root / "print_grid.jpg"
+            source.write_bytes(b"jpeg")
+
+            devmode = Mock(
+                PaperSize=179,
+                FormName="",
+                Orientation=1,
+                PrintQuality=600,
+                YResolution=600,
+                Copies=1,
+            )
+            win32print = Mock()
+            win32print.OpenPrinter.return_value = "handle"
+            win32print.GetPrinter.return_value = {
+                "pDriverName": "DNP DS-RX1 Driver",
+                "pPortName": "USB001",
+                "pDevMode": devmode,
+            }
+            completed = Mock(returncode=0, stdout="", stderr="")
+
+            with patch.dict(sys.modules, {"win32print": win32print}), \
+                 patch.dict(os.environ, {"SystemRoot": str(root)}), \
+                 patch("backend.printer.Image.open") as open_image, \
+                 patch("backend.printer.subprocess.run", return_value=completed), \
+                 self.assertLogs("backend.printer", level="INFO") as captured:
+                raster = open_image.return_value.__enter__.return_value
+                raster.size = (3688, 2480)
+                raster.info = {"dpi": (600, 600)}
+                _print_driver(str(source), {"printer_name": "DS-RX1"}, "grid")
+
+            messages = "\n".join(captured.output)
+            self.assertIn("paper_size=179", messages)
+            self.assertIn("diagnostic only", messages)
+            self.assertNotIn("do not match", messages)
+
     def test_reports_grid_and_strips_windows_job_counts(self):
         job_counts = {
             "DNP Cards": 3,

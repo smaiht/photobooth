@@ -17,6 +17,9 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 API = "https://cloud-api.yandex.net/v1/disk"
+# Use the desktop-client User-Agent workaround. Generic REST client user
+# agents can receive heavily throttled uploader URLs for some file types.
+YADISK_API_USER_AGENT = 'Yandex.Disk {"os":"windows"}'
 SCHEMA_VERSION = 3
 POLL_INTERVAL = 10
 PAGE_SIZE = 100
@@ -75,6 +78,24 @@ class ReplyTarget:
             provider=value.get("provider", ""),
             conversation_id=value.get("conversation_id", ""),
         )
+
+
+@dataclass(frozen=True)
+class _PendingCommandResult:
+    """A completed command whose response has not been acknowledged yet.
+
+    The command file stays in ``to_booth`` when uploading its response fails.
+    Without this cache the next poll would execute the handler again, which is
+    unsafe for commands such as queue purge and also replaces their original
+    before/after report with the result of the repeated operation.
+    """
+
+    fingerprint: str
+    response: dict
+    post_action: Callable[[], Awaitable[None]] | None
+
+
+_pending_command_results: dict[str, _PendingCommandResult] = {}
 
 
 def normalize_folder(folder: str) -> str:
@@ -137,7 +158,10 @@ async def _connect() -> bool:
         return True
     await _close_sessions()
     _session = aiohttp.ClientSession(
-        headers={"Authorization": f"OAuth {_token}"},
+        headers={
+            "Authorization": f"OAuth {_token}",
+            "User-Agent": YADISK_API_USER_AGENT,
+        },
         timeout=aiohttp.ClientTimeout(total=60, connect=15),
     )
     _transfer_session = aiohttp.ClientSession(
@@ -335,6 +359,17 @@ def _response(command: dict, result: dict) -> tuple[dict, Callable[[], Awaitable
     return response, post_action
 
 
+def _command_fingerprint(command: dict) -> str:
+    """Identify the exact validated command associated with a cached result."""
+    payload = json.dumps(
+        command,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 async def _process_command(
     item: dict,
     handler: Callable[[dict], Awaitable[dict]],
@@ -361,20 +396,54 @@ async def _process_command(
         log.warning(f"Control: invalid command {filename}: {exc}")
         return await _delete_command(filename)
 
-    try:
-        result = await handler(command)
-        if not isinstance(result, dict):
-            raise ValueError("command handler returned invalid result")
-    except Exception as exc:
-        log.exception(f"Control: command {command['command']} failed")
-        result = {"status": "error", "message": str(exc)}
+    command_id = command["command_id"]
+    fingerprint = _command_fingerprint(command)
+    pending = _pending_command_results.get(command_id)
+    if pending is not None and pending.fingerprint != fingerprint:
+        # Reusing a command ID for different contents violates the protocol.
+        # Never associate the first command's response with another action or
+        # execute an ambiguous second action.
+        log.error(
+            "Control: command ID collision for %s; cached result retained",
+            command_id,
+        )
+        return await _delete_command(filename)
 
-    response, post_action = _response(command, result)
+    if pending is None:
+        try:
+            result = await handler(command)
+            if not isinstance(result, dict):
+                raise ValueError("command handler returned invalid result")
+        except Exception as exc:
+            log.exception(f"Control: command {command['command']} failed")
+            result = {"status": "error", "message": str(exc)}
+
+        response, post_action = _response(command, result)
+        pending = _PendingCommandResult(
+            fingerprint=fingerprint,
+            response=response,
+            post_action=post_action,
+        )
+        # Store the completed result before the first network write. If that
+        # write times out, the command remains remote and the next poll must
+        # retry delivery rather than invoke the handler again.
+        _pending_command_results[command_id] = pending
+    else:
+        response = pending.response
+        post_action = pending.post_action
+        log.info(
+            "Control: retrying cached response for %s (%s); "
+            "command handler will not run again",
+            command["command"],
+            command_id,
+        )
+
     payload = json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     await _upload_bytes(
-        payload, f"{_root}/to_vps/response_{command['command_id']}.json")
+        payload, f"{_root}/to_vps/response_{command_id}.json")
     if not await _delete_command(filename):
         return False
+    _pending_command_results.pop(command_id, None)
     response_message = response["message"].replace("\n", " | ")[:500]
     completed_log = log.info if response["status"] == "ok" else log.warning
     completed_log(

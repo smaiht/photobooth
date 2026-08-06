@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from PIL import Image
 
@@ -92,6 +92,32 @@ class SessionJobTests(unittest.TestCase):
         self.assertIn("abc123", migrated[0]["session_folder_name"])
         self.assertNotIn("public_url", migrated[0])
         self.assertNotIn("session_uploaded", migrated[0]["files"][0])
+
+
+class ConnectionSettingsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_upload_links_use_desktop_client_user_agent(self):
+        api_session = MagicMock(closed=False)
+        transfer_session = MagicMock(closed=False)
+        with patch.object(yadisk_cloud, "_configured", True), \
+             patch.object(yadisk_cloud, "_token", "secret"), \
+             patch.object(yadisk_cloud, "_folder", "/event"), \
+             patch.object(yadisk_cloud, "_bus_root", "/control"), \
+             patch.object(yadisk_cloud, "_session", None), \
+             patch.object(yadisk_cloud, "_transfer_session", None), \
+             patch("backend.yadisk_cloud.aiohttp.ClientSession", side_effect=[
+                 api_session,
+                 transfer_session,
+             ]) as client_session, \
+             patch("backend.yadisk_cloud._ensure_directory", AsyncMock(return_value=True)), \
+             patch("backend.yadisk_cloud._ensure_promo_card", AsyncMock(return_value=True)):
+            self.assertTrue(await yadisk_cloud._connect())
+
+        headers = client_session.call_args_list[0].kwargs["headers"]
+        self.assertEqual(
+            headers["User-Agent"],
+            yadisk_cloud.YADISK_API_USER_AGENT,
+        )
+        self.assertEqual(headers["Authorization"], "OAuth secret")
 
 
 class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
