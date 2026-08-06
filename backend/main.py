@@ -51,6 +51,8 @@ log = logging.getLogger(__name__)
 app = FastAPI()
 
 REMOTE_READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+LOCAL_LIVE_VIEW_FPS = 30
+REMOTE_LIVE_VIEW_FPS = 2
 
 
 def _is_loopback_host(host: str | None) -> bool:
@@ -341,6 +343,8 @@ def _lan_ipv4_addresses() -> list[str]:
                 and not address.is_unspecified):
             addresses.add(address)
     hotspot_default = ipaddress.IPv4Address("192.168.137.1")
+    if hotspot_default in addresses:
+        return [str(hotspot_default)]
     return [
         str(address)
         for address in sorted(
@@ -983,6 +987,7 @@ async def _run_session():
 
 # --- MJPEG live view stream ---
 async def _mjpeg_generator():
+    """Original full-rate stream used by the local production UI."""
     while True:
         frame = _latest_frame if _live_view_active else None
         if frame:
@@ -995,13 +1000,38 @@ async def _mjpeg_generator():
         await asyncio.sleep(0.033)
 
 
+async def _viewer_mjpeg_generator():
+    """Bandwidth-limited stream used only by non-loopback LAN viewers."""
+    frame_interval = 1 / REMOTE_LIVE_VIEW_FPS
+    last_frame = None
+    next_frame_at = 0.0
+    while True:
+        frame = _latest_frame if _live_view_active else None
+        now = time.monotonic()
+        if frame and frame is not last_frame and now >= next_frame_at:
+            last_frame = frame
+            next_frame_at = now + frame_interval
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Content-Length: " + str(len(frame)).encode("ascii") + b"\r\n"
+                b"\r\n" + frame + b"\r\n"
+            )
+        await asyncio.sleep(0.01)
+
+
 @app.get("/live")
-async def live_view():
-    return StreamingResponse(_mjpeg_generator(),
+async def live_view(request: Request):
+    client_host = request.client.host if request.client else None
+    is_local = _is_loopback_host(client_host)
+    fps = LOCAL_LIVE_VIEW_FPS if is_local else REMOTE_LIVE_VIEW_FPS
+    generator = _mjpeg_generator() if is_local else _viewer_mjpeg_generator()
+    return StreamingResponse(generator,
                              media_type="multipart/x-mixed-replace; boundary=frame",
                              headers={
                                  "Cache-Control": "no-store, no-cache, must-revalidate",
                                  "Pragma": "no-cache",
+                                 "X-Photobooth-Live-FPS": str(fps),
                              })
 
 

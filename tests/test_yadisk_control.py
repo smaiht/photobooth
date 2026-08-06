@@ -878,6 +878,7 @@ class LanViewerTests(unittest.IsolatedAsyncioTestCase):
             (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0)),
             (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("192.168.137.1", 0)),
             (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("192.168.137.1", 0)),
+            (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("192.168.8.103", 0)),
             (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0)),
         ]
         with patch.object(main.sys, "platform", "linux"), \
@@ -900,11 +901,30 @@ class LanViewerTests(unittest.IsolatedAsyncioTestCase):
              patch.object(main.subprocess, "run", return_value=completed):
             self.assertEqual(
                 main._viewer_urls(),
-                [
-                    "http://192.168.137.1:8000/?viewer=1",
-                    "http://172.20.10.1:8000/?viewer=1",
-                ],
+                ["http://192.168.137.1:8000/?viewer=1"],
             )
+
+    async def test_lan_live_view_is_throttled_without_slowing_local_ui(self):
+        remote = SimpleNamespace(
+            client=SimpleNamespace(host="192.168.137.2", port=4321),
+        )
+        local = SimpleNamespace(
+            client=SimpleNamespace(host="127.0.0.1", port=4321),
+        )
+        remote_response = await main.live_view(remote)
+        local_response = await main.live_view(local)
+        self.assertEqual(
+            remote_response.headers["x-photobooth-live-fps"], "3")
+        self.assertEqual(
+            local_response.headers["x-photobooth-live-fps"], "30")
+        self.assertEqual(
+            local_response.body_iterator.ag_code.co_name, "_mjpeg_generator")
+        self.assertEqual(
+            remote_response.body_iterator.ag_code.co_name,
+            "_viewer_mjpeg_generator",
+        )
+        await remote_response.body_iterator.aclose()
+        await local_response.body_iterator.aclose()
 
     async def test_remote_http_mutations_are_rejected_but_get_is_allowed(self):
         remote = SimpleNamespace(
