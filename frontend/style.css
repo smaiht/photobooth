@@ -371,11 +371,11 @@ html, body {
 }
 #pose-rail-left {
     padding-left: 0.8vw;
-    padding-right: 0.4vw;
+    padding-right: 0.2vw;
 }
 #pose-rail-right {
     padding-right: 0.8vw;
-    padding-left: 0.4vw;
+    padding-left: 0.2vw;
 }
 
 .pose-rail[hidden] { display: none; }
@@ -507,11 +507,11 @@ html, body {
 .template-title { font-size: 4vw; font-weight: 700; }
 
 .template-options {
-    width: 94vw;
+    width: 100vw;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(17vw, 27vw));
+    grid-template-columns: repeat(auto-fit, minmax(20vw, 30vw));
     justify-content: center;
-    gap: 2.5vw;
+    gap: 1.5vw;
 }
 
 .template-btn {
@@ -546,10 +546,10 @@ html, body {
 
 #template-timer {
     position: absolute;
-    bottom: 2vh;
+    bottom: 1.7vh;
     left: 50%;
     transform: translateX(-50%);
-    font-size: 1.2vw;
+    font-size: 1vw;
     opacity: 0.6;
     white-space: nowrap;
 }
