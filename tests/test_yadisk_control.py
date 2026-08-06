@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import WebSocketDisconnect
@@ -654,6 +655,7 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_websocket_start_is_blocked_without_scheduling_session(self):
         ws = MagicMock()
+        ws.client = SimpleNamespace(host="127.0.0.1", port=8000)
         ws.accept = AsyncMock()
         ws.send_text = AsyncMock()
         ws.receive_text = AsyncMock(side_effect=[
@@ -683,6 +685,7 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_websocket_skip_finishes_template_selection(self):
         ws = MagicMock()
+        ws.client = SimpleNamespace(host="127.0.0.1", port=8000)
         ws.accept = AsyncMock()
         ws.send_text = AsyncMock()
         ws.receive_text = AsyncMock(side_effect=[
@@ -856,6 +859,116 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("Кафе не заблокировано", result["message"])
         set_event.assert_not_awaited()
+
+
+class LanViewerTests(unittest.IsolatedAsyncioTestCase):
+    def test_server_bind_is_available_to_the_hotspot(self):
+        self.assertEqual(backend_config.SERVER_BIND_HOST, "0.0.0.0")
+        self.assertEqual(backend_config.SERVER_PORT, 8000)
+
+    def test_loopback_detection_accepts_ipv4_and_mapped_ipv6(self):
+        self.assertTrue(main._is_loopback_host("127.0.0.1"))
+        self.assertTrue(main._is_loopback_host("::1"))
+        self.assertTrue(main._is_loopback_host("::ffff:127.0.0.1"))
+        self.assertFalse(main._is_loopback_host("192.168.137.2"))
+        self.assertFalse(main._is_loopback_host(None))
+
+    def test_viewer_url_uses_private_addresses_only(self):
+        entries = [
+            (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0)),
+            (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("192.168.137.1", 0)),
+            (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("192.168.137.1", 0)),
+            (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0)),
+        ]
+        with patch.object(main.socket, "gethostname", return_value="booth"), \
+             patch.object(main.socket, "getaddrinfo", return_value=entries):
+            self.assertEqual(
+                main._viewer_urls(),
+                ["http://192.168.137.1:8000/?viewer=1"],
+            )
+
+    def test_windows_hotspot_address_does_not_depend_on_hostname_lookup(self):
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout="172.20.10.1\n192.168.137.1\n",
+            stderr="",
+        )
+        with patch.object(main.sys, "platform", "win32"), \
+             patch.object(main.socket, "gethostname", return_value="booth"), \
+             patch.object(main.socket, "getaddrinfo", side_effect=OSError("DNS")), \
+             patch.object(main.subprocess, "run", return_value=completed):
+            self.assertEqual(
+                main._viewer_urls(),
+                [
+                    "http://192.168.137.1:8000/?viewer=1",
+                    "http://172.20.10.1:8000/?viewer=1",
+                ],
+            )
+
+    async def test_remote_http_mutations_are_rejected_but_get_is_allowed(self):
+        remote = SimpleNamespace(
+            client=SimpleNamespace(host="192.168.137.2", port=4321),
+            method="POST",
+            url=SimpleNamespace(path="/api/restart"),
+        )
+        call_next = AsyncMock(return_value="passed")
+        response = await main.remote_read_only(remote, call_next)
+        self.assertEqual(response.status_code, 403)
+        call_next.assert_not_awaited()
+
+        remote.method = "GET"
+        self.assertEqual(await main.remote_read_only(remote, call_next), "passed")
+        call_next.assert_awaited_once_with(remote)
+
+        call_next.reset_mock()
+        local = SimpleNamespace(
+            client=SimpleNamespace(host="127.0.0.1", port=4321),
+            method="POST",
+            url=SimpleNamespace(path="/api/restart"),
+        )
+        self.assertEqual(await main.remote_read_only(local, call_next), "passed")
+        call_next.assert_awaited_once_with(local)
+
+    async def test_remote_websocket_receives_state_but_cannot_send_commands(self):
+        ws = MagicMock()
+        ws.client = SimpleNamespace(host="192.168.137.2", port=4321)
+        ws.accept = AsyncMock()
+        ws.send_text = AsyncMock()
+        ws.receive_text = AsyncMock(side_effect=[
+            json.dumps({"type": "start_session"}),
+            WebSocketDisconnect(),
+        ])
+        with patch.object(main, "STATE", "idle"), \
+             patch.object(main, "CLIENTS", []), \
+             patch("backend.main.run_session", new_callable=AsyncMock) as run:
+            await main.websocket_endpoint(ws)
+
+        run.assert_not_awaited()
+        self.assertEqual(ws.send_text.await_count, 1)
+
+    async def test_status_contains_clickable_viewer_url(self):
+        config = {
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Событие",
+        }
+        viewer_url = "http://192.168.137.1:8000/?viewer=1"
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "CONFIG", config), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "camera", None), \
+             patch("backend.main._viewer_urls", return_value=[viewer_url]), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Событие"), \
+             patch("backend.main.yadisk_cloud.pending_count", return_value=0):
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "status",
+                "data": None,
+            })
+
+        self.assertIn(f"Viewer: {viewer_url}", result["message"])
+        self.assertEqual(result["viewer_urls"], [viewer_url])
 
 
 class CameraConfigValueTests(unittest.TestCase):

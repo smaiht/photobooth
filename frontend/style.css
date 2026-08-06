@@ -33,6 +33,11 @@ html, body {
     -webkit-user-select: none;
 }
 
+/* LAN viewer renders the regular UI but cannot interact with it. */
+.viewer-mode #app {
+    pointer-events: none;
+}
+
 #app {
     width: 100%;
     height: 100%;
@@ -400,10 +405,12 @@ html, body {
 
 .lens-hint-arrow {
     flex: 0 0 auto;
-    width: 0.78em;
-    height: 1em;
+    display: block;
+    width: 1.12em;
+    height: 0.86em;
+    transform: translateY(-0.08em);
     overflow: visible;
-    fill: #202020;
+    fill: #6b0000;
     filter: drop-shadow(0 0.25vh 0.35vh rgba(0, 0, 0, 0.18));
 }
 

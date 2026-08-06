@@ -5,6 +5,9 @@ import re
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
+SERVER_BIND_HOST = "0.0.0.0"
+SERVER_PORT = 8000
+
 FRONTEND_DIR = ROOT_DIR / "frontend"
 TEMPLATES_DIR = ROOT_DIR / "templates"
 EDSDK_DLL = ROOT_DIR / "EDSDK_Win" / "EDSDK_64" / "Dll" / "EDSDK.dll"

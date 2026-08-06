@@ -6,11 +6,14 @@ State machine:
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
 import re
 import shutil
+import socket
+import subprocess
 import sys
 import time
 import uuid
@@ -18,9 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from .config import (
     EDSDK_DLL,
@@ -28,6 +31,7 @@ from .config import (
     PHOTOS_DIR,
     PRINT_JOBS_DIR,
     ROOT_DIR,
+    SERVER_PORT,
     TEMPLATES_DIR,
     load_event_config,
     update_camera_config_field,
@@ -45,6 +49,37 @@ from . import yadisk_cloud, yadisk_control
 log = logging.getLogger(__name__)
 
 app = FastAPI()
+
+REMOTE_READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    """Return whether a direct HTTP/WebSocket peer is the local booth UI."""
+    if not isinstance(host, str) or not host:
+        return False
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address.is_loopback
+
+
+@app.middleware("http")
+async def remote_read_only(request: Request, call_next):
+    """LAN viewers may read the app but cannot call mutating HTTP routes."""
+    client_host = request.client.host if request.client else None
+    if (request.method not in REMOTE_READ_ONLY_METHODS
+            and not _is_loopback_host(client_host)):
+        log.warning(
+            "Blocked remote %s %s from %s",
+            request.method,
+            request.url.path,
+            client_host or "unknown",
+        )
+        return Response(status_code=403)
+    return await call_next(request)
 
 # --- State ---
 STATE = "idle"
@@ -233,6 +268,97 @@ def _clear_live_view():
     global _latest_frame, _live_view_active
     _live_view_active = False
     _latest_frame = None
+
+
+def _lan_ipv4_addresses() -> list[str]:
+    """Best-effort private IPv4 addresses usable by hotspot/LAN viewers."""
+    raw_addresses: set[str] = set()
+    entries = []
+    hostname_error = None
+    try:
+        entries = socket.getaddrinfo(
+            socket.gethostname(),
+            None,
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError as exc:
+        hostname_error = exc
+    raw_addresses.update(
+        entry[4][0]
+        for entry in entries
+        if len(entry) > 4 and entry[4]
+    )
+
+    # Windows Mobile Hotspot uses a virtual adapter which hostname lookup may
+    # omit. Get-NetIPAddress is built into supported Windows versions and does
+    # not require administrator rights for this read-only query.
+    if sys.platform == "win32":
+        try:
+            completed = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    (
+                        "Get-NetIPAddress -AddressFamily IPv4 "
+                        "-AddressState Preferred | "
+                        "ForEach-Object { $_.IPAddress }"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if completed.returncode == 0:
+                raw_addresses.update(completed.stdout.splitlines())
+            else:
+                log.warning(
+                    "Could not query Windows viewer addresses: %s",
+                    completed.stderr.strip() or f"exit {completed.returncode}",
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("Could not query Windows viewer addresses: %s", exc)
+
+    if not raw_addresses and hostname_error:
+        log.warning("Could not discover viewer LAN addresses: %s", hostname_error)
+
+    addresses: set[ipaddress.IPv4Address] = set()
+    for raw_address in raw_addresses:
+        try:
+            address = ipaddress.ip_address(raw_address.strip())
+        except (AttributeError, ValueError):
+            continue
+        if (isinstance(address, ipaddress.IPv4Address)
+                and address.is_private
+                and not address.is_loopback
+                and not address.is_link_local
+                and not address.is_unspecified):
+            addresses.add(address)
+    hotspot_default = ipaddress.IPv4Address("192.168.137.1")
+    return [
+        str(address)
+        for address in sorted(
+            addresses,
+            key=lambda address: (
+                address != hotspot_default,
+                address.packed[-1] != 1,
+                int(address),
+            ),
+        )
+    ]
+
+
+def _viewer_urls() -> list[str]:
+    return [
+        f"http://{address}:{SERVER_PORT}/?viewer=1"
+        for address in _lan_ipv4_addresses()
+    ]
 
 
 def _remove_preview_dir(preview_dir: Path) -> None:
@@ -1351,6 +1477,7 @@ async def handle_disk_command(command: dict) -> dict:
         version = hash_path.read_text(encoding="utf-8").strip() if hash_path.exists() else "unknown"
         connected = bool(camera and camera.is_connected)
         event = yadisk_cloud.current_event_folder() or str(CONFIG.get("yadisk_folder", ""))
+        viewer_urls = await asyncio.to_thread(_viewer_urls)
         status_lines = [
             f"State: {STATE}",
             f"Camera: {'online' if connected else 'offline'}",
@@ -1393,12 +1520,17 @@ async def handle_disk_command(command: dict) -> dict:
             f"Upload queue: {yadisk_cloud.pending_count()}",
             f"Version: {version}",
         ])
+        if viewer_urls:
+            status_lines.extend(f"Viewer: {url}" for url in viewer_urls)
+        else:
+            status_lines.append("Viewer: LAN IP unavailable")
         return {
             "status": "ok",
             "message": "\n".join(status_lines),
             "event_folder": event,
             "start_locked": _start_locked(),
             "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
+            "viewer_urls": viewer_urls,
         }
 
     if cmd == "set_event":
@@ -1518,6 +1650,8 @@ async def restart():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    client_host = ws.client.host if ws.client else None
+    can_control = _is_loopback_host(client_host)
     await ws.accept()
     if ws not in CLIENTS:
         CLIENTS.append(ws)
@@ -1536,6 +1670,8 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             data = await ws.receive_text()
+            if not can_control:
+                continue
             msg = json.loads(data)
 
             if msg["type"] == "start_session" and STATE == "idle":
