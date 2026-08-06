@@ -681,6 +681,13 @@ class FrontendPreviewTests(unittest.TestCase):
         self.assertIn('photo_index: choice.photo_index', script)
         self.assertIn('with_frame: photoChoiceWithFrame', script)
         self.assertIn('resetTemplateSelection();', script)
+        self.assertIn('idleStartButton.addEventListener("click"', script)
+        self.assertNotIn('screens.idle.addEventListener("click"', script)
+
+        counter_css = (ROOT / "frontend" / "style.css").read_text(
+            encoding="utf-8")
+        counter_block = counter_css.split("#photo-counter {", 1)[1].split("}", 1)[0]
+        self.assertIn("color: #fff", counter_block)
 
 
 class PrinterQueueTests(unittest.TestCase):

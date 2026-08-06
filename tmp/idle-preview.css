@@ -12,7 +12,7 @@ body {
 
 :root {
     /* The booth uses 54s; the preview is accelerated so the drift is obvious. */
-    --idle-hero-motion-duration: 9s;
+    /* --idle-hero-motion-duration: 9s; */
 }
 
 #screen-idle {
@@ -21,7 +21,7 @@ body {
 
 #screen-idle .idle-hero-wrap,
 #screen-idle .idle-pose-track {
-    animation-play-state: running !important;
+    /* animation-play-state: running !important; */
 }
 
 .idle-start-button {

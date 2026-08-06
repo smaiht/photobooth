@@ -17,7 +17,6 @@ const poseRails = {
 const idlePoseField = document.getElementById("idle-pose-field");
 const idlePoseRows = Array.from(document.querySelectorAll(".idle-pose-row"));
 const idleSessionInfo = document.getElementById("idle-session-info");
-const idleDeliveryInfo = document.getElementById("idle-delivery-info");
 const idlePriceBadge = document.getElementById("idle-price-badge");
 const idlePriceValue = document.getElementById("idle-price-value");
 const idleStartButton = document.getElementById("idle-start-button");
@@ -390,8 +389,6 @@ function syncStartLock(data = {}) {
     startLocked = data.start_locked;
     tapLockStatus.hidden = !startLocked;
     idleStartButton.disabled = startLocked;
-    screens.idle.classList.toggle("start-locked", startLocked);
-    screens.idle.setAttribute("aria-disabled", String(startLocked));
 }
 
 function setLiveView(active) {
@@ -713,16 +710,15 @@ function startTemplateTimer(seconds) {
 }
 
 // --- Start session ---
-screens.idle.addEventListener("click", () => {
-    if (currentState !== "idle" || startLocked) return;
-    send({ type: "start_session" });
+idleStartButton.addEventListener("click", () => {
+    if (currentState !== "idle" || startLocked || idleStartButton.disabled) return;
+    if (send({ type: "start_session" })) idleStartButton.disabled = true;
 });
 
 // --- Config ---
 let config = {};
 fetch("/api/config").then(r => r.json()).then(cfg => {
     config = cfg;
-    if (idleDeliveryInfo) idleDeliveryInfo.hidden = cfg.show_qr === false;
     configureIdleSessionInfo(cfg);
     const configuredPrice = Math.floor(Number(cfg.technical_event_price_rubles));
     technicalEventPriceRubles = Number.isFinite(configuredPrice)
