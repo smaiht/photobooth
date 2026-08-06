@@ -880,7 +880,8 @@ class LanViewerTests(unittest.IsolatedAsyncioTestCase):
             (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("192.168.137.1", 0)),
             (main.socket.AF_INET, main.socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0)),
         ]
-        with patch.object(main.socket, "gethostname", return_value="booth"), \
+        with patch.object(main.sys, "platform", "linux"), \
+             patch.object(main.socket, "gethostname", return_value="booth"), \
              patch.object(main.socket, "getaddrinfo", return_value=entries):
             self.assertEqual(
                 main._viewer_urls(),
