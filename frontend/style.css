@@ -366,8 +366,16 @@ html, body {
     align-items: center;
     justify-content: center;
     gap: 0.8vh;
-    padding: 0.8vh 0.8vw;
+    padding: 0.8vh 0;
     overflow: hidden;
+}
+#pose-rail-left {
+    padding-left: 0.8vw;
+    padding-right: 0.4vw;
+}
+#pose-rail-right {
+    padding-right: 0.8vw;
+    padding-left: 0.4vw;
 }
 
 .pose-rail[hidden] { display: none; }
@@ -538,10 +546,10 @@ html, body {
 
 #template-timer {
     position: absolute;
-    bottom: 4vh;
+    bottom: 2vh;
     left: 50%;
     transform: translateX(-50%);
-    font-size: 2.5vw;
+    font-size: 1.2vw;
     opacity: 0.6;
     white-space: nowrap;
 }
