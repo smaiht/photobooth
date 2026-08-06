@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Log to file so we can debug when console is hidden
 from backend.log import setup as setup_logging
 setup_logging()
-from backend.config import SERVER_BIND_HOST, SERVER_PORT
 
 DOTS_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" style="width:6vw;height:6vw">'
@@ -134,7 +133,7 @@ def start_server():
     import uvicorn
     from backend.main import app
     server = uvicorn.Server(uvicorn.Config(
-        app, host=SERVER_BIND_HOST, port=SERVER_PORT, log_level="warning"))
+        app, host="127.0.0.1", port=8000, log_level="warning"))
     _server = server
     try:
         server.run()
@@ -152,10 +151,8 @@ def wait_and_load(window):
     import urllib.request
     while True:
         try:
-            local_url = f"http://127.0.0.1:{SERVER_PORT}"
-            urllib.request.urlopen(f"{local_url}/api/config", timeout=1)
-            window.evaluate_js(
-                f"window.location.replace('{local_url}')")
+            urllib.request.urlopen("http://127.0.0.1:8000/api/config", timeout=1)
+            window.evaluate_js("window.location.replace('http://127.0.0.1:8000')")
             return
         except Exception:
             time.sleep(0.5)

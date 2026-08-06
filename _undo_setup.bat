@@ -9,10 +9,6 @@ reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Defau
 reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /f >nul 2>&1
 echo [OK] Auto-login and lock screen restored
 
-:: Remove local viewer firewall access
-netsh advfirewall firewall delete rule name="Photobooth Viewer" >nul 2>&1
-echo [OK] Photobooth Viewer firewall rule removed
-
 :: Delete kiosk user
 net user Photobooth /delete >nul 2>&1
 echo [OK] Photobooth user deleted

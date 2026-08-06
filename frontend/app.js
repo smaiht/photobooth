@@ -9,8 +9,6 @@ const screens = {
 
 const previewController = window.photoboothPreview;
 const previewMode = previewController?.isActive() === true;
-const viewerMode = new URLSearchParams(location.search).get("viewer") === "1";
-document.documentElement.classList.toggle("viewer-mode", viewerMode);
 
 const liveView = document.getElementById("live-view");
 const countdownNum = document.getElementById("countdown-number");
@@ -256,7 +254,6 @@ if (!previewMode) {
 }
 
 function send(msg) {
-    if (viewerMode) return false;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     ws.send(JSON.stringify(msg));
     return true;

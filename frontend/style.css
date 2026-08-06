@@ -33,11 +33,6 @@ html, body {
     -webkit-user-select: none;
 }
 
-/* LAN viewer renders the regular UI but cannot interact with it. */
-.viewer-mode #app {
-    pointer-events: none;
-}
-
 #app {
     width: 100%;
     height: 100%;

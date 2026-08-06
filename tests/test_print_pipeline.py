@@ -754,15 +754,6 @@ class FrontendPreviewTests(unittest.TestCase):
         counter_block = counter_css.split("#photo-counter {", 1)[1].split("}", 1)[0]
         self.assertIn("color: #fff", counter_block)
 
-    def test_lan_viewer_reuses_ui_without_pointer_or_commands(self):
-        script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
-        styles = (ROOT / "frontend" / "style.css").read_text(encoding="utf-8")
-        self.assertIn('new URLSearchParams(location.search).get("viewer")', script)
-        self.assertIn('document.documentElement.classList.toggle("viewer-mode", viewerMode)', script)
-        self.assertIn("if (viewerMode) return false;", script)
-        self.assertIn(".viewer-mode #app", styles)
-        self.assertIn("pointer-events: none", styles)
-
     def test_photo_choice_reflows_smoothly_and_can_be_closed(self):
         script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "frontend" / "style.css").read_text(encoding="utf-8")
