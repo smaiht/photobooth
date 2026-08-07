@@ -16,6 +16,30 @@ import app
 from backend import yadisk_updates
 
 
+class LoadingScreenTests(unittest.TestCase):
+    def test_embeds_bundled_font_when_available(self):
+        with TemporaryDirectory() as tmpdir:
+            font_path = Path(tmpdir) / "font.ttf"
+            font_path.write_bytes(b"test font")
+
+            with patch.object(app, "FONT_PATH", font_path):
+                html = app._build_loading_html()
+
+        self.assertIn("@font-face", html)
+        self.assertIn("dGVzdCBmb250", html)
+
+    def test_missing_font_uses_system_fallback_so_updater_can_start(self):
+        with TemporaryDirectory() as tmpdir, \
+             patch.object(app, "FONT_PATH", Path(tmpdir) / "missing.ttf"), \
+             self.assertLogs("update", level="WARNING") as logs:
+            html = app._build_loading_html()
+
+        self.assertNotIn("@font-face", html)
+        self.assertIn("'Segoe UI',Arial,sans-serif", html)
+        self.assertIn("Загрузка", html)
+        self.assertIn("using a system fallback", "\n".join(logs.output))
+
+
 class DiskUpdateDownloadTests(unittest.TestCase):
     def test_selects_full_artifact(self):
         artifact = {

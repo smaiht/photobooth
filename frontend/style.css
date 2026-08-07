@@ -475,6 +475,7 @@ html, body {
 }
 
 #template-skip {
+    z-index: 2;
     position: absolute;
     top: 5vh;
     right: 5vh;

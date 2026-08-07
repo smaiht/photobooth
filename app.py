@@ -7,6 +7,7 @@ Shows loading screen instantly, switches to app when server is ready.
 import sys
 import os
 import json
+import logging
 import threading
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Log to file so we can debug when console is hidden
 from backend.log import setup as setup_logging
 setup_logging()
+log = logging.getLogger("update")
 
 DOTS_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" style="width:6vw;height:6vw">'
@@ -34,21 +36,46 @@ DOTS_SVG = (
 FONT_PATH = Path(__file__).parent / "assets" / "fonts" / "Comfortaa-VariableFont_wght.ttf"
 
 def _build_loading_html():
+    """Build the bootstrap page without making assets a hard dependency.
+
+    The loading page is created before the updater thread starts.  Assets are
+    an independently replaceable update component, so an installation can be
+    briefly missing the bundled font (for example after an older updater has
+    installed ``app.zip``).  A missing font must never prevent the updater from
+    getting a chance to repair the installation.
+    """
     import base64
-    font_b64 = base64.b64encode(FONT_PATH.read_bytes()).decode("ascii")
+
+    font_face = ""
+    try:
+        font_b64 = base64.b64encode(FONT_PATH.read_bytes()).decode("ascii")
+    except OSError as exc:
+        log.warning(
+            "Loading screen font is unavailable at %s: %s; "
+            "using a system fallback",
+            FONT_PATH,
+            exc,
+        )
+    else:
+        font_face = f"""
+@font-face {{
+    font-family: 'Comfortaa';
+    src: url('data:font/truetype;base64,{font_b64}') format('truetype');
+    font-display: swap;
+}}
+"""
+
     return f"""
 <html>
 <head>
 <meta charset="UTF-8">
 <style>
-@font-face {{
-    font-family: 'Comfortaa';
-    src: url('data:font/truetype;base64,{font_b64}') format('truetype');
-}}
+{font_face}
 </style>
 </head>
 <body style="margin:0; background:#fff; display:flex; align-items:center;
-             justify-content:center; height:100vh; font-family:'Comfortaa',sans-serif">
+             justify-content:center; height:100vh;
+             font-family:'Comfortaa','Segoe UI',Arial,sans-serif">
     <div style="display:flex; flex-direction:column; align-items:center; gap:2vw">
         <div style="display:flex; align-items:center; gap:2vw">
             {DOTS_SVG}
@@ -157,9 +184,6 @@ def wait_and_load(window):
         except Exception:
             time.sleep(0.5)
 
-
-import logging
-log = logging.getLogger("update")
 
 _window = None
 
