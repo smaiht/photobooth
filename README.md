@@ -11,6 +11,7 @@ photobooth/
   python/              ← Python 3.12 embedded + pip + все пакеты
   backend/             ← FastAPI, камера, принтер, облако
   frontend/            ← HTML/CSS/JS интерфейс
+  assets/              ← шрифты, позы, frontend-медиа и карточка Яндекс.Диска
   templates/           ← шаблоны печати
   bin/                 ← ffmpeg
   EDSDK_Win/           ← Canon SDK
@@ -77,7 +78,7 @@ Hash-превью предназначено для Live Server и читает 
 подписи, `photo_choice`, количество кадров и таймеры совпадают с боевыми
 настройками. Прямой `file://` не поддерживается. Только фотографии-заглушки и
 QR-ссылка остаются демонстрационными: реальные появляются лишь после проведённой
-сессии. Они лежат отдельно от production-кода в `frontend/assets/dev`. Без
+сессии. Они лежат отдельно от production-кода в `assets/dev`. Без
 hash-части страница работает как раньше: подключается к backend и показывает его
 состояние.
 
@@ -96,7 +97,7 @@ GitHub Actions (windows-latest)
   → ставит точные версии из requirements-win.lock без bytecode cache
   → запускает полный набор тестов
   → создаёт чистую release_stage из tracked-файлов + embedded Python
-  → собирает full ZIP и app/python/bin/templates/edsdk/drivers ZIP
+  → собирает full ZIP и app/assets/python/bin/templates/edsdk/drivers ZIP
   → публикует все ZIP как GitHub Release "latest"
   → переносит изменившиеся архивы в photobooth_system/updates на Яндекс.Диске
   → последним публикует status.json
@@ -105,7 +106,7 @@ GitHub Actions (windows-latest)
 
 Постоянная ссылка: `Releases → latest → photobooth-win.zip`
 
-`app`, `python`, `bin`, `templates`, `edsdk` и `drivers` получают SHA-256
+`app`, `assets`, `python`, `bin`, `templates`, `edsdk` и `drivers` получают SHA-256
 отсортированного списка относительных путей и байтов файлов. Времена файлов в
 эту версию не входят. `full` сохраняет SHA-256 самого ZIP для совместимости со
 старыми updater-ами. `__pycache__`, `*.pyc`, локальные данные и логи в релиз не
@@ -116,8 +117,8 @@ Workflow использует GitHub Secrets `YADISK_TOKEN`, `TG_BOT_TOKEN` и
 архив. Новый архив Яндекс.Диск до трёх раз пытается забрать по GitHub-ссылке с
 паузами 2 и 4 секунды. При неудаче workflow останавливается, а прежний
 `status.json` остаётся активным. На Яндекс.Диске у архивов постоянные пути:
-`full.zip`, `app.zip`, `python.zip`, `bin.zip`, `templates.zip`, `edsdk.zip` и
-`drivers.zip`. Изменившийся архив импортируется с перезаписью, затем последним
+`full.zip`, `app.zip`, `assets.zip`, `python.zip`, `bin.zip`, `templates.zip`,
+`edsdk.zip` и `drivers.zip`. Изменившийся архив импортируется с перезаписью, затем последним
 перезаписывается `status.json` с новыми SHA-256 и размерами. Старые архивы с SHA
 в имени автоматически не удаляются: после перехода на постоянные пути их можно
 один раз удалить вручную. Более старая параллельная сборка отменяется.
@@ -126,7 +127,7 @@ Workflow использует GitHub Secrets `YADISK_TOKEN`, `TG_BOT_TOKEN` и
 
 ```
 Push в main
-  → GitHub Actions собирает full и шесть папочных архивов
+  → GitHub Actions собирает full и семь компонентных архивов
   → публикует только изменившиеся папочные версии на Яндекс.Диск
   → GitHub Actions последним обновляет status.json
   → Telegram сообщает об успешной публикации
@@ -135,7 +136,7 @@ Push в main
 Запуск app.py
   → читает status.json с Яндекс Диска
   → читает JSON mapping из .update_hash
-  → сравнивает app/python/bin/templates/edsdk/drivers по отдельности
+  → сравнивает app/assets/python/bin/templates/edsdk/drivers по отдельности
   → без валидного mapping скачивает один full ZIP
   → с mapping скачивает только изменившиеся папочные ZIP
   → показывает на экране процент, объём и скорость скачивания
@@ -164,10 +165,17 @@ GitHub Release через VPS, но для обычного push в `main` бо�
 `photobooth.log`.
 
 `.update_hash` теперь содержит один JSON object с ключами `full`, `app`,
-`python`, `bin`, `templates`, `edsdk`, `drivers`. Отсутствующий, повреждённый или
+`assets`, `python`, `bin`, `templates`, `edsdk`, `drivers`. Отсутствующий, повреждённый или
 удалённый файл означает чистую установку и приводит к full update. Старый
-64-символьный full hash, совпадающий с текущим `status.json`, автоматически
-превращается в новый mapping без повторного скачивания.
+валидный mapping с неполным набором известных компонентов догружает только
+отсутствующие компоненты; это позволяет добавить `assets` без принудительного
+full update. Старый 64-символьный full hash, совпадающий с текущим `status.json`,
+автоматически превращается в новый mapping без повторного скачивания.
+
+При первом переходе с версии updater-а, которая ещё не знает компонент
+`assets`, безопаснее удалить старый `.update_hash` перед `/restart`: старая
+версия тогда штатно установит `full`, содержащий новую корневую папку. Если
+файл уже отсутствует или повреждён, дополнительных действий не требуется.
 
 `status.json` содержит `path`, `size`, `sha256` и `hash_type` каждого архива в
 общем `artifacts`. У `full` стоит `hash_type: "zip"`, и `sha256` относится к

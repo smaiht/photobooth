@@ -22,6 +22,7 @@ def _application_text_files() -> list[Path]:
     }
     for directory, patterns in (
         (ROOT / "backend", ("*.py",)),
+        (ROOT / "assets", ("*.js", "*.md")),
         (ROOT / "frontend", ("*.js", "*.html", "*.css")),
         (ROOT / "templates", ("*.py", "*.json", "*.md")),
         (ROOT / "diagnostics", ("*.py",)),

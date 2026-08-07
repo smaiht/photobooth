@@ -31,7 +31,7 @@ DOTS_SVG = (
     '</svg>'
 )
 
-FONT_PATH = Path(__file__).parent / "frontend" / "assets" / "fonts" / "Comfortaa-VariableFont_wght.ttf"
+FONT_PATH = Path(__file__).parent / "assets" / "fonts" / "Comfortaa-VariableFont_wght.ttf"
 
 def _build_loading_html():
     import base64
@@ -188,8 +188,11 @@ _APP_DIR = Path(__file__).resolve().parent
 _HASH_FILE = str(_APP_DIR / ".update_hash")
 _UPDATE_MARKER = _APP_DIR / ".update_in_progress.json"
 
-_UPDATE_COMPONENTS = ("app", "python", "bin", "templates", "edsdk", "drivers")
+_UPDATE_COMPONENTS = (
+    "app", "assets", "python", "bin", "templates", "edsdk", "drivers",
+)
 _COMPONENT_ROOTS = {
+    "assets": "assets",
     "python": "python",
     "bin": "bin",
     "templates": "templates",
@@ -683,6 +686,7 @@ try {
         }
     } else {
         $folderMap = @{
+            assets = "assets"
             python = "python"
             bin = "bin"
             templates = "templates"
@@ -868,7 +872,8 @@ def _read_update_versions(path: Path) -> dict[str, str] | str | None:
         return None
     expected = {"full", *_UPDATE_COMPONENTS}
     if (not isinstance(payload, dict)
-            or set(payload) not in ({"full"}, expected)
+            or "full" not in payload
+            or not set(payload).issubset(expected)
             or not all(_valid_update_sha(value) for value in payload.values())):
         return None
     return payload

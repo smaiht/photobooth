@@ -1,1 +1,1 @@
-use /venv - if you want to test or run smth.
+use venv/ folder from here - if you want to test or run smth

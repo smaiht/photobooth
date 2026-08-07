@@ -52,6 +52,7 @@ class DeterministicReleaseTests(unittest.TestCase):
             files = {
                 "app.py": b"app",
                 "backend/main.py": b"backend",
+                "assets/dots.svg": b"asset",
                 "python/python.exe": b"python",
                 "bin/ffmpeg.exe": b"ffmpeg",
                 "templates/default/config.json": b"{}",
@@ -67,10 +68,15 @@ class DeterministicReleaseTests(unittest.TestCase):
 
             self.assertEqual(
                 set(metadata),
-                {"full", "app", "python", "bin", "templates", "edsdk", "drivers"},
+                {
+                    "full", "app", "assets", "python", "bin", "templates",
+                    "edsdk", "drivers",
+                },
             )
             combined = {}
-            for component in ("app", "python", "bin", "templates", "edsdk", "drivers"):
+            for component in (
+                "app", "assets", "python", "bin", "templates", "edsdk", "drivers",
+            ):
                 with zipfile.ZipFile(output / metadata[component]["file"]) as archive:
                     for name in archive.namelist():
                         self.assertNotIn(name, combined)
@@ -79,7 +85,12 @@ class DeterministicReleaseTests(unittest.TestCase):
                 full = {name: archive.read(name) for name in archive.namelist()}
             self.assertEqual(combined, full)
             self.assertIn("app.py", full)
+            self.assertIn("assets/dots.svg", full)
             self.assertIn("python/python.exe", full)
+            with zipfile.ZipFile(output / metadata["app"]["file"]) as archive:
+                self.assertNotIn("assets/dots.svg", archive.namelist())
+            with zipfile.ZipFile(output / metadata["assets"]["file"]) as archive:
+                self.assertIn("assets/dots.svg", archive.namelist())
             saved = (output / "release-metadata.json").read_text(encoding="utf-8")
             self.assertIn(metadata["python"]["sha256"], saved)
 

@@ -666,13 +666,13 @@ class FrontendPreviewTests(unittest.TestCase):
         html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
         script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         preview_script = (
-            ROOT / "frontend" / "assets" / "dev" / "preview.js"
+            ROOT / "assets" / "dev" / "preview.js"
         ).read_text(encoding="utf-8")
 
         for relative_asset in (
             'href="style.css"',
-            'src="assets/qrcode.min.js"',
-            'src="assets/dev/preview.js"',
+            'src="../assets/qrcode.min.js"',
+            'src="../assets/dev/preview.js"',
             'src="app.js"',
         ):
             with self.subTest(relative_asset=relative_asset):
@@ -712,7 +712,7 @@ class FrontendPreviewTests(unittest.TestCase):
         self.assertNotIn("data:image/svg+xml", script)
         self.assertNotIn("<svg", preview_script)
 
-        dev_assets = ROOT / "frontend" / "assets" / "dev"
+        dev_assets = ROOT / "assets" / "dev"
         expected_assets = {
             "live-view.svg",
             "template-grid.svg",

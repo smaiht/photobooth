@@ -13,8 +13,7 @@
 
     const scriptUrl = new URL(document.currentScript.src);
     const devAssetsUrl = new URL("./", scriptUrl);
-    const frontendUrl = new URL("../../", scriptUrl);
-    const projectUrl = new URL("../../../", scriptUrl);
+    const projectUrl = new URL("../../", scriptUrl);
 
     function currentRoute() {
         const hash = location.hash.slice(1).trim().toLowerCase();
@@ -28,7 +27,7 @@
     }
 
     async function discoverPoseUrls() {
-        const posesUrl = new URL("assets/poses/", frontendUrl);
+        const posesUrl = new URL("assets/poses/", projectUrl);
         try {
             const response = await fetch(posesUrl);
             if (!response.ok) return [];

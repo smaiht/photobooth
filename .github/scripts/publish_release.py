@@ -20,6 +20,7 @@ OPERATION_ATTEMPTS = 300
 ARTIFACT_FILES = {
     "full": "photobooth-win.zip",
     "app": "photobooth-app.zip",
+    "assets": "photobooth-assets.zip",
     "python": "photobooth-python.zip",
     "bin": "photobooth-bin.zip",
     "templates": "photobooth-templates.zip",

@@ -289,6 +289,7 @@ class DiskUpdateDownloadTests(unittest.TestCase):
             versions = {
                 "full": "0" * 64,
                 "app": "1" * 64,
+                "assets": "7" * 64,
                 "python": "2" * 64,
                 "bin": "3" * 64,
                 "templates": "4" * 64,
@@ -463,6 +464,37 @@ class UpdateExtractionTests(unittest.TestCase):
 
             self.assertFalse(stage.exists())
 
+    def test_prepares_assets_as_an_independent_folder_component(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            archive = root / "assets.zip"
+            stage = root / ".update_stage.4242"
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("assets/dots.svg", "<svg/>")
+
+            extracted = app._prepare_update_stage(
+                [("assets", archive)], stage,
+            )
+
+            self.assertEqual(extracted, 1)
+            self.assertEqual(
+                (stage / "assets" / "dots.svg").read_text(), "<svg/>",
+            )
+
+    def test_rejects_assets_inside_app_component(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            archive = root / "app.zip"
+            stage = root / ".update_stage.4242"
+            with zipfile.ZipFile(archive, "w") as zf:
+                zf.writestr("app.py", "updated")
+                zf.writestr("assets/dots.svg", "not an app file")
+
+            with self.assertRaisesRegex(ValueError, "overlaps component folder"):
+                app._prepare_update_stage([("app", archive)], stage)
+
+            self.assertFalse(stage.exists())
+
 
 class UpdateVersionStateTests(unittest.TestCase):
     @staticmethod
@@ -480,6 +512,7 @@ class UpdateVersionStateTests(unittest.TestCase):
         versions = {
             "full": "0" * 64,
             "app": "1" * 64,
+            "assets": "7" * 64,
             "python": "2" * 64,
             "bin": "3" * 64,
             "templates": "4" * 64,
@@ -497,6 +530,7 @@ class UpdateVersionStateTests(unittest.TestCase):
         versions = {
             "full": "0" * 64,
             "app": "1" * 64,
+            "assets": "7" * 64,
             "python": "2" * 64,
             "bin": "3" * 64,
             "templates": "4" * 64,
@@ -510,10 +544,57 @@ class UpdateVersionStateTests(unittest.TestCase):
         self.assertEqual(selected, ["full"])
         self.assertEqual(target, versions)
 
+    def test_old_mapping_without_assets_selects_only_assets(self):
+        target = {
+            "full": "0" * 64,
+            "app": "1" * 64,
+            "assets": "7" * 64,
+            "python": "2" * 64,
+            "bin": "3" * 64,
+            "templates": "4" * 64,
+            "edsdk": "5" * 64,
+            "drivers": "6" * 64,
+        }
+        installed = {
+            name: version
+            for name, version in target.items()
+            if name != "assets"
+        }
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / ".update_hash"
+            app._write_update_versions(path, installed)
+            parsed = app._read_update_versions(path)
+
+        selected, versions = app._select_update_archives(
+            self._artifacts(**target), parsed,
+        )
+
+        self.assertEqual(selected, ["assets"])
+        self.assertEqual(versions, target)
+
+    def test_empty_corrupt_or_unknown_mapping_uses_full_fallback(self):
+        valid_sha = "a" * 64
+        invalid_payloads = (
+            "",
+            "{}",
+            "not json",
+            json.dumps({"full": "bad"}),
+            json.dumps({"full": valid_sha, "unknown": valid_sha}),
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / ".update_hash"
+            for payload in invalid_payloads:
+                with self.subTest(payload=payload):
+                    path.write_text(payload, encoding="utf-8")
+                    self.assertIsNone(app._read_update_versions(path))
+
     def test_selects_only_changed_folder(self):
         target = {
             "full": "0" * 64,
             "app": "1" * 64,
+            "assets": "7" * 64,
             "python": "2" * 64,
             "bin": "3" * 64,
             "templates": "4" * 64,
@@ -535,6 +616,7 @@ class UpdateVersionStateTests(unittest.TestCase):
         target = {
             "full": "0" * 64,
             "app": "1" * 64,
+            "assets": "7" * 64,
             "python": "2" * 64,
             "bin": "3" * 64,
             "templates": "4" * 64,

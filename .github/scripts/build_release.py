@@ -14,6 +14,7 @@ from pathlib import Path
 COPY_CHUNK_SIZE = 1024 * 1024
 
 COMPONENT_FOLDERS = {
+    "assets": "assets",
     "python": "python",
     "bin": "bin",
     "templates": "templates",
@@ -24,6 +25,7 @@ COMPONENT_FOLDERS = {
 ARCHIVE_NAMES = {
     "full": "photobooth-win.zip",
     "app": "photobooth-app.zip",
+    "assets": "photobooth-assets.zip",
     "python": "photobooth-python.zip",
     "bin": "photobooth-bin.zip",
     "templates": "photobooth-templates.zip",

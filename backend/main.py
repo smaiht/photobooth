@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 
 from .config import (
+    ASSETS_DIR,
     EDSDK_DLL,
     FRONTEND_DIR,
     PHOTOS_DIR,
@@ -881,7 +882,7 @@ async def live_view():
 
 # --- Routes ---
 app.mount("/photos", StaticFiles(directory=str(PHOTOS_DIR)), name="photos")
-app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")), name="assets")
+app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
 
 FRONTEND_FILE_HEADERS = {"Cache-Control": "no-store"}
 
@@ -907,7 +908,7 @@ async def script():
 @app.get("/api/config")
 async def get_config():
     response = dict(CONFIG)
-    poses_dir = FRONTEND_DIR / "assets" / "poses"
+    poses_dir = ASSETS_DIR / "poses"
     image_extensions = {".jpg", ".jpeg", ".png", ".webp"}
 
     def natural_key(path: Path):
