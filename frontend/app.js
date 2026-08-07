@@ -61,9 +61,51 @@ const sessionLinks = new Map();
 let poseExampleUrls = [];
 let poseExamplesPerSide = 0;
 let poseImagePreloaders = [];
+let idlePoseGroups = [];
+let shootingPosePool = [];
+const shootingPoseSelections = new Map();
 let renderedPoseSignature = "";
 
 const PHOTO_PREVIEW_CYCLE_MS = 500;
+const IDLE_POSE_GROUP_COUNT = 3;
+
+function shuffledCopy(items) {
+    const shuffled = [...items];
+    for (let index = shuffled.length - 1; index > 0; index--) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+        [shuffled[index], shuffled[swapIndex]] = [
+            shuffled[swapIndex],
+            shuffled[index],
+        ];
+    }
+    return shuffled;
+}
+
+function resetIdlePoseGroups() {
+    idlePoseGroups = Array.from(
+        { length: IDLE_POSE_GROUP_COUNT },
+        () => [],
+    );
+    shuffledCopy(poseExampleUrls).forEach((url, index) => {
+        idlePoseGroups[index % IDLE_POSE_GROUP_COUNT].push(url);
+    });
+}
+
+function resetShootingPosePool() {
+    shootingPosePool = shuffledCopy(poseExampleUrls);
+    shootingPoseSelections.clear();
+    renderedPoseSignature = "";
+}
+
+function takeShootingPoseSelection(photoIndex, count) {
+    if (shootingPoseSelections.has(photoIndex)) {
+        return shootingPoseSelections.get(photoIndex);
+    }
+
+    const selection = shootingPosePool.splice(0, count);
+    shootingPoseSelections.set(photoIndex, selection);
+    return selection;
+}
 
 function renderIdlePoseBackdrop() {
     if (!idlePoseField) return;
@@ -74,15 +116,23 @@ function renderIdlePoseBackdrop() {
         return;
     }
 
-    const sequenceLength = 12;
     const sequenceCopies = 6;
+    const centralRowStart = Math.max(
+        0,
+        Math.floor((idlePoseRows.length - IDLE_POSE_GROUP_COUNT) / 2),
+    );
     idlePoseRows.forEach((row, rowIndex) => {
+        const groupIndex = (
+            (rowIndex - centralRowStart) % IDLE_POSE_GROUP_COUNT
+            + IDLE_POSE_GROUP_COUNT
+        ) % IDLE_POSE_GROUP_COUNT;
+        const group = idlePoseGroups[groupIndex]?.length
+            ? idlePoseGroups[groupIndex]
+            : poseExampleUrls;
         const configuredOffset = Math.floor(Number(row.dataset.poseOffset)) || 0;
-        const startIndex = (
-            configuredOffset + rowIndex * sequenceLength
-        ) % poseExampleUrls.length;
-        const urls = Array.from({ length: sequenceLength }, (_, index) => (
-            poseExampleUrls[(startIndex + index) % poseExampleUrls.length]
+        const startIndex = configuredOffset % group.length;
+        const urls = Array.from({ length: group.length }, (_, index) => (
+            group[(startIndex + index) % group.length]
         ));
         const track = document.createElement("div");
         track.className = "idle-pose-track";
@@ -162,25 +212,24 @@ function renderPoseExamples(photoIndex = 0) {
     const imagesPerShot = poseExamplesPerSide * 2;
     if (!imagesPerShot || !poseExampleUrls.length) return;
 
-    const startIndex = (safeIndex * imagesPerShot) % poseExampleUrls.length;
-    const signature = `${startIndex}:${poseExamplesPerSide}:${poseExampleUrls.length}`;
+    const selectedUrls = takeShootingPoseSelection(safeIndex, imagesPerShot);
+    const signature = `${safeIndex}:${poseExamplesPerSide}:${selectedUrls.join("\n")}`;
     if (signature === renderedPoseSignature) return;
     renderedPoseSignature = signature;
 
     Object.entries(poseRails).forEach(([side, rail]) => {
         const sideOffset = side === "left" ? 0 : poseExamplesPerSide;
-        const cards = Array.from({ length: poseExamplesPerSide }, (_, index) => {
-            const imageIndex = (
-                startIndex + sideOffset + index
-            ) % poseExampleUrls.length;
-            const card = document.createElement("img");
-            card.className = "pose-card";
-            card.src = poseExampleUrls[imageIndex];
-            card.alt = `Пример позы ${imageIndex + 1}`;
-            card.draggable = false;
-            card.decoding = "async";
-            return card;
-        });
+        const cards = selectedUrls
+            .slice(sideOffset, sideOffset + poseExamplesPerSide)
+            .map((url, index) => {
+                const card = document.createElement("img");
+                card.className = "pose-card";
+                card.src = url;
+                card.alt = `Пример позы ${sideOffset + index + 1}`;
+                card.draggable = false;
+                card.decoding = "async";
+                return card;
+            });
         rail.replaceChildren(...cards);
     });
 }
@@ -195,6 +244,8 @@ function configurePoseExamples(cfg) {
         image.src = url;
         return image;
     });
+    resetIdlePoseGroups();
+    resetShootingPosePool();
     const configuredCount = Math.floor(Number(cfg.pose_examples_per_side));
     poseExamplesPerSide = Number.isFinite(configuredCount)
         ? Math.max(0, configuredCount)
@@ -210,7 +261,6 @@ function configurePoseExamples(cfg) {
         rail.hidden = hidden;
         if (hidden) rail.replaceChildren();
     });
-    renderedPoseSignature = "";
     if (!hidden) renderPoseExamples(currentShootingPhotoIndex);
     renderIdlePoseBackdrop();
 }
@@ -321,6 +371,7 @@ function syncSessionContext(state, data = {}) {
     if (sessionId) {
         if (sessionId !== currentSessionId) {
             currentSessionId = sessionId;
+            resetShootingPosePool();
             sessionLinks.clear();
             displayedQrUrl = "";
             dismissedQrSessionId = "";
@@ -433,7 +484,12 @@ function switchScreen(state, data = {}) {
 }
 
 function _doSwitch(state, data) {
+    const previousState = currentState;
     currentState = state;
+    if (state === "idle" && previousState !== "idle") {
+        resetIdlePoseGroups();
+        renderIdlePoseBackdrop();
+    }
     Object.values(screens).forEach((s) => (s.hidden = true));
 
     const map = {

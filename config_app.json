@@ -19,7 +19,7 @@
     "live_view_margin_bottom_percent": 7,
     "_live_view_margin_comment": "Safe black margins for monitor areas hidden by the physical frame. The bottom margin also holds the look-at-lens hint; 12% leaves it readable on a Full HD screen. Adjust independently from 0 to 25.",
     "pose_examples_per_side": 3,
-    "_pose_examples_per_side_comment": "Number of pose examples in each side margin. Files are auto-discovered in frontend/assets/poses and used in filename order; every captured frame advances by twice this number. Square files are recommended, but any aspect ratio is preserved. Set 0 to hide them.",
+    "_pose_examples_per_side_comment": "Number of pose examples in each side margin. Files are auto-discovered in frontend/assets/poses. Every session shuffles the pool, and each captured frame consumes twice this number without repeats. Any aspect ratio is preserved. Set 0 to hide them.",
     "live_view_warmup": 0.5,
     "_live_view_warmup_comment": "Seconds to wait after EVF start before showing live view. Camera flushes stale buffered frames during this time.",
     "show_qr": true,
