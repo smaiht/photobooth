@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import urllib.parse
@@ -50,6 +51,14 @@ def _valid_sha256(value) -> bool:
     )
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def load_artifacts(dist_dir: Path, metadata_path: Path) -> dict[str, dict]:
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     if not isinstance(metadata, dict) or set(metadata) != set(ARTIFACT_FILES):
@@ -63,6 +72,7 @@ def load_artifacts(dist_dir: Path, metadata_path: Path) -> dict[str, dict]:
 
         path = (dist_dir / filename).resolve()
         size = path.stat().st_size
+        archive_sha256 = file_sha256(path)
         expected_hash_type = "zip" if name == "full" else "folder"
         if (
             size < 1
@@ -70,6 +80,7 @@ def load_artifacts(dist_dir: Path, metadata_path: Path) -> dict[str, dict]:
             or entry.get("size") != size
             or entry.get("hash_type") != expected_hash_type
             or not _valid_sha256(entry.get("sha256"))
+            or (name == "full" and entry.get("sha256") != archive_sha256)
         ):
             raise ValueError(f"{name} ZIP does not match release metadata")
 
@@ -77,6 +88,7 @@ def load_artifacts(dist_dir: Path, metadata_path: Path) -> dict[str, dict]:
             "name": name,
             "size": size,
             "sha256": entry["sha256"],
+            "archive_sha256": archive_sha256,
             "hash_type": expected_hash_type,
         }
         log(
@@ -123,6 +135,32 @@ async def wait_operation(
     raise TimeoutError(f"Yandex.Disk operation timed out: {label}")
 
 
+async def resource_metadata(
+    session: aiohttp.ClientSession,
+    path: str,
+) -> dict[str, int | str] | None:
+    async with session.get(
+        f"{API}/resources",
+        params={"path": path, "fields": "size,sha256"},
+    ) as response:
+        if response.status == 404:
+            return None
+        if response.status != 200:
+            raise RuntimeError(
+                f"cannot inspect {path}: {await response_error(response)}"
+            )
+        metadata = await response.json()
+    size = metadata.get("size")
+    sha256 = metadata.get("sha256")
+    if type(size) is not int or size < 0:
+        raise RuntimeError(f"resource has an invalid size: {path}")
+    if isinstance(sha256, str):
+        sha256 = sha256.lower()
+    if not _valid_sha256(sha256):
+        raise RuntimeError(f"resource has an invalid SHA-256: {path}")
+    return {"size": size, "sha256": sha256}
+
+
 async def resource_size(
     session: aiohttp.ClientSession,
     path: str,
@@ -142,6 +180,19 @@ async def resource_size(
     if type(size) is not int or size < 0:
         raise RuntimeError(f"resource has an invalid size: {path}")
     return size
+
+
+async def resource_matches(
+    session: aiohttp.ClientSession,
+    path: str,
+    expected_size: int,
+    expected_sha256: str,
+) -> bool:
+    metadata = await resource_metadata(session, path)
+    return metadata == {
+        "size": expected_size,
+        "sha256": expected_sha256,
+    }
 
 
 async def resource_size_matches(
@@ -206,13 +257,13 @@ async def import_release_url(
     source_url: str,
     destination: str,
     expected_size: int,
+    expected_sha256: str,
 ) -> None:
     async with session.post(
         f"{API}/resources/upload",
         params={
             "url": source_url,
             "path": destination,
-            "overwrite": "true",
             "disable_redirects": "false",
         },
     ) as response:
@@ -225,12 +276,185 @@ async def import_release_url(
         raise RuntimeError("server-side import did not return operation URL")
 
     await wait_operation(session, href, destination)
-    actual_size = await resource_size(session, destination)
-    if actual_size != expected_size:
+    metadata = await resource_metadata(session, destination)
+    if metadata is None:
+        raise RuntimeError(f"imported artifact is missing: {destination}")
+    if metadata["size"] != expected_size:
         raise RuntimeError(
             f"imported artifact has the wrong size: {destination}; "
-            f"expected {expected_size}, got {actual_size}"
+            f"expected {expected_size}, got {metadata['size']}"
         )
+    if metadata["sha256"] != expected_sha256:
+        raise RuntimeError(
+            f"imported artifact has the wrong SHA-256: {destination}; "
+            f"expected {expected_sha256}, got {metadata['sha256']}"
+        )
+
+
+async def delete_resource(
+    session: aiohttp.ClientSession,
+    path: str,
+) -> None:
+    async with session.delete(
+        f"{API}/resources",
+        params={
+            "path": path,
+            "permanently": "true",
+            "force_async": "true",
+        },
+    ) as response:
+        if response.status in (204, 404):
+            return
+        if response.status != 202:
+            raise RuntimeError(
+                f"cannot delete {path}: {await response_error(response)}"
+            )
+        href = (await response.json()).get("href")
+    if not href:
+        raise RuntimeError(f"delete operation URL is missing for {path}")
+    await wait_operation(session, href, f"delete {path}")
+
+
+async def cleanup_resources(
+    session: aiohttp.ClientSession,
+    paths,
+) -> None:
+    for path in paths:
+        try:
+            await delete_resource(session, path)
+        except Exception as exc:
+            log(f"Temporary artifact cleanup failed for {path}: {exc}")
+
+
+async def move_resource(
+    session: aiohttp.ClientSession,
+    source: str,
+    destination: str,
+    expected_size: int,
+    expected_sha256: str,
+) -> None:
+    operation_status = None
+    async with session.post(
+        f"{API}/resources/move",
+        params={
+            "from": source,
+            "path": destination,
+            "overwrite": "true",
+            "force_async": "true",
+        },
+    ) as response:
+        operation_status = response.status
+        if response.status not in (201, 202):
+            raise RuntimeError(
+                f"cannot promote {source}: {await response_error(response)}"
+            )
+        href = (
+            (await response.json()).get("href")
+            if response.status == 202 else None
+        )
+    if operation_status == 202:
+        if not href:
+            raise RuntimeError(f"move operation URL is missing for {source}")
+        await wait_operation(session, href, f"move {source} to {destination}")
+
+    if not await resource_matches(
+        session, destination, expected_size, expected_sha256,
+    ):
+        raise RuntimeError(f"promoted artifact does not match: {destination}")
+
+
+def staging_path(
+    root: str,
+    artifact_name: str,
+    publish_nonce: str,
+    attempt: int,
+) -> str:
+    return (
+        f"{root}/artifacts/.incoming-{artifact_name}-"
+        f"{publish_nonce}-{attempt}.zip"
+    )
+
+
+async def stage_artifact(
+    session: aiohttp.ClientSession,
+    artifact: dict,
+    root: str,
+    source_base_url: str,
+    publish_nonce: str,
+) -> str:
+    name = artifact["name"]
+    for attempt in range(1, IMPORT_ATTEMPTS + 1):
+        destination = staging_path(root, name, publish_nonce, attempt)
+        log(
+            f"{name}: importing release archive "
+            f"(attempt {attempt}/{IMPORT_ATTEMPTS})"
+        )
+        source_url = release_asset_source_url(
+            source_base_url,
+            ARTIFACT_FILES[name],
+            artifact["archive_sha256"],
+            publish_nonce,
+            attempt,
+        )
+        try:
+            await import_release_url(
+                session,
+                source_url,
+                destination,
+                artifact["size"],
+                artifact["archive_sha256"],
+            )
+            log(f"{name}: temporary archive verified")
+            return destination
+        except Exception as exc:
+            await cleanup_resources(session, [destination])
+            if attempt == IMPORT_ATTEMPTS:
+                raise
+            delay = IMPORT_BACKOFF_SECONDS[attempt - 1]
+            log(
+                f"{name}: import attempt {attempt}/{IMPORT_ATTEMPTS} "
+                f"failed: {exc}; retrying in {delay}s"
+            )
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+async def replace_artifacts(
+    session: aiohttp.ClientSession,
+    artifacts: list[dict],
+    root: str,
+    source_base_url: str,
+    publish_nonce: str,
+) -> None:
+    staged: dict[str, str] = {}
+    pending_cleanup: set[str] = set()
+    try:
+        # Finish and verify every import before changing any public archive.
+        for artifact in artifacts:
+            temporary_path = await stage_artifact(
+                session,
+                artifact,
+                root,
+                source_base_url,
+                publish_nonce,
+            )
+            staged[artifact["name"]] = temporary_path
+            pending_cleanup.add(temporary_path)
+
+        for artifact in artifacts:
+            name = artifact["name"]
+            temporary_path = staged[name]
+            await move_resource(
+                session,
+                temporary_path,
+                f"{root}/artifacts/{name}.zip",
+                artifact["size"],
+                artifact["archive_sha256"],
+            )
+            pending_cleanup.discard(temporary_path)
+            log(f"{name}: published to {root}/artifacts/{name}.zip")
+    finally:
+        await cleanup_resources(session, sorted(pending_cleanup))
 
 
 async def upload_bytes(
@@ -326,6 +550,7 @@ async def publish(args) -> None:
     updated_at = datetime.now(timezone.utc).isoformat()
     publish_nonce = uuid.uuid4().hex
     changed: list[str] = []
+    changed_artifacts: list[dict] = []
     status_artifacts: dict[str, dict] = {}
 
     headers = {"Authorization": f"OAuth {token}"}
@@ -354,32 +579,7 @@ async def publish(args) -> None:
                 continue
 
             changed.append(name)
-            for attempt in range(1, IMPORT_ATTEMPTS + 1):
-                source_url = release_asset_source_url(
-                    args.source_base_url,
-                    ARTIFACT_FILES[name],
-                    artifact["sha256"],
-                    publish_nonce,
-                    attempt,
-                )
-                try:
-                    await import_release_url(
-                        api_session,
-                        source_url,
-                        artifact_path,
-                        artifact["size"],
-                    )
-                    break
-                except Exception as exc:
-                    if attempt == IMPORT_ATTEMPTS:
-                        raise
-                    delay = IMPORT_BACKOFF_SECONDS[attempt - 1]
-                    log(
-                        f"{name}: import attempt {attempt}/{IMPORT_ATTEMPTS} "
-                        f"failed: {exc}; retrying in {delay}s"
-                    )
-                    await asyncio.sleep(delay)
-
+            changed_artifacts.append(artifact)
             status_artifacts[name] = {
                 "path": artifact_path,
                 "size": artifact["size"],
@@ -387,6 +587,14 @@ async def publish(args) -> None:
                 "hash_type": artifact["hash_type"],
                 "updated_at": updated_at,
             }
+
+        await replace_artifacts(
+            api_session,
+            changed_artifacts,
+            root,
+            args.source_base_url,
+            publish_nonce,
+        )
 
         status = {
             "schema_version": 1,

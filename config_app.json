@@ -10,7 +10,7 @@
     "done_screen_seconds": 8,
     "_done_screen_seconds_comment": "Seconds to keep the final/done screen before returning to idle.",
     "default_template": "grid",
-    "template_pack": "kvas01aug26",
+    "template_pack": "park08082026",
     "mirror_live_view": true,
     "live_view_fit": "contain",
     "_live_view_fit_options": ["contain", "cover"],
