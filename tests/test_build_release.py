@@ -113,7 +113,7 @@ class DeterministicReleaseTests(unittest.TestCase):
         previous = {
             "artifacts": {
                 "python": {
-                    "path": "/updates/artifacts/python-old.zip",
+                    "path": "/updates/artifacts/python.zip",
                     "size": 123,
                     "sha256": "a" * 64,
                     "updated_at": "earlier",
@@ -121,13 +121,35 @@ class DeterministicReleaseTests(unittest.TestCase):
             },
         }
 
-        record = publish_release.reusable_record(previous, artifact)
+        record = publish_release.reusable_record(
+            previous, artifact, "/updates/artifacts/python.zip",
+        )
 
         self.assertEqual(record["path"], previous["artifacts"]["python"]["path"])
         self.assertEqual(record["sha256"], "a" * 64)
         self.assertEqual(record["hash_type"], "folder")
         record["size"] = 999
         self.assertEqual(previous["artifacts"]["python"]["size"], 123)
+
+    def test_does_not_reuse_old_hashed_artifact_path(self):
+        artifact = {
+            "name": "python",
+            "sha256": "a" * 64,
+            "hash_type": "folder",
+        }
+        previous = {
+            "artifacts": {
+                "python": {
+                    "path": "/updates/artifacts/python-aaaaaaaaaaaaaaaa.zip",
+                    "size": 123,
+                    "sha256": "a" * 64,
+                },
+            },
+        }
+
+        self.assertIsNone(publish_release.reusable_record(
+            previous, artifact, "/updates/artifacts/python.zip",
+        ))
 
 
 if __name__ == "__main__":

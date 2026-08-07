@@ -176,15 +176,12 @@ async def import_release_url(
     destination: str,
     expected_size: int,
 ) -> None:
-    if await resource_size_matches(session, destination, expected_size):
-        log(f"Artifact already present: {destination}")
-        return
-
     async with session.post(
         f"{API}/resources/upload",
         params={
             "url": source_url,
             "path": destination,
+            "overwrite": "true",
             "disable_redirects": "false",
         },
     ) as response:
@@ -227,7 +224,11 @@ async def upload_bytes(
             )
 
 
-def reusable_record(previous_status: dict | None, artifact: dict) -> dict | None:
+def reusable_record(
+    previous_status: dict | None,
+    artifact: dict,
+    expected_path: str | None = None,
+) -> dict | None:
     if not isinstance(previous_status, dict):
         return None
     previous_artifacts = previous_status.get("artifacts")
@@ -243,6 +244,7 @@ def reusable_record(previous_status: dict | None, artifact: dict) -> dict | None
         not isinstance(path, str)
         or not path.startswith("/")
         or not path.endswith(".zip")
+        or (expected_path is not None and path != expected_path)
         or not isinstance(size, int)
         or size < 1
     ):
@@ -304,7 +306,10 @@ async def publish(args) -> None:
         )
 
         for name, artifact in artifacts.items():
-            previous = reusable_record(previous_status, artifact)
+            artifact_path = f"{root}/artifacts/{name}.zip"
+            previous = reusable_record(
+                previous_status, artifact, artifact_path,
+            )
             if previous and await resource_size_matches(
                 api_session, previous["path"], previous["size"],
             ):
@@ -313,9 +318,6 @@ async def publish(args) -> None:
                 continue
 
             changed.append(name)
-            artifact_path = (
-                f"{root}/artifacts/{name}-{artifact['sha256'][:16]}.zip"
-            )
             source_url = (
                 f"{args.source_base_url.rstrip('/')}/{ARTIFACT_FILES[name]}"
             )
