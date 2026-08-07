@@ -83,7 +83,21 @@ jobs:
           name: Latest Build
           body: "Auto-built from main branch"
           prerelease: true
-          files: dist/*.zip
+          preserve_order: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/photobooth-win.zip
+            dist/photobooth-app.zip
+            dist/photobooth-assets.zip
+            dist/photobooth-python.zip
+            dist/photobooth-bin.zip
+            dist/photobooth-templates.zip
+            dist/photobooth-edsdk.zip
+            dist/photobooth-drivers.zip
+
+      - name: Let GitHub release assets settle
+        shell: pwsh
+        run: Start-Sleep -Seconds 1
 
       - name: Publish release to Yandex.Disk
         id: publish

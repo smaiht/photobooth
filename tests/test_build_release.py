@@ -3,6 +3,7 @@ import hashlib
 import os
 import sys
 import unittest
+import urllib.parse
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -161,6 +162,53 @@ class DeterministicReleaseTests(unittest.TestCase):
         self.assertIsNone(publish_release.reusable_record(
             previous, artifact, "/updates/artifacts/python.zip",
         ))
+
+    def test_remote_import_url_is_cache_busted_for_every_attempt(self):
+        sha256 = "a" * 64
+        first = publish_release.release_asset_source_url(
+            "https://github.test/releases/download/latest",
+            "photobooth-win.zip",
+            sha256,
+            "publish-123",
+            1,
+        )
+        second = publish_release.release_asset_source_url(
+            "https://github.test/releases/download/latest",
+            "photobooth-win.zip",
+            sha256,
+            "publish-123",
+            2,
+        )
+
+        self.assertNotEqual(first, second)
+        first_url = urllib.parse.urlsplit(first)
+        first_query = urllib.parse.parse_qs(first_url.query)
+        second_query = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(second).query,
+        )
+        self.assertEqual(
+            first_url.path,
+            "/releases/download/latest/photobooth-win.zip",
+        )
+        self.assertEqual(first_query["photobooth_sha256"], [sha256])
+        self.assertEqual(first_query["publish_nonce"], ["publish-123"])
+        self.assertEqual(first_query["attempt"], ["1"])
+        self.assertEqual(second_query["attempt"], ["2"])
+
+    def test_github_upload_order_matches_yandex_import_order(self):
+        workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(
+            encoding="utf-8",
+        )
+        filenames = list(publish_release.ARTIFACT_FILES.values())
+        positions = [
+            workflow.index(f"dist/{filename}")
+            for filename in filenames
+        ]
+
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("preserve_order: true", workflow)
+        self.assertIn("Start-Sleep -Seconds 1", workflow)
+        self.assertNotIn("files: dist/*.zip", workflow)
 
 
 if __name__ == "__main__":

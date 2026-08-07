@@ -6,6 +6,8 @@ import argparse
 import asyncio
 import json
 import os
+import urllib.parse
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -121,23 +123,51 @@ async def wait_operation(
     raise TimeoutError(f"Yandex.Disk operation timed out: {label}")
 
 
-async def resource_size_matches(
+async def resource_size(
     session: aiohttp.ClientSession,
     path: str,
-    expected_size: int,
-) -> bool:
+) -> int | None:
     async with session.get(
         f"{API}/resources",
         params={"path": path, "fields": "size"},
     ) as response:
         if response.status == 404:
-            return False
+            return None
         if response.status != 200:
             raise RuntimeError(
                 f"cannot inspect {path}: {await response_error(response)}"
             )
         metadata = await response.json()
-    return metadata.get("size") == expected_size
+    size = metadata.get("size")
+    if type(size) is not int or size < 0:
+        raise RuntimeError(f"resource has an invalid size: {path}")
+    return size
+
+
+async def resource_size_matches(
+    session: aiohttp.ClientSession,
+    path: str,
+    expected_size: int,
+) -> bool:
+    return await resource_size(session, path) == expected_size
+
+
+def release_asset_source_url(
+    source_base_url: str,
+    filename: str,
+    sha256: str,
+    publish_nonce: str,
+    attempt: int,
+) -> str:
+    """Return a fresh URL so Yandex never reuses an older remote import."""
+    asset_url = f"{source_base_url.rstrip('/')}/{filename}"
+    separator = "&" if "?" in asset_url else "?"
+    query = urllib.parse.urlencode({
+        "photobooth_sha256": sha256,
+        "publish_nonce": publish_nonce,
+        "attempt": attempt,
+    })
+    return f"{asset_url}{separator}{query}"
 
 
 async def read_json_resource(
@@ -195,8 +225,12 @@ async def import_release_url(
         raise RuntimeError("server-side import did not return operation URL")
 
     await wait_operation(session, href, destination)
-    if not await resource_size_matches(session, destination, expected_size):
-        raise RuntimeError(f"imported artifact has the wrong size: {destination}")
+    actual_size = await resource_size(session, destination)
+    if actual_size != expected_size:
+        raise RuntimeError(
+            f"imported artifact has the wrong size: {destination}; "
+            f"expected {expected_size}, got {actual_size}"
+        )
 
 
 async def upload_bytes(
@@ -290,6 +324,7 @@ async def publish(args) -> None:
     root = normalize_folder(args.folder)
     status_path = f"{root}/status.json"
     updated_at = datetime.now(timezone.utc).isoformat()
+    publish_nonce = uuid.uuid4().hex
     changed: list[str] = []
     status_artifacts: dict[str, dict] = {}
 
@@ -319,10 +354,14 @@ async def publish(args) -> None:
                 continue
 
             changed.append(name)
-            source_url = (
-                f"{args.source_base_url.rstrip('/')}/{ARTIFACT_FILES[name]}"
-            )
             for attempt in range(1, IMPORT_ATTEMPTS + 1):
+                source_url = release_asset_source_url(
+                    args.source_base_url,
+                    ARTIFACT_FILES[name],
+                    artifact["sha256"],
+                    publish_nonce,
+                    attempt,
+                )
                 try:
                     await import_release_url(
                         api_session,
@@ -331,11 +370,14 @@ async def publish(args) -> None:
                         artifact["size"],
                     )
                     break
-                except Exception:
+                except Exception as exc:
                     if attempt == IMPORT_ATTEMPTS:
                         raise
                     delay = IMPORT_BACKOFF_SECONDS[attempt - 1]
-                    log(f"{name}: import failed; retrying in {delay}s")
+                    log(
+                        f"{name}: import attempt {attempt}/{IMPORT_ATTEMPTS} "
+                        f"failed: {exc}; retrying in {delay}s"
+                    )
                     await asyncio.sleep(delay)
 
             status_artifacts[name] = {

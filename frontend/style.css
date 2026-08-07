@@ -113,19 +113,19 @@ html, body {
 }
 
 .idle-pose-row.move-left .idle-pose-track {
-    animation: idle-track-left 28s linear infinite;
+    animation: idle-track-left 60s linear infinite;
 }
 
 .idle-pose-row.move-right .idle-pose-track {
-    animation: idle-track-right 31s linear infinite;
+    animation: idle-track-right 60s linear infinite;
 }
 
 .idle-pose-row.move-left-slow .idle-pose-track {
-    animation: idle-track-left 37s linear infinite;
+    animation: idle-track-left 60s linear infinite;
 }
 
 .idle-pose-row.move-right-slow .idle-pose-track {
-    animation: idle-track-right 41s linear infinite;
+    animation: idle-track-right 60s linear infinite;
 }
 
 @keyframes idle-track-left {
