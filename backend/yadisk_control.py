@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -29,6 +30,13 @@ MAX_LOG_ARTIFACT_SIZE = 2 * 1024 * 1024
 MAX_CONFIG_EXPORT_SIZE = 512 * 1024
 MAX_PRINT_ARTIFACT_SIZE = 20 * 1024 * 1024
 COMMAND_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+# An administrator notice is not a reply to a command, so it carries its own
+# name pattern and a hard cap on how many may wait in to_vps.
+MAX_BOOTH_NOTICE_TEXT = 3500
+MAX_BOOTH_NOTICES = 20
+BOOTH_NOTICE_KIND_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+BOOTH_NOTICE_NAME_RE = re.compile(
+    r"^notice_[0-9]{8}T[0-9]{6}Z_[a-f0-9]{32}\.json$")
 PRINT_ARTIFACT_NAME_RE = re.compile(
     r"^[0-9]{1,20}_[0-9]{8}T[0-9]{6}Z_[a-f0-9]{32}"
     r"\.[a-z0-9]{1,10}$")
@@ -272,6 +280,85 @@ async def upload_config_export(command_id: str, payload: bytes) -> str:
     if not await _connect():
         raise RuntimeError("Yandex.Disk control is unavailable")
     remote_path = f"{_root}/configs/{command_id}.txt"
+    await _upload_bytes(payload, remote_path)
+    return remote_path
+
+
+async def _prune_booth_notices(keep: int = MAX_BOOTH_NOTICES) -> None:
+    """Drop the oldest unread notices so they cannot accumulate forever.
+
+    A notice is addressed to the administrator rather than to a command, so a
+    VPS that does not yet understand ``booth_notice`` simply ignores the file.
+    Pruning keeps that situation bounded instead of filling ``to_vps``.
+    """
+    names: list[str] = []
+    offset = 0
+    while True:
+        async with _session.get(
+            f"{API}/resources",
+            params={
+                "path": f"{_root}/to_vps",
+                "limit": PAGE_SIZE,
+                "offset": offset,
+                "fields": "_embedded.items.name,_embedded.items.type",
+            },
+        ) as response:
+            if response.status != 200:
+                return
+            items = (await response.json()).get("_embedded", {}).get("items", [])
+        for item in items:
+            name = str(item.get("name", ""))
+            if item.get("type") == "file" and BOOTH_NOTICE_NAME_RE.fullmatch(name):
+                names.append(name)
+        if len(items) < PAGE_SIZE:
+            break
+        offset += PAGE_SIZE
+
+    # Names embed a UTC timestamp, so lexical order is chronological.
+    for name in sorted(names)[:max(len(names) - keep + 1, 0)]:
+        async with _session.delete(
+            f"{API}/resources",
+            params={"path": f"{_root}/to_vps/{name}", "permanently": "true"},
+        ) as response:
+            if response.status not in (202, 204, 404):
+                log.warning(
+                    "Control: could not prune notice %s: %s", name, response.status)
+
+
+async def publish_booth_notice(kind: str, title: str, text: str) -> str:
+    """Publish an unsolicited administrator notice into ``control/to_vps``.
+
+    The booth holds no Telegram/VK credentials, so the VPS delivers this to the
+    administrator. There is no ``reply_target``: the message is not an answer to
+    any command, so the VPS uses its own configured administrator address.
+    """
+    if not isinstance(kind, str) or not BOOTH_NOTICE_KIND_RE.fullmatch(kind):
+        raise ValueError("invalid notice kind")
+    body = str(text or "")
+    if len(body) > MAX_BOOTH_NOTICE_TEXT:
+        body = body[:MAX_BOOTH_NOTICE_TEXT - 3] + "..."
+    if not await _connect():
+        raise RuntimeError("Yandex.Disk control is unavailable")
+    created_at = datetime.now(timezone.utc)
+    notice = {
+        "schema_version": SCHEMA_VERSION,
+        "message_type": "booth_notice",
+        "notice_id": uuid.uuid4().hex,
+        "kind": kind,
+        "title": str(title or ""),
+        "text": body,
+        "created_at": created_at.isoformat(),
+    }
+    payload = json.dumps(
+        notice, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    remote_path = (
+        f"{_root}/to_vps/notice_"
+        f"{created_at.strftime('%Y%m%dT%H%M%SZ')}_{notice['notice_id']}.json"
+    )
+    try:
+        await _prune_booth_notices()
+    except Exception as exc:
+        log.warning("Control: notice pruning failed: %s", exc)
     await _upload_bytes(payload, remote_path)
     return remote_path
 

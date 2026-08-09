@@ -921,6 +921,114 @@ class CameraConfigValueTests(unittest.TestCase):
         self.assertEqual(self.config_path.read_bytes(), before)
 
 
+class BoothNoticeTests(unittest.IsolatedAsyncioTestCase):
+    """Unsolicited administrator notices published into to_vps."""
+
+    async def test_notice_is_typed_and_named_for_chronological_pruning(self):
+        uploaded = {}
+
+        async def upload(payload, path):
+            uploaded["payload"] = json.loads(payload)
+            uploaded["path"] = path
+
+        with patch.object(yadisk_control, "_root", "/control"), \
+             patch("backend.yadisk_control._connect",
+                   AsyncMock(return_value=True)), \
+             patch("backend.yadisk_control._prune_booth_notices",
+                   AsyncMock()), \
+             patch("backend.yadisk_control._upload_bytes", side_effect=upload):
+            path = await yadisk_control.publish_booth_notice(
+                "camera_config", "Конфигурация камеры", "ISO=100")
+
+        self.assertTrue(path.startswith("/control/to_vps/notice_"))
+        self.assertEqual(uploaded["path"], path)
+        notice = uploaded["payload"]
+        self.assertEqual(notice["schema_version"], yadisk_control.SCHEMA_VERSION)
+        self.assertEqual(notice["message_type"], "booth_notice")
+        self.assertEqual(notice["kind"], "camera_config")
+        self.assertEqual(notice["text"], "ISO=100")
+        # A notice answers no command, so it must not claim a reply_target.
+        self.assertNotIn("reply_target", notice)
+        self.assertTrue(yadisk_control.BOOTH_NOTICE_NAME_RE.fullmatch(
+            path.rsplit("/", 1)[-1]))
+
+    async def test_oversized_text_is_truncated_instead_of_rejected(self):
+        uploaded = {}
+
+        async def upload(payload, _path):
+            uploaded["payload"] = json.loads(payload)
+
+        with patch.object(yadisk_control, "_root", "/control"), \
+             patch("backend.yadisk_control._connect",
+                   AsyncMock(return_value=True)), \
+             patch("backend.yadisk_control._prune_booth_notices",
+                   AsyncMock()), \
+             patch("backend.yadisk_control._upload_bytes", side_effect=upload):
+            await yadisk_control.publish_booth_notice(
+                "camera_config", "t", "x" * 9000)
+
+        text = uploaded["payload"]["text"]
+        self.assertEqual(len(text), yadisk_control.MAX_BOOTH_NOTICE_TEXT)
+        self.assertTrue(text.endswith("..."))
+
+    async def test_invalid_kind_is_rejected_before_any_network_call(self):
+        with patch("backend.yadisk_control._connect",
+                   AsyncMock()) as connect, \
+             patch("backend.yadisk_control._upload_bytes",
+                   AsyncMock()) as upload:
+            for kind in ("", "Camera Config", "camera-config", "_x", "x" * 41):
+                with self.subTest(kind=kind), self.assertRaises(ValueError):
+                    await yadisk_control.publish_booth_notice(kind, "t", "b")
+        connect.assert_not_awaited()
+        upload.assert_not_awaited()
+
+    async def test_pruning_removes_only_oldest_notice_files(self):
+        names = [
+            f"notice_20260809T1000{index:02d}Z_{'a' * 32}.json"
+            for index in range(4)
+        ]
+        items = [{"name": name, "type": "file"} for name in names]
+        # Session manifests and command responses must never be touched.
+        items.append({"name": "session_x.json", "type": "file"})
+        items.append({"name": f"response_{'b' * 32}.json", "type": "file"})
+        deleted = []
+
+        class Response:
+            status = 200
+
+            async def json(self):
+                return {"_embedded": {"items": items}}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return False
+
+        class Deleted(Response):
+            status = 204
+
+        def get(_url, params=None):
+            return Response()
+
+        def delete(_url, params=None):
+            deleted.append(params["path"])
+            return Deleted()
+
+        session = MagicMock()
+        session.get = get
+        session.delete = delete
+
+        with patch.object(yadisk_control, "_root", "/control"), \
+             patch.object(yadisk_control, "_session", session):
+            await yadisk_control._prune_booth_notices(keep=3)
+
+        self.assertEqual(deleted, [
+            f"/control/to_vps/{names[0]}",
+            f"/control/to_vps/{names[1]}",
+        ])
+
+
 class EventConfigEncodingTests(unittest.TestCase):
     def test_event_config_is_always_read_as_utf8(self):
         payload = json.dumps(

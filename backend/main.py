@@ -206,6 +206,46 @@ def _build_config_export(root: Path = ROOT_DIR) -> bytes:
         output.extend(b"\n")
     return bytes(output)
 
+def _format_camera_config_report(report: dict) -> list[str]:
+    """Render a camera config report as short Telegram/VK friendly lines."""
+    if not isinstance(report, dict):
+        return []
+    lines: list[str] = []
+    camera_entries = report.get("camera") or []
+    if camera_entries:
+        lines.append("Камера (прочитано с камеры):")
+        for entry in camera_entries:
+            actual = entry.get("actual", "unavailable")
+            if not entry.get("available"):
+                mark = "?"
+            elif not entry.get("verifiable"):
+                mark = "•"
+            elif entry.get("matches"):
+                mark = "✓"
+            else:
+                mark = "✗"
+            line = f"  {mark} {entry.get('label')}={actual}"
+            if entry.get("available") and entry.get("verifiable") \
+                    and not entry.get("matches"):
+                line += f" (в конфиге {entry.get('requested')!r})"
+            lines.append(line)
+    host_entries = report.get("host") or []
+    if host_entries:
+        lines.append("Настройки приложения:")
+        lines.append("  " + ", ".join(
+            f"{entry.get('label')}={entry.get('value')}"
+            for entry in host_entries))
+    mismatched = report.get("mismatched") or []
+    unavailable = report.get("unavailable") or []
+    if mismatched:
+        lines.append("НЕ ПРИМЕНИЛОСЬ: " + ", ".join(mismatched))
+    if unavailable:
+        lines.append("Камера не сообщила: " + ", ".join(unavailable))
+    if not mismatched and not unavailable and camera_entries:
+        lines.append("Все параметры применены камерой без расхождений.")
+    return lines
+
+
 # --- Services ---
 video_recorder = VideoRecorder()
 _event_loop = None
@@ -415,6 +455,46 @@ def on_camera_connected():
                 await set_state("idle")
 
         asyncio.run_coroutine_threadsafe(show_ready(), _event_loop)
+        asyncio.run_coroutine_threadsafe(
+            _report_camera_config_to_admin(), _event_loop)
+
+
+def _camera_config_report_text() -> str | None:
+    """Report describing what the camera actually applied after setup."""
+    snapshot_method = getattr(camera, "status_snapshot", None) if camera else None
+    if not snapshot_method:
+        return None
+    snapshot = snapshot_method()
+    lines = _format_camera_config_report(snapshot.get("config_report"))
+    if not lines:
+        return None
+    header = ["Камера настроена и готова."]
+    model = snapshot.get("product_name") or snapshot.get("model")
+    if model:
+        header.append(f"Камера: {model}")
+    if snapshot.get("lens"):
+        header.append(f"Объектив: {snapshot['lens']}")
+    return "\n".join(header + lines)
+
+
+async def _report_camera_config_to_admin() -> None:
+    """Push the applied camera config to the administrator.
+
+    Runs on every successful camera setup, both at launch and after a USB
+    reconnect, so the administrator always sees the configuration the camera
+    is actually running with.
+    """
+    text = await asyncio.to_thread(_camera_config_report_text)
+    if not text:
+        return
+    try:
+        await yadisk_control.publish_booth_notice(
+            "camera_config", "Конфигурация камеры", text)
+    except Exception as exc:
+        # The booth must stay usable even when the notice cannot be delivered.
+        log.warning("Could not publish camera config report: %s", exc)
+        return
+    log.info("Camera config report published for the administrator")
 
 
 def _countdown_timing() -> tuple[float, int, int]:
@@ -1399,6 +1479,15 @@ async def handle_disk_command(command: dict) -> dict:
                     "Last camera disconnect: "
                     f"{snapshot['last_disconnect_reason']} at "
                     f"{snapshot.get('last_disconnect_at') or 'unknown'}")
+            config_lines = _format_camera_config_report(
+                snapshot.get("config_report"))
+            if config_lines:
+                status_lines.append(
+                    "Applied config"
+                    + (f" (прочитано {snapshot.get('config_report_at')})"
+                       if snapshot.get("config_report_at") else "")
+                    + ":")
+                status_lines.extend(config_lines)
         status_lines.extend([
             f"Event: {event}",
             f"Upload queue: {yadisk_cloud.pending_count()}",

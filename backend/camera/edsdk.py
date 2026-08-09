@@ -671,72 +671,86 @@ class Camera:
         self._configure_ae_mode(cfg)
 
         # Shutter type - required for flash sync on EOS R8. Avoid electronic/silent shutter.
-        shutter_type = SHUTTER_TYPE_MAP.get(cfg.get("shutter_type", "electronic_first_curtain"))
+        shutter_type = self._mapped_config_value(
+            cfg, "shutter_type", SHUTTER_TYPE_MAP, "electronic_first_curtain")
         if shutter_type is not None:
             self._set_prop_u32(kEdsPropID_ShutterType, shutter_type)
 
         # Image quality
-        q = IMAGE_QUALITY_MAP.get(cfg.get("image_quality", "jpeg_large_fine"), EdsImageQuality_LJF)
-        self._set_prop_u32(kEdsPropID_ImageQuality, q)
+        q = self._mapped_config_value(
+            cfg, "image_quality", IMAGE_QUALITY_MAP, "jpeg_large_fine")
+        if q is not None:
+            self._set_prop_u32(kEdsPropID_ImageQuality, q)
 
         # AE Mode - set on camera dial manually (SDK can't override the physical dial)
         # ae = AE_MODE_MAP.get(cfg.get("ae_mode", "manual"), 0x03)
         # self._set_prop_u32(kEdsPropID_AEMode, ae)
 
-        # Aperture
-        av_val = AV_MAP.get(str(cfg.get("av", "5.6")))
-        if av_val is not None:
-            self._set_prop_u32(kEdsPropID_Av, av_val)
-
-        # Shutter speed
-        tv_val = TV_MAP.get(str(cfg.get("tv", "1/125")))
-        if tv_val is not None:
-            self._set_prop_u32(kEdsPropID_Tv, tv_val)
-
-        # ISO
-        iso_raw = cfg.get("iso", 400)
-        iso_val = ISO_MAP.get(iso_raw if isinstance(iso_raw, str) else int(iso_raw))
-        if iso_val is not None:
-            self._set_prop_u32(kEdsPropID_ISOSpeed, iso_val)
+        # Aperture / shutter speed / ISO. config_camera.json keeps the human
+        # readable value; an unsupported value is logged instead of silently
+        # leaving the camera on whatever the body had before.
+        for label, prop_id, resolver, default in (
+            ("av", kEdsPropID_Av, resolve_av, "5.6"),
+            ("tv", kEdsPropID_Tv, resolve_tv, "1/125"),
+            ("iso", kEdsPropID_ISOSpeed, resolve_iso, 400),
+        ):
+            raw = cfg.get(label, default)
+            resolved = resolver(raw)
+            if resolved is None:
+                log.error(
+                    "Unsupported %s=%r in config_camera.json; camera keeps its "
+                    "current value", label, raw,
+                )
+                continue
+            self._set_prop_u32(prop_id, resolved[1])
 
         # White balance
-        wb = WHITE_BALANCE_MAP.get(cfg.get("white_balance", "auto"), 0)
-        self._set_prop_u32(kEdsPropID_WhiteBalance, wb)
+        wb = self._mapped_config_value(
+            cfg, "white_balance", WHITE_BALANCE_MAP, "auto")
+        if wb is not None:
+            self._set_prop_u32(kEdsPropID_WhiteBalance, wb)
 
         # Color temperature (only if white_balance = color_temp)
         if cfg.get("white_balance") == "color_temp":
-            self._set_prop_u32(kEdsPropID_ColorTemperature, cfg.get("color_temperature", 5200))
+            self._set_prop_u32(
+                kEdsPropID_ColorTemperature,
+                int(self._numeric_config_value(cfg, "color_temperature", 5200)),
+            )
 
         # Picture style
-        ps = PICTURE_STYLE_MAP.get(cfg.get("picture_style", "standard"), 0x0081)
-        self._set_prop_u32(kEdsPropID_PictureStyle, ps)
+        ps = self._mapped_config_value(
+            cfg, "picture_style", PICTURE_STYLE_MAP, "standard")
+        if ps is not None:
+            self._set_prop_u32(kEdsPropID_PictureStyle, ps)
 
         # Color space
-        cs = COLOR_SPACE_MAP.get(cfg.get("color_space", "srgb"), 1)
-        self._set_prop_u32(kEdsPropID_ColorSpace, cs)
+        cs = self._mapped_config_value(cfg, "color_space", COLOR_SPACE_MAP, "srgb")
+        if cs is not None:
+            self._set_prop_u32(kEdsPropID_ColorSpace, cs)
 
         # Drive mode
         self._set_prop_u32(kEdsPropID_DriveMode, kEdsDriveMode_Single)
 
         # AF operation mode
-        af_mode = AF_MODE_MAP.get(cfg.get("af_mode", "servo"))
+        af_mode = self._mapped_config_value(cfg, "af_mode", AF_MODE_MAP, "servo")
         if af_mode is not None:
             self._set_prop_u32(kEdsPropID_AFMode, af_mode)
 
         # EVF AF mode (face tracking, zone, etc.)
-        af_mode = EVF_AF_MODE_MAP.get(
-            cfg.get("evf_af_mode", "face_tracking"),
-            EVF_AF_MODE_MAP["face_tracking"],
-        )
-        self._set_prop_u32(kEdsPropID_Evf_AFMode, af_mode)
+        evf_af_mode = self._mapped_config_value(
+            cfg, "evf_af_mode", EVF_AF_MODE_MAP, "face_tracking")
+        if evf_af_mode is not None:
+            self._set_prop_u32(kEdsPropID_Evf_AFMode, evf_af_mode)
 
         # Subject detection
-        subject = AF_TRACKING_OBJECT_MAP.get(cfg.get("subject_tracking", "people"))
+        subject = self._mapped_config_value(
+            cfg, "subject_tracking", AF_TRACKING_OBJECT_MAP, "people")
         if subject is not None:
             self._set_prop_u32(kEdsPropID_AFTrackingObject, subject)
 
         # Live view exposure simulation. "disable" keeps preview usable in dark flash setups.
-        evf_view_type = EVF_VIEW_TYPE_MAP.get(cfg.get("evf_view_type", "disable"))
+        evf_view_type = self._mapped_config_value(
+            cfg, "evf_view_type", EVF_VIEW_TYPE_MAP, "disable")
         if evf_view_type is not None:
             self._set_prop_u32(kEdsPropID_Evf_ViewType, evf_view_type)
 
@@ -935,47 +949,183 @@ class Camera:
                 return str(name)
         return f"0x{value:X}"
 
-    def _log_applied_config(self):
-        """Read back important camera values so config/apply issues are visible in logs."""
-        iso_raw = self._cfg.get("iso", 400)
-        iso_key = iso_raw if isinstance(iso_raw, str) else int(iso_raw)
-        checks = [
-            ("AE", kEdsPropID_AEMode, AE_MODE_MAP,
-             AE_MODE_MAP.get(self._cfg.get("ae_mode", "manual"))),
-            ("Tv", kEdsPropID_Tv, TV_MAP,
-             TV_MAP.get(str(self._cfg.get("tv", "1/125")))),
-            ("Av", kEdsPropID_Av, AV_MAP,
-             AV_MAP.get(str(self._cfg.get("av", "5.6")))),
-            ("ISO", kEdsPropID_ISOSpeed, ISO_MAP, ISO_MAP.get(iso_key)),
-            ("AFMode", kEdsPropID_AFMode, AF_MODE_MAP,
-             AF_MODE_MAP.get(self._cfg.get("af_mode", "servo"))),
-            ("EvfAFMode", kEdsPropID_Evf_AFMode, EVF_AF_MODE_MAP,
-             EVF_AF_MODE_MAP.get(self._cfg.get("evf_af_mode", "face_tracking"))),
-            ("Subject", kEdsPropID_AFTrackingObject, AF_TRACKING_OBJECT_MAP,
-             AF_TRACKING_OBJECT_MAP.get(self._cfg.get("subject_tracking", "people"))),
-            ("EyeDetect", kEdsPropID_AFEyeDetect, ENABLE_DISABLE_MAP,
-             1 if self._cfg.get("eye_detection_af", True) else 0),
-            ("ContinuousAF", kEdsPropID_ContinuousAfMode, ENABLE_DISABLE_MAP,
-             1 if self._cfg.get("continuous_af", True) else 0),
-            ("EvfViewType", kEdsPropID_Evf_ViewType, EVF_VIEW_TYPE_MAP,
-             EVF_VIEW_TYPE_MAP.get(self._cfg.get("evf_view_type", "disable"))),
-            ("ShutterType", kEdsPropID_ShutterType, SHUTTER_TYPE_MAP,
-             SHUTTER_TYPE_MAP.get(self._cfg.get(
-                 "shutter_type", "electronic_first_curtain"))),
+    @staticmethod
+    def _mapped_config_value(cfg: dict, field: str, mapping: dict, default):
+        """EDSDK code for a named config value.
+
+        A value the map does not know is reported and skipped. Silently
+        substituting the default would make the camera disagree with
+        config_camera.json without any trace in the log.
+        """
+        raw = cfg.get(field, default)
+        code = mapping.get(raw)
+        if code is None and isinstance(raw, str):
+            code = mapping.get(raw.strip().casefold())
+        if code is None:
+            log.error(
+                "Unsupported %s=%r in config_camera.json; camera keeps its "
+                "current value", field, raw,
+            )
+        return code
+
+    @staticmethod
+    def _numeric_config_value(cfg: dict, field: str, default: float) -> float:
+        """Numeric config value checked against its documented range.
+
+        Telegram updates are validated before they are stored, but a manually
+        edited or older config file can still hold an out-of-range number.
+        """
+        raw = cfg.get(field, default)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            log.error(
+                "Invalid %s=%r in config_camera.json; using %r",
+                field, raw, default)
+            return float(default)
+        if numeric_range_error(field, value) is not None:
+            minimum, maximum, _ = CAMERA_NUMERIC_RANGES[field]
+            clamped = min(max(value, minimum), maximum)
+            log.error(
+                "Out-of-range %s=%r in config_camera.json; using %r "
+                "(allowed %s..%s)", field, raw, clamped, minimum, maximum)
+            return clamped
+        return value
+
+    # Every camera-side field that can be read back, in log/report order.
+    _CONFIG_READBACK = (
+        ("AE", kEdsPropID_AEMode, "ae_mode", "manual", AE_MODE_MAP),
+        ("ShutterType", kEdsPropID_ShutterType, "shutter_type",
+         "electronic_first_curtain", SHUTTER_TYPE_MAP),
+        ("ImageQuality", kEdsPropID_ImageQuality, "image_quality",
+         "jpeg_large_fine", IMAGE_QUALITY_MAP),
+        ("Av", kEdsPropID_Av, "av", "5.6", AV_MAP),
+        ("Tv", kEdsPropID_Tv, "tv", "1/125", TV_MAP),
+        ("ISO", kEdsPropID_ISOSpeed, "iso", 400, ISO_MAP),
+        ("WhiteBalance", kEdsPropID_WhiteBalance, "white_balance",
+         "auto", WHITE_BALANCE_MAP),
+        ("ColorTemperature", kEdsPropID_ColorTemperature, "color_temperature",
+         5200, None),
+        ("PictureStyle", kEdsPropID_PictureStyle, "picture_style",
+         "standard", PICTURE_STYLE_MAP),
+        ("ColorSpace", kEdsPropID_ColorSpace, "color_space", "srgb",
+         COLOR_SPACE_MAP),
+        ("DriveMode", kEdsPropID_DriveMode, "drive_mode", "single",
+         DRIVE_MODE_MAP),
+        ("AFMode", kEdsPropID_AFMode, "af_mode", "servo", AF_MODE_MAP),
+        ("EvfAFMode", kEdsPropID_Evf_AFMode, "evf_af_mode", "face_tracking",
+         EVF_AF_MODE_MAP),
+        ("Subject", kEdsPropID_AFTrackingObject, "subject_tracking", "people",
+         AF_TRACKING_OBJECT_MAP),
+        ("EyeDetect", kEdsPropID_AFEyeDetect, "eye_detection_af", True,
+         ENABLE_DISABLE_MAP),
+        ("ContinuousAF", kEdsPropID_ContinuousAfMode, "continuous_af", True,
+         ENABLE_DISABLE_MAP),
+        ("EvfViewType", kEdsPropID_Evf_ViewType, "evf_view_type", "disable",
+         EVF_VIEW_TYPE_MAP),
+        ("AutoPowerOff", kEdsPropID_AutoPowerOffSetting,
+         "disable_auto_power_off", True, None),
+    )
+
+    # These never reach EDSDK, so they are reported straight from the config.
+    _HOST_ONLY_FIELDS = (
+        ("FocusBeforeCapture", "focus_before_capture", False),
+        ("FocusDelay", "focus_delay", 0.4),
+        ("MinFreeDisk", "min_free_disk_gib", MIN_FREE_DISK_GIB),
+        ("KeepCameraScreen", "evf_keep_camera_screen", False),
+        ("LockCameraUI", "lock_camera_ui", True),
+        ("LockModeDial", "lock_mode_dial", True),
+    )
+
+    def _requested_code(self, field: str, default, mapping: dict | None):
+        """EDSDK code the config asks for, or None when it cannot be mapped."""
+        resolver = CAMERA_VALUE_RESOLVERS.get(field)
+        raw = self._cfg.get(field, default)
+        if resolver is not None:
+            return resolved_code(resolver, raw)
+        if field == "disable_auto_power_off":
+            return kEdsAutoPowerOff_Disable if bool(raw) else None
+        if field in CAMERA_NUMERIC_RANGES:
+            return int(self._numeric_config_value(self._cfg, field, default))
+        if mapping is ENABLE_DISABLE_MAP:
+            return 1 if bool(raw) else 0
+        if mapping is None:
+            return None
+        code = mapping.get(raw)
+        if code is None and isinstance(raw, str):
+            code = mapping.get(raw.strip().casefold())
+        return code
+
+    def _format_readback(self, label: str, value: int | None,
+                         mapping: dict | None) -> str:
+        if value is None:
+            return "unavailable"
+        if label == "AutoPowerOff":
+            return self._format_auto_power_off(value)
+        if mapping is None:
+            return str(value)
+        return self._name_from_map(mapping, value)
+
+    def build_config_report(self) -> dict:
+        """Camera-side settings read back from the body plus host-only fields.
+
+        The startup log, the remote status command and the report pushed to the
+        administrator all use this, so the three can never disagree.
+        """
+        entries: list[dict] = []
+        for label, prop_id, field, default, mapping in self._CONFIG_READBACK:
+            if (field == "color_temperature"
+                    and self._cfg.get("white_balance") != "color_temp"):
+                continue
+            actual = self._get_prop_u32(prop_id)
+            requested = self._requested_code(field, default, mapping)
+            entries.append({
+                "label": label,
+                "field": field,
+                "requested": self._cfg.get(field, default),
+                "actual": self._format_readback(label, actual, mapping),
+                "available": actual is not None,
+                "verifiable": requested is not None,
+                "matches": (actual is not None and requested is not None
+                            and actual == requested),
+            })
+        host = [
+            {"label": label, "field": field,
+             "value": self._cfg.get(field, default)}
+            for label, field, default in self._HOST_ONLY_FIELDS
         ]
-        applied = []
-        for label, prop_id, mapping, requested in checks:
-            value = self._get_prop_u32(prop_id)
-            if value is not None:
-                applied.append(f"{label}={self._name_from_map(mapping, value)}")
-                if requested is not None and value != requested:
-                    log.warning(
-                        "Camera config mismatch %s: requested=%s actual=%s",
-                        label,
-                        self._name_from_map(mapping, requested),
-                        self._name_from_map(mapping, value),
-                    )
-        log.info("Camera applied config: " + ", ".join(applied))
+        return {
+            "camera": entries,
+            "host": host,
+            "mismatched": [entry["label"] for entry in entries
+                           if entry["verifiable"] and entry["available"]
+                           and not entry["matches"]],
+            "unavailable": [entry["label"] for entry in entries
+                            if not entry["available"]],
+        }
+
+    def _log_applied_config(self):
+        """Read back every camera value so config/apply issues reach the log."""
+        report = self.build_config_report()
+        for entry in report["camera"]:
+            if not entry["available"]:
+                log.warning(
+                    "Camera config unavailable %s: requested=%r; "
+                    "camera did not report this property",
+                    entry["label"], entry["requested"])
+            elif entry["verifiable"] and not entry["matches"]:
+                log.warning(
+                    "Camera config mismatch %s: requested=%r actual=%s",
+                    entry["label"], entry["requested"], entry["actual"])
+        log.info("Camera applied config: " + ", ".join(
+            f"{entry['label']}={entry['actual']}"
+            for entry in report["camera"]))
+        log.info("Camera host config: " + ", ".join(
+            f"{entry['label']}={entry['value']!r}" for entry in report["host"]))
+        self._update_health(
+            config_report=report,
+            config_report_at=self._utc_now(),
+        )
 
     @staticmethod
     def _format_battery_level(value: int | None) -> str:
@@ -1037,12 +1187,9 @@ class Camera:
         return f"{value / (1024 ** 3):.2f} GiB"
 
     def _minimum_free_disk_bytes(self) -> int:
-        try:
-            minimum_gib = float(
-                self._cfg.get("min_free_disk_gib", MIN_FREE_DISK_GIB))
-        except (TypeError, ValueError):
-            minimum_gib = MIN_FREE_DISK_GIB
-        return int(max(minimum_gib, 0.25) * (1024 ** 3))
+        minimum_gib = self._numeric_config_value(
+            self._cfg, "min_free_disk_gib", MIN_FREE_DISK_GIB)
+        return int(minimum_gib * (1024 ** 3))
 
     def _update_health(self, **values) -> None:
         with self._health_lock:
@@ -1255,7 +1402,7 @@ class Camera:
     def _do_capture(self):
         t = self._photo_tag
         focus_before = bool(self._cfg.get("focus_before_capture", False))
-        focus_delay = float(self._cfg.get("focus_delay", 0.4))
+        focus_delay = self._numeric_config_value(self._cfg, "focus_delay", 0.4)
 
         if focus_before:
             log.info(f"{t} Capture: half-press AF for {focus_delay:.1f}s")

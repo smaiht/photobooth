@@ -3,6 +3,13 @@ import json
 import math
 import re
 
+from .camera.constants import (
+    CAMERA_NUMERIC_RANGES,
+    CAMERA_VALUE_MAPS,
+    CAMERA_VALUE_RESOLVERS,
+    numeric_range_error,
+)
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 ASSETS_DIR = ROOT_DIR / "assets"
@@ -58,8 +65,24 @@ def _coerce_camera_scalar(raw_value: str, prototype):
         f"тип поля {type(prototype).__name__} нельзя менять через Telegram")
 
 
+def _available_text(values) -> str:
+    return json.dumps(list(values), ensure_ascii=False, separators=(",", ":"))
+
+
 def _coerce_camera_value(field: str, raw_value: str, config: dict):
     current = config[field]
+    resolver = CAMERA_VALUE_RESOLVERS.get(field)
+    if resolver is not None:
+        # Av/Tv/ISO are validated against the EDSDK maps, not against a plain
+        # JSON list, so Telegram can never store a value the camera code would
+        # silently skip. "/iso 100" arrives as a string and becomes int 100;
+        # "/iso auto" stays the string "auto".
+        resolved = resolver(raw_value.strip())
+        if resolved is None:
+            raise ValueError(
+                "недопустимое значение; доступно: "
+                f"{_available_text(CAMERA_VALUE_MAPS[field])}")
+        return resolved[0]
     options = config.get(f"_{field}_options")
     if isinstance(options, list) and options:
         for option in options:
@@ -72,9 +95,15 @@ def _coerce_camera_value(field: str, raw_value: str, config: dict):
                     return option
             elif type(candidate) is type(option) and candidate == option:
                 return option
-        available = json.dumps(options, ensure_ascii=False, separators=(",", ":"))
-        raise ValueError(f"недопустимое значение; доступно: {available}")
-    return _coerce_camera_scalar(raw_value, current)
+        raise ValueError(
+            f"недопустимое значение; доступно: {_available_text(options)}")
+    value = _coerce_camera_scalar(raw_value, current)
+    # A number that merely parses is not automatically usable: focus_delay is
+    # awaited by the camera worker and min_free_disk_gib gates every session.
+    range_error = numeric_range_error(field, value)
+    if range_error is not None:
+        raise ValueError(range_error)
+    return value
 
 
 def update_camera_config_field(
@@ -88,6 +117,14 @@ def update_camera_config_field(
         raise ValueError("служебные поля камеры нельзя изменять")
     if not CAMERA_CONFIG_FIELD_RE.fullmatch(normalized_field):
         raise ValueError("некорректное имя параметра камеры")
+    # Telegram always delivers a string, but a VPS build may serialise a JSON
+    # number. Accept both instead of rejecting "/iso 200" on a type detail.
+    if isinstance(raw_value, bool):
+        raw_value = "true" if raw_value else "false"
+    elif isinstance(raw_value, int):
+        raw_value = str(raw_value)
+    elif isinstance(raw_value, float):
+        raw_value = repr(raw_value)
     if not isinstance(raw_value, str):
         raise ValueError("значение параметра должно быть строкой")
 

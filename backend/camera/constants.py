@@ -381,6 +381,10 @@ COLOR_SPACE_MAP = {
 # --- Drive Mode ---
 kEdsDriveMode_Single = 0x00000000
 
+DRIVE_MODE_MAP = {
+    "single": kEdsDriveMode_Single,
+}
+
 # --- Av (Aperture) values - EDSDK uses hex codes ---
 AV_MAP = {
     "1.0": 0x08, "1.1": 0x0B, "1.2": 0x0D, "1.4": 0x10,
@@ -418,3 +422,150 @@ ISO_MAP = {
     4000: 0x73, 5000: 0x75, 6400: 0x78,
     "auto": 0x00,
 }
+
+# --- Config value resolvers ---
+# config_camera.json stores human readable Av/Tv/ISO values and Telegram always
+# delivers them as raw strings ("/iso 100", "/av 4", "/tv 1/200").  Each
+# resolver returns the canonical config key together with the EDSDK code, so a
+# value that no map knows is reported instead of silently skipped.
+
+
+def _numeric_value(key) -> float | None:
+    """Parse "16", "5.6", "1/200" or a JSON number into a float."""
+    if isinstance(key, bool) or key is None:
+        return None
+    if isinstance(key, (int, float)):
+        return float(key)
+    text = str(key).strip()
+    if not text:
+        return None
+    numerator, separator, denominator = text.partition("/")
+    try:
+        if separator:
+            divisor = float(denominator)
+            if divisor == 0.0:
+                return None
+            return float(numerator) / divisor
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _numeric_index(mapping: dict) -> dict:
+    """Index a string-keyed map by numeric value so "4" also finds "4.0"."""
+    index: dict[float, tuple] = {}
+    for key, code in mapping.items():
+        value = _numeric_value(key)
+        if value is not None:
+            index.setdefault(round(value, 6), (key, code))
+    return index
+
+
+_AV_NUMERIC_INDEX = _numeric_index(AV_MAP)
+_TV_NUMERIC_INDEX = _numeric_index(TV_MAP)
+
+
+def _resolve_numeric(mapping: dict, index: dict, value) -> tuple | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    text = str(value).strip()
+    if text in mapping:
+        return text, mapping[text]
+    numeric = _numeric_value(text)
+    if numeric is None:
+        return None
+    return index.get(round(numeric, 6))
+
+
+def resolve_av(value) -> tuple[str, int] | None:
+    """("5.6", 0x30) for 5.6, "5.6", "f/5.6" or "F5.6"; None when unsupported."""
+    if isinstance(value, str):
+        text = value.strip()
+        if text[:1] in ("f", "F"):
+            text = text[1:].lstrip("/").strip()
+        value = text
+    return _resolve_numeric(AV_MAP, _AV_NUMERIC_INDEX, value)
+
+
+def resolve_tv(value) -> tuple[str, int] | None:
+    """("1/200", 0x75) for "1/200" or 0.005; None when unsupported."""
+    return _resolve_numeric(TV_MAP, _TV_NUMERIC_INDEX, value)
+
+
+def resolve_iso(value) -> tuple[int | str, int] | None:
+    """(100, 0x48) for 100 or "100"; ("auto", 0x00) for "auto"/"AUTO"."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            key = int(text, 10)
+        except ValueError:
+            numeric = _numeric_value(text)
+            if numeric is not None and numeric.is_integer():
+                key = int(numeric)
+            else:
+                key = text.casefold()
+    elif isinstance(value, int):
+        key = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            return None
+        key = int(value)
+    else:
+        return None
+    code = ISO_MAP.get(key)
+    return None if code is None else (key, code)
+
+
+# Fields whose allowed values live in the maps above instead of in a plain
+# JSON list. config_camera.json still lists them in "_<field>_options" so the
+# admin sees every value, and the tests keep both sides identical.
+CAMERA_VALUE_RESOLVERS = {
+    "av": resolve_av,
+    "tv": resolve_tv,
+    "iso": resolve_iso,
+}
+
+CAMERA_VALUE_MAPS = {
+    "av": AV_MAP,
+    "tv": TV_MAP,
+    "iso": ISO_MAP,
+}
+
+# Numeric fields have no EDSDK map, so their bounds live here as
+# (minimum, maximum, step). config_camera.json mirrors them in
+# "_<field>_range" and a test keeps both sides identical.
+#   color_temperature - Canon accepts 2500..10000 K in 100 K increments.
+#   focus_delay       - blocks the camera worker while half-press AF is held.
+#   min_free_disk_gib - session guard; the camera code also clamps it.
+CAMERA_NUMERIC_RANGES = {
+    "color_temperature": (2500, 10000, 100),
+    "focus_delay": (0.0, 5.0, None),
+    "min_free_disk_gib": (0.25, 512.0, None),
+}
+
+
+def numeric_range_error(field: str, value) -> str | None:
+    """Message describing why a numeric config value is out of range."""
+    bounds = CAMERA_NUMERIC_RANGES.get(field)
+    if bounds is None:
+        return None
+    minimum, maximum, step = bounds
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "ожидается число"
+    if not minimum <= value <= maximum:
+        return f"допустимый диапазон: {minimum}..{maximum}"
+    if step:
+        offset = round(value - minimum, 6)
+        if offset % step:
+            return f"допустимый шаг: {step} (от {minimum})"
+    return None
+
+
+def resolved_code(resolver, value) -> int | None:
+    """EDSDK code for a config value, or None when the value is unsupported."""
+    resolved = resolver(value)
+    return None if resolved is None else resolved[1]

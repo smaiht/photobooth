@@ -17,13 +17,32 @@
     "_shutter_type_comment": "For flash on EOS R8 use electronic_first_curtain. Do not use electronic/silent shutter with flash.",
 
     "av": "16",
-    "_av_comment": "Aperture. f/5.6 is easier for focus and needs less flash power. Try f/8 later if groups are not fully in focus.",
+    "_av_comment": "Aperture. f/5.6 is easier for focus and needs less flash power. Try f/8 later if groups are not fully in focus. The lens limits which of these values the camera really offers.",
+    "_av_options": [
+        "1.0", "1.1", "1.2", "1.4", "1.6", "1.8", "2.0", "2.2",
+        "2.5", "2.8", "3.2", "3.5", "4.0", "4.5", "5.0", "5.6",
+        "6.3", "7.1", "8.0", "9.0", "10", "11", "13", "14",
+        "16", "18", "20", "22"
+    ],
 
     "tv": "1/200",
-    "_tv_comment": "Shutter speed. 1/160 is a safe flash sync start for EOS R8 + MS300V. Avoid 1/250+ with this non-HSS studio flash.",
+    "_tv_comment": "Shutter speed. 1/160 is a safe flash sync start for EOS R8 + MS300V. Avoid 1/250+ with this non-HSS studio flash. Values below 1 second are whole seconds.",
+    "_tv_options": [
+        "30", "25", "20", "15", "13", "10", "8", "6",
+        "5", "4", "3.2", "2.5", "2", "1.6", "1.3", "1",
+        "0.8", "0.6", "0.5", "0.4", "1/3", "1/4", "1/5", "1/6",
+        "1/8", "1/10", "1/13", "1/15", "1/20", "1/25", "1/30", "1/40",
+        "1/50", "1/60", "1/80", "1/100", "1/125", "1/160", "1/200", "1/250",
+        "1/320", "1/400", "1/500", "1/640", "1/800", "1/1000", "1/1250", "1/1600",
+        "1/2000", "1/2500", "1/3200", "1/4000"
+    ],
 
-    "iso": "100",
-    "_iso_options": [100, 200, 400, 800, 1600, 3200, 6400, "auto"],
+    "iso": 100,
+    "_iso_options": [
+        100, 125, 160, 200, 250, 320, 400, 500,
+        640, 800, 1000, 1250, 1600, 2000, 2500, 3200,
+        4000, 5000, 6400, "auto"
+    ],
 
     "white_balance": "auto",
     "_white_balance_options": [
@@ -32,7 +51,8 @@
     ],
 
     "color_temperature": 5200,
-    "_color_temperature_comment": "Only used when white_balance is color_temp. Range: 2500-10000K.",
+    "_color_temperature_comment": "Only used when white_balance is color_temp.",
+    "_color_temperature_range": [2500, 10000, 100],
 
     "picture_style": "standard",
     "_picture_style_options": [
@@ -67,13 +87,15 @@
     "focus_before_capture": false,
     "_focus_before_capture_comment": "false = instant capture using continuous live-view AF focus. true = half-press AF before each shot for diagnostics; slower but safer.",
     "focus_delay": 0.4,
-    "_focus_delay_comment": "Seconds to hold half-press AF before taking each photo.",
+    "_focus_delay_comment": "Seconds to hold half-press AF before taking each photo. The camera worker waits this long, so the range is deliberately small.",
+    "_focus_delay_range": [0.0, 5.0],
 
     "disable_auto_power_off": true,
     "_disable_auto_power_off_comment": "true = force Canon Auto power off to Off whenever an EDSDK session opens.",
 
     "min_free_disk_gib": 2.0,
     "_min_free_disk_gib_comment": "Do not start or download a session if the Windows photo disk has less free space than this.",
+    "_min_free_disk_gib_range": [0.25, 512.0],
 
     "evf_keep_camera_screen": false,
     "_evf_keep_camera_screen_comment": "false keeps the camera screen off during PC live view; the original output state is restored afterwards. true keeps the camera screen active too.",
