@@ -11,7 +11,10 @@
         <!-- NO CAMERA -->
         <div class="screen" id="screen-no-camera" hidden>
             <div class="error-msg" id="camera-status-title">КАМЕРА НЕ ПОДКЛЮЧЕНА</div>
-            <div class="error-sub" id="camera-status-subtitle">Подключите камеру</div>
+            <div class="error-sub" id="camera-status-subtitle" aria-live="polite">Подключите камеру</div>
+            <button class="camera-recover-button" id="camera-recover-button" type="button">
+                ПЕРЕПОДКЛЮЧИТЬ КАМЕРУ
+            </button>
         </div>
 
         <!-- IDLE -->
@@ -82,7 +85,10 @@
 
         <!-- TEMPLATE SELECT -->
         <div class="screen" id="screen-template" hidden>
-            <button id="template-skip" type="button" aria-label="Не печатать">×</button>
+            <div class="template-skip-group">
+                <span class="template-skip-label" aria-hidden="true">НЕ ПЕЧАТАТЬ</span>
+                <button id="template-skip" type="button" aria-label="Не печатать">×</button>
+            </div>
             <div class="template-main" id="template-main">
                 <div class="template-title">ВЫБЕРИТЕ ФОРМАТ</div>
                 <div class="template-options" id="template-options"></div>

@@ -10,6 +10,8 @@
     "done_screen_seconds": 8,
     "_done_screen_seconds_comment": "Seconds to keep the final/done screen before returning to idle.",
     "default_template": "grid",
+    "photo_choice_default_with_frame": false,
+    "_photo_choice_default_with_frame_comment": "Which variant a photo_choice template opens on: false shows the plain photo first, true shows the framed one. Also used when the guest never chooses and default_template has photo_choice.",
     "template_pack": "park08082026",
     "mirror_live_view": true,
     "live_view_fit": "contain",

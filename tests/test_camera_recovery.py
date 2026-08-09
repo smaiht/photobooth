@@ -7,7 +7,7 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from PIL import Image
 
@@ -210,11 +210,12 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         camera._sdk.EdsCloseSession.return_value = edsdk.EDS_ERR_OK
         camera._sdk.EdsRelease.return_value = 0
 
-        camera._cleanup_camera()
+        self.assertFalse(camera._cleanup_camera())
 
         camera._sdk.EdsCloseSession.assert_called_once()
         camera._sdk.EdsRelease.assert_called_once()
         self.assertFalse(camera._camera)
+        self.assertTrue(camera._worker_cleanup_clean)
 
     def test_transport_loss_cleanup_only_releases_local_camera_ref(self):
         camera = edsdk.Camera("fake-edSDK.dll")
@@ -233,6 +234,7 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         camera._sdk.EdsCloseSession.assert_not_called()
         camera._sdk.EdsRelease.assert_called_once()
         self.assertFalse(camera._transport_lost)
+        self.assertFalse(camera._worker_cleanup_clean)
 
     def test_shutdown_event_does_not_run_one_more_camera_command(self):
         camera = edsdk.Camera("fake-edSDK.dll")
@@ -393,6 +395,81 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         self.assertEqual(result, edsdk.EDS_ERR_OK)
         self.assertEqual(operation.call_count, 2)
         camera._sdk.EdsGetEvent.assert_called_once_with()
+
+    def test_camera_ui_lock_is_the_last_configuration_operation(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSetCapacity.return_value = edsdk.EDS_ERR_OK
+        events = []
+        camera._sdk.EdsSendStatusCommand.side_effect = (
+            lambda *_args: events.append("UI lock") or edsdk.EDS_ERR_OK)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config_camera.json"
+            config_path.write_text(json.dumps({
+                "disable_auto_power_off": False,
+                "lock_camera_ui": True,
+                "lock_mode_dial": False,
+            }), encoding="utf-8")
+            with patch("backend.config.ROOT_DIR", Path(tmpdir)), \
+                 patch.object(camera, "storage_ready", return_value=(True, "")), \
+                 patch.object(camera, "_configure_ae_mode"), \
+                 patch.object(camera, "_set_prop_u32", return_value=edsdk.EDS_ERR_OK), \
+                 patch.object(camera, "_read_camera_identity",
+                              side_effect=lambda: events.append("identity")), \
+                 patch.object(camera, "_log_applied_config",
+                              side_effect=lambda: events.append("readback")), \
+                 patch.object(camera, "_log_camera_health",
+                              side_effect=lambda: events.append("health")), \
+                 patch.object(edsdk.shutil, "disk_usage", return_value=SimpleNamespace(
+                     free=10 * 1024 ** 3)):
+                camera._configure_for_photobooth()
+
+        self.assertEqual(events, ["identity", "readback", "health", "UI lock"])
+        self.assertTrue(camera._ui_locked)
+
+    def test_cleanup_retries_busy_close_and_records_real_result(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._camera = ctypes.c_void_p(123)
+        camera._session_open = True
+        camera._sdk = MagicMock()
+        camera._sdk.EdsCloseSession.side_effect = [
+            edsdk.EDS_ERR_DEVICE_BUSY,
+            edsdk.EDS_ERR_OK,
+        ]
+        camera._sdk.EdsGetEvent.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsRelease.return_value = 0
+
+        with patch.object(edsdk.time, "sleep"):
+            self.assertTrue(camera._cleanup_camera())
+
+        self.assertEqual(camera._sdk.EdsCloseSession.call_count, 2)
+        camera._sdk.EdsGetEvent.assert_called_once_with()
+        self.assertEqual(camera.status_snapshot()["last_cleanup_result"], "closed")
+
+    def test_failed_close_marks_worker_shutdown_as_unclean(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._camera = ctypes.c_void_p(123)
+        camera._session_open = True
+        camera._sdk = MagicMock()
+        camera._sdk.EdsCloseSession.return_value = edsdk.EDS_ERR_INTERNAL_ERROR
+        camera._sdk.EdsRelease.return_value = 0
+
+        self.assertFalse(camera._cleanup_camera())
+
+        self.assertFalse(camera._worker_cleanup_clean)
+        self.assertIn(
+            "close failed", camera.status_snapshot()["last_cleanup_result"])
+
+    def test_stop_reports_a_native_worker_that_remains_stuck(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        worker = MagicMock()
+        worker.is_alive.return_value = True
+        camera._thread = worker
+
+        self.assertFalse(camera.stop(0.25))
+
+        worker.join.assert_called_once_with(timeout=0.25)
 
     def test_optional_mode_dial_internal_error_does_not_claim_usb_loss(self):
         camera = edsdk.Camera("fake-edSDK.dll")
@@ -686,6 +763,93 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
             )
 
         self.assertFalse(camera._pending_property_updates)
+
+
+class ManualCameraRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recovery_resets_usb_between_stopping_and_starting_edsdk(self):
+        camera = MagicMock()
+        camera.stop.side_effect = [False, True]
+        recovery_lock = asyncio.Lock()
+
+        with patch.object(main, "camera", camera), \
+             patch.object(main, "STATE", "camera_searching"), \
+             patch.object(main, "_services_stopping", False), \
+             patch.object(main, "_camera_recovery_lock", recovery_lock), \
+             patch("backend.main.set_state", new_callable=AsyncMock) as set_state, \
+             patch("backend.main._request_camera_usb_restart",
+                   return_value=(True, "USB reset")) as usb_reset, \
+             patch.object(main, "CAMERA_USB_RESET_WAIT_SECONDS", 0):
+            result = await main._recover_camera()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["usb_reset"])
+        self.assertEqual(camera.stop.call_args_list, [call(3.0), call(10.0)])
+        usb_reset.assert_called_once_with()
+        camera.start.assert_called_once_with()
+        set_state.assert_awaited_once_with("camera_searching")
+
+    async def test_recovery_still_cycles_edsdk_when_system_task_is_missing(self):
+        camera = MagicMock()
+        camera.stop.return_value = True
+
+        with patch.object(main, "camera", camera), \
+             patch.object(main, "STATE", "no_camera"), \
+             patch.object(main, "_services_stopping", False), \
+             patch.object(main, "_camera_recovery_lock", asyncio.Lock()), \
+             patch("backend.main.set_state", new_callable=AsyncMock), \
+             patch("backend.main._request_camera_usb_restart",
+                   return_value=(False, "task missing")):
+            result = await main._recover_camera()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertFalse(result["usb_reset"])
+        self.assertIn("EDSDK перезапущен", result["message"])
+        camera.stop.assert_called_once_with(3.0)
+        camera.start.assert_called_once_with()
+
+    async def test_recovery_never_starts_a_second_worker_over_a_stuck_one(self):
+        camera = MagicMock()
+        camera.stop.return_value = False
+
+        with patch.object(main, "camera", camera), \
+             patch.object(main, "STATE", "camera_searching"), \
+             patch.object(main, "_services_stopping", False), \
+             patch.object(main, "_camera_recovery_lock", asyncio.Lock()), \
+             patch("backend.main.set_state", new_callable=AsyncMock), \
+             patch("backend.main._request_camera_usb_restart",
+                   return_value=(True, "USB reset")), \
+             patch.object(main, "CAMERA_USB_RESET_WAIT_SECONDS", 0):
+            result = await main._recover_camera()
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(camera.stop.call_count, 2)
+        camera.start.assert_not_called()
+
+    def test_windows_usb_reset_uses_only_the_fixed_scheduled_task(self):
+        completed = SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        with patch.object(main.sys, "platform", "win32"), \
+             patch("backend.main.subprocess.run", return_value=completed) as run:
+            requested, _detail = main._request_camera_usb_restart()
+
+        self.assertTrue(requested)
+        command = run.call_args.args[0]
+        self.assertEqual(command, [
+            "schtasks.exe", "/Run", "/TN", "PhotoboothResetCanonR8",
+        ])
+        self.assertNotIn("pnputil", " ".join(command).lower())
+
+    def test_setup_task_is_immutable_and_scoped_to_canon_r8(self):
+        root = Path(__file__).resolve().parents[1]
+        setup = (root / "_setup_camera_reset.ps1").read_text(encoding="utf-8")
+        html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+        script = (root / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("VID_04A9&PID_330C", setup)
+        self.assertIn("-EncodedCommand", setup)
+        self.assertIn("(A;;GRGX;;;$kioskSid)", setup)
+        self.assertNotIn("-File $", setup)
+        self.assertIn('id="camera-recover-button"', html)
+        self.assertIn('fetch("/api/camera/recover"', script)
 
 
 class CameraStatusTests(unittest.IsolatedAsyncioTestCase):

@@ -15,8 +15,11 @@ if exist ".update_in_progress.json" (
     exit /b 1
 )
 
-:: Stop only this installation's app before replacing its tracked files.
+:: Let this installation close EDSDK before replacing its tracked files.
 set "PHOTOBOOTH_SYNC_PYTHONW=%~dp0python\pythonw.exe"
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$target=[IO.Path]::GetFullPath($env:PHOTOBOOTH_SYNC_PYTHONW); $running=@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $target }); if ($running.Count -gt 0) { try { Invoke-WebRequest -UseBasicParsing -Method Post -Uri 'http://127.0.0.1:8000/api/shutdown' -TimeoutSec 35 | Out-Null } catch {} }"
+
+:: Force-stop only if the local backend was unavailable or could not unwind.
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $target=[IO.Path]::GetFullPath($env:PHOTOBOOTH_SYNC_PYTHONW); $processes=@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq $target }); foreach ($process in $processes) { Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop }; foreach ($process in $processes) { Wait-Process -Id $process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue }; if ($processes.Count -gt 0) { Start-Sleep -Seconds 2 }"
 if errorlevel 1 (
     echo ERROR: could not stop the running Photobooth application.

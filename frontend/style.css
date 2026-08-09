@@ -56,6 +56,17 @@ html, body {
 #screen-no-camera { gap: 2vh; }
 .error-msg { font-size: 4vw; font-weight: 700; }
 .error-sub { font-size: 2vw; opacity: 0.5; }
+.camera-recover-button {
+    margin-top: 3vh;
+    padding: 2vh 3vw;
+    border: 0;
+    border-radius: 999px;
+    background: #191919;
+    color: #fff;
+    font: 700 clamp(22px, 1.7vw, 34px) 'Comfortaa', sans-serif;
+    letter-spacing: 0.05em;
+}
+.camera-recover-button:disabled { opacity: 0.4; }
 
 /* IDLE */
 #screen-idle {
@@ -474,11 +485,28 @@ html, body {
     will-change: transform;
 }
 
-#template-skip {
+.template-skip-group {
     z-index: 2;
     position: absolute;
     top: 5vh;
     right: 5vh;
+    display: flex;
+    align-items: center;
+    gap: 1vw;
+    pointer-events: none;
+}
+
+.template-skip-label {
+    font-size: 1.15vw;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: #777;
+    white-space: nowrap;
+}
+
+#template-skip {
+    position: relative;
+    pointer-events: auto;
     width: 7vw;
     height: 7vw;
     border: 0;
@@ -497,6 +525,9 @@ html, body {
 }
 #template-skip:active { background: #ddd; }
 #template-skip:disabled { opacity: 0.45; }
+.template-skip-group:has(#template-skip:disabled) .template-skip-label {
+    opacity: 0.45;
+}
 
 .template-title { font-size: 4vw; font-weight: 700; }
 
@@ -536,6 +567,47 @@ html, body {
     aspect-ratio: 3 / 2;
     object-fit: contain;
     border-radius: 0.5vw;
+}
+
+/* Name and the optional expand control share one row. */
+.template-caption {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 0.8vw;
+}
+
+/* Expand/collapse control: two small lines plus a chevron on the right. */
+.template-caption-toggle {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.35vw;
+    color: #FF2973;
+}
+
+.template-caption-toggle-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    font-size: 0.85vw;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: 0.04em;
+}
+
+.template-caption-chevron {
+    flex: 0 0 auto;
+    display: block;
+    width: 1.5vw;
+    height: 1.5vw;
+    transition: transform 0.2s ease;
+}
+
+/* Expanded: the tile now collapses instead of opening. */
+.template-btn[aria-expanded="true"] .template-caption-chevron {
+    transform: rotate(180deg);
 }
 
 #template-timer {

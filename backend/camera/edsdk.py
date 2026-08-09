@@ -88,6 +88,11 @@ TRANSIENT_CAPTURE_ERRORS = {
     EDS_ERR_OBJECT_NOTREADY,
     EDS_ERR_TAKE_PICTURE_STROBO_CHARGE_NG,
 }
+CAMERA_BUSY_ERRORS = {
+    EDS_ERR_DEVICE_BUSY,
+    EDS_ERR_PTP_DEVICE_BUSY,
+    EDS_ERR_OBJECT_NOTREADY,
+}
 FATAL_TRANSPORT_ERRORS = {
     # Keep this set limited to errors which explicitly say that the current
     # device/session transport is unusable.  EDS_ERR_INTERNAL_ERROR is a
@@ -145,6 +150,7 @@ class Camera:
         self._cfg = {}
         self._thread: threading.Thread | None = None
         self._thread_lock = threading.Lock()
+        self._worker_cleanup_clean = True
         self._retry_event = threading.Event()
         self._cmd_queue: Queue = Queue()
         self._evf_frame_cb = None  # callback(jpeg_bytes)
@@ -157,6 +163,8 @@ class Camera:
             "connected": False,
             "last_disconnect_reason": None,
             "last_disconnect_at": None,
+            "last_cleanup_at": None,
+            "last_cleanup_result": None,
             "last_shutdown_timer_extension_at": None,
             "last_shutdown_timer_extension_result": None,
         }
@@ -183,19 +191,32 @@ class Camera:
             if self._thread and self._thread.is_alive():
                 self._retry_event.set()
                 return
+            self._worker_cleanup_clean = True
             self._running = True
             self._retry_event.set()
             self._thread = threading.Thread(
                 target=self._run, name="edsdk-camera", daemon=True)
             self._thread.start()
 
-    def stop(self):
+    def stop(self, timeout: float = 10.0) -> bool:
+        """Report whether the worker exited and its remote session closed."""
         self._running = False
         self._retry_event.set()
-        if self._thread:
-            self._thread.join(timeout=10)
-            if self._thread.is_alive():
-                log.error("EDSDK thread did not stop within 10 seconds")
+        thread = self._thread
+        if not thread:
+            return True
+        if thread is threading.current_thread():
+            log.error("EDSDK thread cannot join itself")
+            return False
+        timeout = max(0.0, float(timeout))
+        thread.join(timeout=timeout)
+        if thread.is_alive():
+            log.error("EDSDK thread did not stop within %.1f seconds", timeout)
+            return False
+        with self._thread_lock:
+            if self._thread is thread:
+                self._thread = None
+        return self._worker_cleanup_clean
 
     @property
     def is_connected(self) -> bool:
@@ -768,7 +789,13 @@ class Camera:
             1 if cfg.get("eye_detection_af", True) else 0,
         )
 
-        # Lock camera UI
+        # Read back the applied properties before the final optional body lock.
+        # EOS R8 can briefly answer DEVICE_BUSY while it is still committing the
+        # property writes above; the intervening reads give it time to settle.
+        self._read_camera_identity()
+        self._log_applied_config()
+        self._log_camera_health()
+
         if cfg.get("lock_camera_ui", True):
             err = self._retry_optional_command(
                 "lock camera UI",
@@ -778,18 +805,10 @@ class Camera:
             if err == EDS_ERR_OK:
                 self._ui_locked = True
 
-        self._read_camera_identity()
         log.info("Camera configured from config_camera.json")
-        self._log_applied_config()
-        self._log_camera_health()
 
     def _retry_optional_command(self, label: str, operation, attempts: int = 3) -> int:
         """Retry optional body locks while Canon finishes property updates."""
-        retryable = {
-            EDS_ERR_DEVICE_BUSY,
-            EDS_ERR_PTP_DEVICE_BUSY,
-            EDS_ERR_OBJECT_NOTREADY,
-        }
         err = EDS_ERR_OK
         for attempt in range(1, attempts + 1):
             err = operation()
@@ -797,7 +816,7 @@ class Camera:
                 return err
             if err in FATAL_TRANSPORT_ERRORS:
                 raise EDSDKError(label, err)
-            if err not in retryable or attempt == attempts:
+            if err not in CAMERA_BUSY_ERRORS or attempt == attempts:
                 break
             event_err = self._sdk.EdsGetEvent()
             if event_err in FATAL_TRANSPORT_ERRORS:
@@ -1552,42 +1571,104 @@ class Camera:
             if stream:
                 self._sdk.EdsRelease(stream)
 
-    def _cleanup_camera(self):
+    def _cleanup_edsdk_call(self, label: str, operation) -> bool:
+        """Run one remote cleanup operation, retrying only Canon busy states."""
+        err = EDS_ERR_OK
+        for attempt in range(1, 4):
+            try:
+                err = operation()
+            except Exception:
+                log.warning("Camera cleanup %s raised", label, exc_info=True)
+                return False
+            if err == EDS_ERR_OK:
+                return True
+            if err not in CAMERA_BUSY_ERRORS or attempt == 3:
+                break
+            try:
+                event_err = self._sdk.EdsGetEvent()
+            except Exception:
+                log.warning(
+                    "Camera cleanup event pump raised before retrying %s",
+                    label,
+                    exc_info=True,
+                )
+                return False
+            if event_err != EDS_ERR_OK:
+                log.warning(
+                    "Camera cleanup event pump failed before retrying %s: "
+                    "0x%08X %s",
+                    label, event_err, edsdk_error_name(event_err),
+                )
+                return False
+            time.sleep(0.15 * attempt)
+        log.warning(
+            "Camera cleanup %s failed after %d attempt(s): 0x%08X %s",
+            label, attempt, err, edsdk_error_name(err),
+        )
+        return False
+
+    def _cleanup_camera(self) -> bool:
+        """Release one camera ref and truthfully report remote session cleanup."""
         camera = self._camera
         self._camera = EdsBaseRef()
         session_open = self._session_open
         self._session_open = False
         transport_lost = self._transport_lost
         self._transport_lost = False
-        if not camera or not self._sdk:
-            return
-
-        calls = []
-        if session_open and self._ui_locked and not transport_lost:
-            calls.append(("UI unlock", True, lambda: self._sdk.EdsSendStatusCommand(
-                camera, kEdsCameraStatusCommand_UIUnLock, 0)))
-        if session_open and self._mode_dial_locked and not transport_lost:
-            # Canon section 6.19: 1 cancels the disabled/locked mode dial.
-            calls.append(("mode dial unlock", True, lambda: self._sdk.EdsSendCommand(
-                camera, kEdsCameraCommand_SetModeDialDisable, 1)))
-        if session_open and not transport_lost:
-            calls.append(("close session", True, lambda: self._sdk.EdsCloseSession(camera)))
-        if session_open and transport_lost:
-            log.info(
-                "Camera transport is gone; skipping remote unlock/close calls")
-        # EdsRelease returns a reference count, not EdsError.
-        calls.append(("release camera", False, lambda: self._sdk.EdsRelease(camera)))
-
-        for label, returns_error, cleanup_call in calls:
-            try:
-                err = cleanup_call()
-                if returns_error and isinstance(err, int) and err != EDS_ERR_OK:
-                    log.debug(
-                        "Camera cleanup %s failed: 0x%08X %s",
-                        label, err, edsdk_error_name(err),
+        cleanup_ok = True
+        session_cleanup_ok = True
+        cleanup_result = "no session"
+        failed_steps = []
+        if camera and self._sdk:
+            if session_open and not transport_lost:
+                if self._ui_locked:
+                    ui_unlocked = self._cleanup_edsdk_call(
+                        "UI unlock",
+                        lambda: self._sdk.EdsSendStatusCommand(
+                            camera, kEdsCameraStatusCommand_UIUnLock, 0),
                     )
+                    cleanup_ok = ui_unlocked and cleanup_ok
+                    if not ui_unlocked:
+                        failed_steps.append("UI unlock")
+                if self._mode_dial_locked:
+                    # Canon section 6.19: 1 cancels the disabled/locked mode dial.
+                    dial_unlocked = self._cleanup_edsdk_call(
+                        "mode dial unlock",
+                        lambda: self._sdk.EdsSendCommand(
+                            camera, kEdsCameraCommand_SetModeDialDisable, 1),
+                    )
+                    cleanup_ok = dial_unlocked and cleanup_ok
+                    if not dial_unlocked:
+                        failed_steps.append("mode dial unlock")
+                close_ok = self._cleanup_edsdk_call(
+                    "close session", lambda: self._sdk.EdsCloseSession(camera))
+                cleanup_ok = close_ok and cleanup_ok
+                session_cleanup_ok = close_ok
+                cleanup_result = "closed" if close_ok else "close failed"
+                if not close_ok:
+                    failed_steps.append("close session")
+            elif session_open:
+                cleanup_result = "transport lost"
+                # No remote close was possible. A later process restart should
+                # ask Windows for a device reset rather than assuming the body
+                # forgot this session merely because our local ref was released.
+                session_cleanup_ok = False
+                log.info(
+                    "Camera transport is gone; skipping remote unlock/close calls")
+
+            # EdsRelease returns a reference count, not EdsError.
+            try:
+                self._sdk.EdsRelease(camera)
             except Exception:
-                log.debug("Camera cleanup %s raised", label, exc_info=True)
+                cleanup_ok = False
+                failed_steps.append("release")
+                log.warning("Camera cleanup release raised", exc_info=True)
+        elif camera:
+            cleanup_ok = False
+            cleanup_result = "SDK unavailable"
+            session_cleanup_ok = not session_open or transport_lost
+            log.warning("Camera ref could not be released because EDSDK is unavailable")
+
         self._ui_locked = False
         self._mode_dial_locked = False
         self._evf_original_output = None
@@ -1595,7 +1676,22 @@ class Camera:
         self._obj_handler_ref = None
         self._state_handler_ref = None
         self._prop_handler_ref = None
-        log.info("Camera session cleaned up")
+        if camera:
+            if failed_steps:
+                cleanup_result += "; failed: " + ", ".join(failed_steps)
+            # A failed optional unlock is worth reporting but does not leave a
+            # stale EDSDK session when EdsCloseSession itself succeeded.
+            self._worker_cleanup_clean = (
+                self._worker_cleanup_clean and session_cleanup_ok)
+            self._update_health(
+                last_cleanup_at=self._utc_now(),
+                last_cleanup_result=cleanup_result,
+            )
+            if cleanup_ok:
+                log.info("Camera session cleanup finished: %s", cleanup_result)
+            else:
+                log.warning("Camera session cleanup incomplete: %s", cleanup_result)
+        return cleanup_ok
 
     def _cleanup(self):
         """Backward-compatible per-camera cleanup; SDK lifetime is worker-wide."""

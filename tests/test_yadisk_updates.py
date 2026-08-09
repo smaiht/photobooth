@@ -918,6 +918,8 @@ class WindowsGitSyncTests(unittest.TestCase):
         self.assertIn("git reset --hard origin/main", sync)
         self.assertIn('.update_in_progress.json', sync)
         self.assertIn("PHOTOBOOTH_SYNC_PYTHONW", sync)
+        self.assertIn("http://127.0.0.1:8000/api/shutdown", sync)
+        self.assertLess(sync.index("api/shutdown"), sync.index("Stop-Process"))
         self.assertNotIn("git pull", sync)
         self.assertNotIn("config_app.json", sync)
         self.assertNotIn("config_camera.json", sync)

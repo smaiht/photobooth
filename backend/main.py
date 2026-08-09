@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -59,6 +60,8 @@ CONFIG = load_event_config()
 
 CAFE_UNLOCK_STATE_FILENAME = "cafe_unlock_state.json"
 MAX_UNLOCK_SESSIONS = 1000
+CAMERA_RESET_TASK_NAME = "PhotoboothResetCanonR8"
+CAMERA_USB_RESET_WAIT_SECONDS = 5.0
 
 
 def _technical_event_name() -> str:
@@ -256,6 +259,7 @@ _background_uploads: set[asyncio.Task] = set()
 _service_tasks: set[asyncio.Task] = set()
 _session_running = False
 _camera_disconnected_event = asyncio.Event()
+_camera_recovery_lock = asyncio.Lock()
 _services_stopping = False
 
 
@@ -558,6 +562,7 @@ async def run_session():
         _session_running = False
         app.state.on_template_choice = None
         app.state.on_skip_print = None
+        app.state.on_template_activity = None
         TEMPLATE_OPTIONS = []
         if SESSION_ID:
             try:
@@ -788,13 +793,16 @@ async def _run_session():
     )
 
     template_event = asyncio.Event()
+    # One source of truth for the frame default: the frontend reads the same
+    # config field through /api/config.
+    default_with_frame = CONFIG["photo_choice_default_with_frame"] is True
     chosen = {
         "template": selected_template,
         "photo_index": (
             0 if available_templates[selected_template].get("photo_choice") is True
             else None
         ),
-        "with_frame": True,
+        "with_frame": default_with_frame,
         "skip_print": False,
     }
 
@@ -836,26 +844,58 @@ async def _run_session():
         chosen["skip_print"] = True
         template_event.set()
 
+    # Any touch on the template screen restarts the full timeout, so a visitor
+    # who is still choosing never loses the session to the default template.
+    select_timeout = float(CONFIG["template_select_timeout"])
+    loop = asyncio.get_running_loop()
+    deadline = {"at": loop.time() + select_timeout}
+    extend_event = asyncio.Event()
+
+    def on_template_activity():
+        # A touch that arrives after the choice is already locked in must not
+        # move the deadline or report a restarted countdown.
+        if template_event.is_set():
+            return False
+        deadline["at"] = loop.time() + select_timeout
+        extend_event.set()
+        return True
+
     app.state.on_template_choice = on_template_choice
     app.state.on_skip_print = on_skip_print
+    app.state.on_template_activity = on_template_activity
     await set_state("template_select")
     log.info("Waiting for template choice...")
     choice_task = asyncio.create_task(template_event.wait())
     disconnect_task = asyncio.create_task(_camera_disconnected_event.wait())
+    extend_task = asyncio.create_task(extend_event.wait())
     try:
-        done, _ = await asyncio.wait(
-            (choice_task, disconnect_task),
-            timeout=CONFIG["template_select_timeout"],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        _require_session_camera(camera_generation)
-        if choice_task not in done:
+        while True:
+            remaining = deadline["at"] - loop.time()
+            if remaining <= 0:
+                log.info(f"Template timeout, using default: {selected_template}")
+                break
+            done, _ = await asyncio.wait(
+                (choice_task, disconnect_task, extend_task),
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            _require_session_camera(camera_generation)
+            if choice_task in done or disconnect_task in done:
+                break
+            if extend_task in done:
+                extend_event.clear()
+                extend_task = asyncio.create_task(extend_event.wait())
+                log.info("Template selection extended by visitor touch")
+                continue
             log.info(f"Template timeout, using default: {selected_template}")
+            break
     finally:
-        for task in (choice_task, disconnect_task):
+        app.state.on_template_activity = None
+        for task in (choice_task, disconnect_task, extend_task):
             if not task.done():
                 task.cancel()
-        await asyncio.gather(choice_task, disconnect_task, return_exceptions=True)
+        await asyncio.gather(
+            choice_task, disconnect_task, extend_task, return_exceptions=True)
     template_event.set()
     if chosen["skip_print"]:
         TEMPLATE_OPTIONS = []
@@ -1026,10 +1066,14 @@ async def shutdown():
     os._exit(0)
 
 
+@app.post("/api/camera/recover")
+async def recover_camera():
+    return await _recover_camera()
+
+
 async def _do_restart():
     log.info("Restart requested!")
     await _shutdown_services()
-    import subprocess
     si = None
     if sys.platform == "win32":
         si = subprocess.STARTUPINFO()
@@ -1044,6 +1088,100 @@ async def _do_restart():
     )
     await asyncio.sleep(0.1)
     os._exit(0)
+
+
+def _request_camera_usb_restart() -> tuple[bool, str]:
+    """Run the fixed elevated Canon R8 reset task installed during setup."""
+    if sys.platform != "win32":
+        return False, "USB-reset доступен только на Windows"
+    try:
+        completed = subprocess.run(
+            ["schtasks.exe", "/Run", "/TN", CAMERA_RESET_TASK_NAME],
+            check=False,
+            capture_output=True,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.warning("Could not launch Canon R8 reset task: %s", exc)
+        return False, f"системная задача не запустилась: {exc}"
+    if completed.returncode != 0:
+        log.warning(
+            "Canon R8 reset task was rejected: code=%d stdout=%r stderr=%r",
+            completed.returncode, completed.stdout, completed.stderr,
+        )
+        return False, (
+            "системная задача USB-reset не установлена; "
+            "один раз запустите _setup_windows.bat от администратора"
+        )
+    log.info("Canon R8 USB restart task accepted by Windows")
+    return True, "системный USB-reset Canon R8 запущен"
+
+
+async def _recover_camera() -> dict:
+    """Restart EDSDK and, when installed, the Canon R8 Windows device."""
+    if not camera:
+        return {"status": "error", "message": "Canon EDSDK недоступен"}
+    if STATE not in ("idle", "no_camera", "camera_searching"):
+        return {
+            "status": "error",
+            "message": f"Камеру нельзя переподключить во время сессии: state={STATE}",
+        }
+    if _camera_recovery_lock.locked():
+        return {
+            "status": "error",
+            "message": "Переподключение камеры уже выполняется",
+        }
+
+    async with _camera_recovery_lock:
+        camera_device = camera
+        log.warning("Manual Canon R8 recovery requested")
+        await set_state("camera_searching")
+        _clear_live_view()
+
+        # Do not wait long before asking Windows to reset USB: EdsOpenSession
+        # itself has occasionally remained inside Canon's DLL for minutes.
+        stopped = await asyncio.to_thread(camera_device.stop, 3.0)
+        usb_requested, usb_detail = await asyncio.to_thread(
+            _request_camera_usb_restart)
+        await asyncio.sleep(
+            CAMERA_USB_RESET_WAIT_SECONDS if usb_requested else 0.5)
+
+        if not stopped:
+            # A PnP restart normally releases a stuck native EDSDK call. Give
+            # that same worker one final chance to unwind before starting anew.
+            stopped = await asyncio.to_thread(camera_device.stop, 10.0)
+        if not stopped:
+            log.error("Canon R8 recovery failed: EDSDK worker is still stuck")
+            return {
+                "status": "error",
+                "message": (
+                    "EDSDK не смог остановиться даже после USB-reset. "
+                    "Переключите камеру OFF/ON и нажмите кнопку ещё раз."
+                ),
+                "usb_reset": usb_requested,
+            }
+        if _services_stopping or camera is not camera_device:
+            return {
+                "status": "error",
+                "message": "Приложение уже останавливается",
+                "usb_reset": usb_requested,
+            }
+
+        camera_device.start()
+        if usb_requested:
+            message = (
+                "Команда USB-reset отправлена, EDSDK перезапущен; "
+                "поиск Canon R8 идёт автоматически"
+            )
+        else:
+            message = f"EDSDK перезапущен; поиск камеры идёт. USB-reset не выполнен: {usb_detail}"
+        log.info("Canon R8 recovery finished: %s", message)
+        return {
+            "status": "ok",
+            "message": message,
+            "usb_reset": usb_requested,
+        }
 
 
 def _save_event_folder(name: str) -> None:
@@ -1479,6 +1617,11 @@ async def handle_disk_command(command: dict) -> dict:
                     "Last camera disconnect: "
                     f"{snapshot['last_disconnect_reason']} at "
                     f"{snapshot.get('last_disconnect_at') or 'unknown'}")
+            if snapshot.get("last_cleanup_result"):
+                status_lines.append(
+                    "Last camera cleanup: "
+                    f"{snapshot['last_cleanup_result']} at "
+                    f"{snapshot.get('last_cleanup_at') or 'unknown'}")
             config_lines = _format_camera_config_report(
                 snapshot.get("config_report"))
             if config_lines:
@@ -1606,8 +1749,21 @@ async def _shutdown_services() -> None:
     video_recorder.abort()
     if camera:
         log.info("Stopping camera...")
-        await asyncio.to_thread(camera.stop)
-        log.info("Camera stopped")
+        camera_stopped = await asyncio.to_thread(camera.stop)
+        if not camera_stopped:
+            log.warning(
+                "Camera shutdown was incomplete; requesting Canon R8 USB reset")
+            usb_requested, usb_detail = await asyncio.to_thread(
+                _request_camera_usb_restart)
+            await asyncio.sleep(
+                CAMERA_USB_RESET_WAIT_SECONDS if usb_requested else 0.5)
+            camera_stopped = await asyncio.to_thread(camera.stop, 10.0)
+            if not usb_requested:
+                log.warning("Camera shutdown USB reset unavailable: %s", usb_detail)
+        if camera_stopped:
+            log.info("Camera stopped")
+        else:
+            log.error("Camera did not stop cleanly before backend shutdown")
     log.info("Backend services stopped")
 
 
@@ -1659,6 +1815,14 @@ async def websocket_endpoint(ws: WebSocket):
                 cb = getattr(app.state, "on_skip_print", None)
                 if cb:
                     cb()
+
+            elif msg["type"] == "template_activity" and STATE == "template_select":
+                cb = getattr(app.state, "on_template_activity", None)
+                if cb and cb():
+                    await ws.send_text(json.dumps({
+                        "type": "template_timer",
+                        "timeout": int(CONFIG["template_select_timeout"]),
+                    }))
 
     except WebSocketDisconnect:
         try:

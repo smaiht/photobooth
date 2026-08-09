@@ -39,6 +39,7 @@ const resultQrPanel = document.getElementById("result-qr-panel");
 const resultQrCode = document.getElementById("result-qr-code");
 const cameraStatusTitle = document.getElementById("camera-status-title");
 const cameraStatusSubtitle = document.getElementById("camera-status-subtitle");
+const cameraRecoverButton = document.getElementById("camera-recover-button");
 const tapLockStatus = document.querySelector(".tap-lock-status");
 
 let ws = null;
@@ -51,11 +52,12 @@ let displayedQrUrl = "";
 let dismissedQrSessionId = "";
 let renderedTemplateSignature = "";
 let photoChoiceTemplate = null;
-let photoChoiceWithFrame = true;
+let photoChoiceWithFrame = false;
 let photoPreviewCycle = null;
 let currentShootingPhotoIndex = 0;
 let technicalEventActive = false;
 let technicalEventPriceRubles = 0;
+let cameraRecoveryPending = false;
 const sessionLinks = new Map();
 
 let poseExampleUrls = [];
@@ -309,6 +311,29 @@ function send(msg) {
     return true;
 }
 
+cameraRecoverButton.addEventListener("click", async () => {
+    if (cameraRecoveryPending
+            || !["no_camera", "camera_searching"].includes(currentState)) return;
+    cameraRecoveryPending = true;
+    cameraRecoverButton.disabled = true;
+    cameraStatusTitle.textContent = "ПЕРЕПОДКЛЮЧАЕМ КАМЕРУ…";
+    cameraStatusSubtitle.textContent = "Это может занять несколько секунд";
+    try {
+        const response = await fetch("/api/camera/recover", { method: "POST" });
+        const result = await response.json();
+        if (!response.ok || result.status !== "ok") {
+            throw new Error(result.message || `HTTP ${response.status}`);
+        }
+        cameraStatusSubtitle.textContent = result.message;
+    } catch (error) {
+        cameraStatusTitle.textContent = "КАМЕРА НЕ ПЕРЕПОДКЛЮЧЕНА";
+        cameraStatusSubtitle.textContent = error.message;
+    } finally {
+        cameraRecoveryPending = false;
+        cameraRecoverButton.disabled = false;
+    }
+});
+
 // --- Sound ---
 let audioCtx = null;
 function beep(freq, duration) {
@@ -418,6 +443,11 @@ function handleMessage(msg) {
                 refreshQr();
             }
             break;
+        case "template_timer":
+            if (currentState === "template_select" && !templateSkip.disabled) {
+                startTemplateTimer(msg.timeout ?? templateTimerSeconds);
+            }
+            break;
         case "countdown":
             showCountdown(msg.value);
             if (msg.beep) beep(440 + (msg.beep_index ?? 0) * 110, 500);
@@ -509,7 +539,7 @@ function _doSwitch(state, data) {
     if (key && screens[key]) screens[key].hidden = false;
     setLiveView(key === "shooting");
 
-    if (key === "no_camera") {
+    if (key === "no_camera" && !cameraRecoveryPending) {
         const searching = state === "camera_searching";
         cameraStatusTitle.textContent = searching
             ? "ИЩЕМ КАМЕРУ…"
@@ -602,6 +632,27 @@ templateSkip.addEventListener("click", (event) => {
     lockTemplateSelection();
 });
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// A stroked chevron drawn as SVG: round caps and joins read cleanly at kiosk
+// size, unlike a rotated CSS border square.
+function createChevron() {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", "template-caption-chevron");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", "M5 9.5 12 16l7-6.5");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "2.6");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.appendChild(path);
+    return svg;
+}
+
 function renderTemplateOptions(options) {
     if (!Array.isArray(options)) return;
     const signature = JSON.stringify(options.map((option) => [
@@ -643,12 +694,44 @@ function renderTemplateOptions(options) {
 
         const preview = document.createElement("img");
         preview.className = "template-preview";
-        preview.src = option.preview_url;
+        // A photo_choice tile must start on the same variant the cycle and the
+        // chooser use, otherwise the first frame flips look inconsistent.
+        preview.src = isPhotoChoice
+            ? photoChoiceTileUrl(option.photo_previews[0])
+            : option.preview_url;
         preview.alt = label;
         preview.draggable = false;
 
         const caption = document.createElement("span");
-        caption.textContent = label;
+        caption.className = "template-caption";
+        const captionLabel = document.createElement("span");
+        captionLabel.className = "template-caption-label";
+        // "1 фото" alone does not say there is anything to pick from, so the
+        // number of available frames goes straight into the name.
+        captionLabel.textContent = isPhotoChoice
+            ? `${label} из ${option.photo_previews.length}`
+            : label;
+        caption.appendChild(captionLabel);
+        if (isPhotoChoice) {
+            const toggle = document.createElement("span");
+            toggle.className = "template-caption-toggle";
+
+            // Two short lines keep the control on the same row as the name:
+            // only the verb changes between open and closed.
+            const toggleText = document.createElement("span");
+            toggleText.className = "template-caption-toggle-text";
+            const toggleVerb = document.createElement("span");
+            toggleVerb.className = "template-caption-toggle-verb";
+            toggleVerb.dataset.openHint = "СКРЫТЬ";
+            toggleVerb.dataset.closedHint = "РАСКРЫТЬ";
+            toggleVerb.textContent = toggleVerb.dataset.closedHint;
+            const toggleNoun = document.createElement("span");
+            toggleNoun.textContent = "ВАРИАНТЫ";
+            toggleText.append(toggleVerb, toggleNoun);
+
+            toggle.append(toggleText, createChevron());
+            caption.appendChild(toggle);
+        }
         button.append(preview, caption);
         if (isPhotoChoice) {
             button.photoPreviews = option.photo_previews;
@@ -672,6 +755,20 @@ function renderTemplateOptions(options) {
     startPhotoPreviewCycle();
 }
 
+// The frame default lives in config_app.json, so backend and frontend cannot
+// drift apart. Missing config keeps the plain photo first.
+function defaultWithFrame() {
+    return config.photo_choice_default_with_frame === true;
+}
+
+function photoChoiceTileUrl(preview) {
+    // The tile advertises the same variant the chooser opens on.
+    const url = defaultWithFrame()
+        ? preview.with_frame_url
+        : preview.without_frame_url;
+    return url ?? preview.with_frame_url;
+}
+
 function startPhotoPreviewCycle() {
     clearInterval(photoPreviewCycle);
     const buttons = [...templateOptions.querySelectorAll(
@@ -685,9 +782,16 @@ function startPhotoPreviewCycle() {
             const previews = button.photoPreviews;
             if (!Array.isArray(previews) || !previews.length) return;
             const preview = previews[index % previews.length];
-            button.querySelector("img").src = preview.with_frame_url;
+            button.querySelector("img").src = photoChoiceTileUrl(preview);
         });
     }, PHOTO_PREVIEW_CYCLE_MS);
+}
+
+function syncTemplateHint(button) {
+    const verb = button.querySelector(".template-caption-toggle-verb");
+    if (!verb) return;
+    const expanded = button.getAttribute("aria-expanded") === "true";
+    verb.textContent = expanded ? verb.dataset.openHint : verb.dataset.closedHint;
 }
 
 function closePhotoChoice() {
@@ -696,13 +800,14 @@ function closePhotoChoice() {
         ? templateMain.getBoundingClientRect().top
         : null;
     photoChoiceTemplate = null;
-    photoChoiceWithFrame = true;
+    photoChoiceWithFrame = defaultWithFrame();
     photoChoicePanel.hidden = true;
     photoChoiceOptions.replaceChildren();
     templateOptions.querySelectorAll(".template-btn").forEach((button) => {
         button.classList.remove("active");
         if (button.dataset.photoChoice === "true") {
             button.setAttribute("aria-expanded", "false");
+            syncTemplateHint(button);
         }
     });
     updateFrameSegments();
@@ -724,12 +829,13 @@ function resetTemplateSelection() {
 function openPhotoChoice(option, selectedButton) {
     const previousTop = templateMain.getBoundingClientRect().top;
     photoChoiceTemplate = option;
-    photoChoiceWithFrame = true;
+    photoChoiceWithFrame = defaultWithFrame();
     photoChoicePanel.hidden = false;
     templateOptions.querySelectorAll(".template-btn").forEach((button) => {
         button.classList.toggle("active", button === selectedButton);
         if (button.dataset.photoChoice === "true") {
             button.setAttribute("aria-expanded", String(button === selectedButton));
+            syncTemplateHint(button);
         }
     });
     updateFrameSegments();
@@ -806,7 +912,10 @@ function setTemplateTimerText(text) {
     templateTimer.textContent = text;
 }
 
+let templateTimerSeconds = 0;
+
 function startTemplateTimer(seconds) {
+    templateTimerSeconds = seconds;
     let remaining = seconds;
     const renderRemaining = () => {
         const mod100 = remaining % 100;
@@ -833,6 +942,20 @@ function startTemplateTimer(seconds) {
         }
     }, 1000);
 }
+
+// Any touch anywhere on the template screen restarts the selection timeout.
+// There is no button: the backend is told to extend, and the visible countdown
+// restarts from the same configured value.
+function extendTemplateTimer() {
+    if (currentState !== "template_select" || templateSkip.disabled) return;
+    if (previewMode) {
+        startTemplateTimer(templateTimerSeconds);
+        return;
+    }
+    send({ type: "template_activity" });
+}
+
+screens.template.addEventListener("pointerdown", extendTemplateTimer);
 
 // --- Start session ---
 idleStartButton.addEventListener("click", () => {

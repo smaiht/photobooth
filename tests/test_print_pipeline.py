@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -779,6 +780,79 @@ class FrontendPreviewTests(unittest.TestCase):
         self.assertIn('screens.template.addEventListener("click"', script)
         self.assertIn("closePhotoChoice();", script)
 
+    def test_frame_default_is_configured_once_for_booth_and_frontend(self):
+        config = json.loads(
+            (ROOT / "config_app.json").read_text(encoding="utf-8"))
+        self.assertIn("photo_choice_default_with_frame", config)
+        self.assertIsInstance(config["photo_choice_default_with_frame"], bool)
+        self.assertIn("_photo_choice_default_with_frame_comment", config)
+
+        # /api/config forwards the whole config, so the frontend sees the field
+        # instead of keeping a second literal of its own.
+        source = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("response = dict(CONFIG)", source)
+        self.assertIn(
+            'default_with_frame = CONFIG["photo_choice_default_with_frame"] is True',
+            source,
+        )
+        self.assertNotIn('"with_frame": True,', source)
+
+    def test_photo_choice_tile_and_skip_button_explain_themselves(self):
+        html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "frontend" / "style.css").read_text(encoding="utf-8")
+
+        def rule(selector):
+            self.assertIn(f"{selector} {{", styles)
+            return styles.split(f"{selector} {{", 1)[1].split("}", 1)[0]
+
+        # The name itself carries the count, e.g. "1 фото из 4".
+        self.assertIn("`${label} из ${option.photo_previews.length}`", script)
+        # One expand/collapse control on the same row, only the verb changes.
+        # The exact wording is a copy decision and stays out of the test.
+        self.assertIn("toggleVerb.dataset.closedHint =", script)
+        self.assertIn("toggleVerb.dataset.openHint =", script)
+        self.assertIn('toggleNoun.textContent = "ВАРИАНТЫ"', script)
+        self.assertIn("function syncTemplateHint(button)", script)
+        self.assertEqual(script.count("syncTemplateHint(button);"), 2)
+        self.assertIn("flex-direction: row", rule(".template-caption"))
+        self.assertIn("flex-direction: row", rule(".template-caption-toggle"))
+        self.assertIn("flex-direction: column",
+                      rule(".template-caption-toggle-text"))
+
+        # The chevron is a stroked SVG, not a rotated CSS border square.
+        self.assertIn("function createChevron()", script)
+        self.assertIn('svg.setAttribute("viewBox", "0 0 24 24")', script)
+        self.assertIn('path.setAttribute("stroke", "currentColor")', script)
+        self.assertIn('stroke-linecap", "round"', script)
+        self.assertNotIn("border-right: 0.16vw", styles)
+        self.assertIn("rotate(180deg)", rule(
+            '.template-btn[aria-expanded="true"] .template-caption-chevron'))
+
+        # No extra preview badge or counter overlay.
+        self.assertNotIn("template-preview-counter", script)
+        self.assertNotIn("template-preview-counter", styles)
+        self.assertNotIn("template-preview-frame", script)
+
+        # The frame default comes from config_app.json, so backend and frontend
+        # cannot drift apart. The frontend keeps no literal of its own.
+        self.assertIn("function defaultWithFrame()", script)
+        self.assertIn("config.photo_choice_default_with_frame === true", script)
+        self.assertEqual(script.count("photoChoiceWithFrame = defaultWithFrame();"), 2)
+        self.assertNotIn("PHOTO_CHOICE_DEFAULT_WITH_FRAME", script)
+        self.assertEqual(script.count("photoChoiceWithFrame = true;"), 1)
+        self.assertIn("function photoChoiceTileUrl(preview)", script)
+        self.assertEqual(script.count("photoChoiceTileUrl("), 3)
+        self.assertNotIn('.src = preview.with_frame_url', script)
+
+        # The skip button carries a visible label, and only the circle is
+        # tappable so the label cannot swallow background extension taps.
+        self.assertIn("НЕ ПЕЧАТАТЬ", html)
+        self.assertIn('class="template-skip-label"', html)
+        self.assertIn("pointer-events: none", rule(".template-skip-group"))
+        self.assertIn("pointer-events: auto", rule("#template-skip"))
+        self.assertNotIn("position: absolute", rule("#template-skip"))
+
 
 class PrinterQueueTests(unittest.TestCase):
     def test_selects_optional_strips_queue(self):
@@ -1446,6 +1520,349 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("composing", states)
         compose_with_frame.assert_not_called()
         compose_without_frame.assert_called_once()
+
+    async def test_touch_activity_extends_template_selection_timeout(self):
+        class Camera:
+            is_connected = True
+            connection_generation = 1
+
+            def set_download_dir(self, path):
+                self.download_dir = Path(path)
+
+            def start_live_view(self):
+                pass
+
+            def stop_live_view(self):
+                pass
+
+            def take_picture(self, _tag=""):
+                photo_number = len(main.SESSION_PHOTOS) + 1
+                main.SESSION_PHOTOS.append(
+                    str(self.download_dir / f"photo_{photo_number}.jpg"))
+
+        select_timeout = 0.2
+        extensions = 4
+        chosen_templates = []
+
+        async def keep_touching():
+            # Each touch restarts the full timeout, so the late choice below
+            # arrives long after the original deadline would have expired.
+            for _ in range(extensions):
+                await asyncio.sleep(select_timeout / 2)
+                main.app.state.on_template_activity()
+            await asyncio.sleep(select_timeout / 2)
+            main.app.state.on_template_choice("strips")
+
+        async def set_state(state, _extra=None):
+            main.STATE = state
+            states.append(state)
+            if state == "template_select":
+                asyncio.create_task(keep_touching())
+
+        states = []
+
+        def previews(_template_dir, _photos, config, output_dir):
+            return {
+                name: Path(output_dir) / f"{name}.jpg"
+                for name in config["templates"]
+            }
+
+        uploaded = asyncio.Event()
+
+        async def enqueue(*_args, **_kwargs):
+            uploaded.set()
+
+        def compose_template(_dir, name, _photos, _config):
+            chosen_templates.append(name)
+            return Image.new("RGB", (120, 80), "white")
+
+        recorder = Mock()
+        recorder.stop_and_encode.return_value = "session.mp4"
+        config = dict(main.CONFIG)
+        config.update({
+            "num_photos": 4,
+            "pre_countdown_delay": 0,
+            "countdown_seconds": 0,
+            "countdown_sound_seconds": 0,
+            "template_select_timeout": select_timeout,
+            "done_screen_seconds": 0,
+            "default_template": "grid",
+            "template_pack": "kvas01aug26",
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "event",
+            "print_enabled": False,
+        })
+
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.multiple(
+                 main,
+                 camera=Camera(),
+                 video_recorder=recorder,
+                 CONFIG=config,
+                 PHOTOS_DIR=Path(tmpdir),
+                 CLIENTS=[],
+                 STATE="idle",
+                 SESSION_ID="",
+                 SESSION_PHOTOS=[],
+                 SESSION_LINK="",
+                 TEMPLATE_OPTIONS=[],
+                 SESSION_COUNT=0,
+                 _session_running=False,
+                 _background_uploads=set(),
+                 _camera_disconnected_event=asyncio.Event(),
+             ), \
+             patch("backend.main._start_locked", return_value=False), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="event"), \
+             patch("backend.main.yadisk_cloud.enqueue_session",
+                   new_callable=AsyncMock, side_effect=enqueue), \
+             patch("backend.main._prepare_session_link",
+                   new_callable=AsyncMock), \
+             patch("backend.main.generate_template_previews",
+                   side_effect=previews), \
+             patch("backend.main.compose", side_effect=compose_template), \
+             patch("backend.main.broadcast", new_callable=AsyncMock), \
+             patch("backend.main.set_state", side_effect=set_state):
+            await main.run_session()
+            await asyncio.wait_for(uploaded.wait(), timeout=2)
+            if main._background_uploads:
+                await asyncio.gather(*list(main._background_uploads))
+
+        # The late choice won, not the default template that a single
+        # non-extendable timeout would have selected.
+        self.assertEqual(chosen_templates, ["strips"])
+        self.assertGreater(
+            time.monotonic() - started, select_timeout * (extensions + 1) / 2)
+        self.assertIsNone(main.app.state.on_template_activity)
+
+    async def test_touch_after_choice_neither_prints_twice_nor_delays_session(self):
+        class Camera:
+            is_connected = True
+            connection_generation = 1
+
+            def set_download_dir(self, path):
+                self.download_dir = Path(path)
+
+            def start_live_view(self):
+                pass
+
+            def stop_live_view(self):
+                pass
+
+            def take_picture(self, _tag=""):
+                photo_number = len(main.SESSION_PHOTOS) + 1
+                main.SESSION_PHOTOS.append(
+                    str(self.download_dir / f"photo_{photo_number}.jpg"))
+
+        select_timeout = 30.0
+        states = []
+        chosen_templates = []
+        activity_results = []
+
+        async def set_state(state, _extra=None):
+            main.STATE = state
+            states.append(state)
+            if state == "template_select":
+                main.app.state.on_template_choice("strips")
+                # Touches that land after the choice: a stray finger, or the
+                # frontend flushing a queued pointer event.
+                for _ in range(3):
+                    activity_results.append(
+                        main.app.state.on_template_activity())
+                # A second choice must not replace the locked-in one either.
+                main.app.state.on_template_choice("grid")
+                main.app.state.on_skip_print()
+
+        def previews(_template_dir, _photos, config, output_dir):
+            return {
+                name: Path(output_dir) / f"{name}.jpg"
+                for name in config["templates"]
+            }
+
+        uploaded = asyncio.Event()
+
+        async def enqueue(*_args, **_kwargs):
+            uploaded.set()
+
+        def compose_template(_dir, name, _photos, _config):
+            chosen_templates.append(name)
+            return Image.new("RGB", (120, 80), "white")
+
+        recorder = Mock()
+        recorder.stop_and_encode.return_value = "session.mp4"
+        config = dict(main.CONFIG)
+        config.update({
+            "num_photos": 4,
+            "pre_countdown_delay": 0,
+            "countdown_seconds": 0,
+            "countdown_sound_seconds": 0,
+            "template_select_timeout": select_timeout,
+            "done_screen_seconds": 0,
+            "default_template": "grid",
+            "template_pack": "kvas01aug26",
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "event",
+            "print_enabled": True,
+        })
+
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.multiple(
+                 main,
+                 camera=Camera(),
+                 video_recorder=recorder,
+                 CONFIG=config,
+                 PHOTOS_DIR=Path(tmpdir),
+                 CLIENTS=[],
+                 STATE="idle",
+                 SESSION_ID="",
+                 SESSION_PHOTOS=[],
+                 SESSION_LINK="",
+                 TEMPLATE_OPTIONS=[],
+                 SESSION_COUNT=0,
+                 _session_running=False,
+                 _background_uploads=set(),
+                 _camera_disconnected_event=asyncio.Event(),
+             ), \
+             patch("backend.main._start_locked", return_value=False), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="event"), \
+             patch("backend.main.yadisk_cloud.enqueue_session",
+                   new_callable=AsyncMock, side_effect=enqueue), \
+             patch("backend.main._prepare_session_link",
+                   new_callable=AsyncMock), \
+             patch("backend.main.generate_template_previews",
+                   side_effect=previews), \
+             patch("backend.main.compose", side_effect=compose_template), \
+             patch("backend.printer.enqueue_print",
+                   new_callable=AsyncMock) as print_job, \
+             patch("backend.main.broadcast", new_callable=AsyncMock), \
+             patch("backend.main.set_state", side_effect=set_state):
+            await main.run_session()
+            await asyncio.wait_for(uploaded.wait(), timeout=2)
+            if main._background_uploads:
+                await asyncio.gather(*list(main._background_uploads))
+
+        # Post-choice touches are refused, so the frontend gets no countdown
+        # restart and the wait loop is not held open by them.
+        self.assertEqual(activity_results, [False, False, False])
+        self.assertLess(time.monotonic() - started, select_timeout / 2)
+        # Exactly one composition and one print job, from the first choice.
+        self.assertEqual(chosen_templates, ["strips"])
+        print_job.assert_awaited_once()
+        self.assertEqual(Path(print_job.await_args.args[0]).name,
+                         "print_strips.jpg")
+        self.assertEqual(print_job.await_args.args[2], "strips")
+        self.assertEqual(states.count("composing"), 1)
+        self.assertEqual(states.count("printing") + states.count("done"), 1)
+
+    async def test_timeout_fallback_uses_configured_frame_default(self):
+        class Camera:
+            is_connected = True
+            connection_generation = 1
+
+            def set_download_dir(self, path):
+                self.download_dir = Path(path)
+
+            def start_live_view(self):
+                pass
+
+            def stop_live_view(self):
+                pass
+
+            def take_picture(self, _tag=""):
+                photo_number = len(main.SESSION_PHOTOS) + 1
+                main.SESSION_PHOTOS.append(
+                    str(self.download_dir / f"photo_{photo_number}.jpg"))
+
+        async def set_state(state, _extra=None):
+            main.STATE = state
+
+        def previews(_template_dir, _photos, config, output_dir):
+            paths = {
+                name: Path(output_dir) / f"{name}.jpg"
+                for name in config["templates"]
+            }
+            choices = [
+                PhotoChoicePreview(
+                    index,
+                    Path(output_dir) / f"single_{index + 1}_frame.jpg",
+                    Path(output_dir) / f"single_{index + 1}_no_frame.jpg",
+                )
+                for index in range(4)
+            ]
+            paths["single"] = choices[0].with_frame
+            return PreviewBatch(paths, {"single": choices})
+
+        uploaded = asyncio.Event()
+
+        async def enqueue(*_args, **_kwargs):
+            uploaded.set()
+
+        recorder = Mock()
+        recorder.stop_and_encode.return_value = "session.mp4"
+        config = dict(main.CONFIG)
+        config.update({
+            "num_photos": 4,
+            "pre_countdown_delay": 0,
+            "countdown_seconds": 0,
+            "countdown_sound_seconds": 0,
+            "template_select_timeout": 0.05,
+            "done_screen_seconds": 0,
+            # A photo_choice template as the silent fallback is the only case
+            # where the booth-side frame default is actually used.
+            "default_template": "single",
+            "photo_choice_default_with_frame": False,
+            "template_pack": "kvas01aug26",
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "event",
+            "print_enabled": False,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.multiple(
+                 main,
+                 camera=Camera(),
+                 video_recorder=recorder,
+                 CONFIG=config,
+                 PHOTOS_DIR=Path(tmpdir),
+                 CLIENTS=[],
+                 STATE="idle",
+                 SESSION_ID="",
+                 SESSION_PHOTOS=[],
+                 SESSION_LINK="",
+                 TEMPLATE_OPTIONS=[],
+                 SESSION_COUNT=0,
+                 _session_running=False,
+                 _background_uploads=set(),
+                 _camera_disconnected_event=asyncio.Event(),
+             ), \
+             patch("backend.main._start_locked", return_value=False), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="event"), \
+             patch("backend.main.yadisk_cloud.enqueue_session",
+                   new_callable=AsyncMock, side_effect=enqueue), \
+             patch("backend.main._prepare_session_link",
+                   new_callable=AsyncMock), \
+             patch("backend.main.generate_template_previews",
+                   side_effect=previews), \
+             patch("backend.main.compose") as compose_with_frame, \
+             patch(
+                 "backend.main.compose_unframed_photo",
+                 side_effect=lambda *_args: Image.new("RGB", (120, 80), "red"),
+             ) as compose_without_frame, \
+             patch("backend.main.broadcast", new_callable=AsyncMock), \
+             patch("backend.main.set_state", side_effect=set_state):
+            await main.run_session()
+            await asyncio.wait_for(uploaded.wait(), timeout=2)
+            if main._background_uploads:
+                await asyncio.gather(*list(main._background_uploads))
+
+        # Nobody touched the screen: the configured default decided, so the
+        # unframed compositor ran and the framed one did not.
+        compose_without_frame.assert_called_once()
+        compose_with_frame.assert_not_called()
 
 
 if __name__ == "__main__":
