@@ -42,6 +42,8 @@ jobs:
         shell: pwsh
         run: |
           $pyver = "3.12.10"
+          # Keep pip/distlib-generated Windows launchers byte-for-byte stable.
+          $env:SOURCE_DATE_EPOCH = "315532800"
           $url = "https://www.python.org/ftp/python/$pyver/python-$pyver-embed-amd64.zip"
           Write-Host "Downloading $url"
           Invoke-WebRequest -Uri $url -OutFile python-embed.zip

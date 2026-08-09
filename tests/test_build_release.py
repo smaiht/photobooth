@@ -258,6 +258,18 @@ class DeterministicReleaseTests(unittest.TestCase):
         self.assertIn("Start-Sleep -Seconds 1", workflow)
         self.assertNotIn("files: dist/*.zip", workflow)
 
+    def test_windows_console_launchers_use_a_fixed_build_timestamp(self):
+        workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(
+            encoding="utf-8",
+        )
+        epoch = '$env:SOURCE_DATE_EPOCH = "315532800"'
+
+        self.assertIn(epoch, workflow)
+        self.assertLess(
+            workflow.index(epoch),
+            workflow.index("python/python.exe get-pip.py"),
+        )
+
 
 class YandexReleasePublicationTests(unittest.IsolatedAsyncioTestCase):
     async def test_url_import_verifies_remote_size_and_zip_sha(self):
