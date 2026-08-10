@@ -867,6 +867,9 @@ async def _upload_job(job: dict) -> bool:
         "event_folder": event_folder.lstrip("/"),
         "session_id": job["session_id"],
         "created_at": job["created_at"],
+        # Always non-empty: the barrier above returns early without a URL, so a
+        # manifest can never describe an unpublished session folder.
+        "public_url": public_url,
         "files": manifest_files,
     }
     payload = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")

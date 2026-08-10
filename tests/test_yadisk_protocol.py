@@ -292,9 +292,51 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
             manifest = calls[-1][2]
             self.assertEqual(manifest["message_type"], "session_ready")
             self.assertEqual(manifest["event_folder"], "event")
+            # The share link travels with the media so the VPS can caption the
+            # Telegram message without publishing anything itself.
+            self.assertEqual(
+                manifest["public_url"], "https://disk.yandex.ru/d/link")
             self.assertEqual([entry["kind"] for entry in manifest["files"]], ["photo", "video"])
             self.assertTrue(all("session_name" not in entry for entry in manifest["files"]))
             self.assertTrue(all("md5" not in entry for entry in manifest["files"]))
+
+    async def test_manifest_is_never_written_without_a_public_url(self):
+        """The link is a precondition of the manifest, not an optional extra."""
+        with TemporaryDirectory() as tmpdir:
+            photo = Path(tmpdir) / "first.jpg"
+            photo.write_bytes(b"photo")
+            job = build_session_job(
+                "abc123",
+                [str(photo)],
+                None,
+                event_folder="/event",
+                session_folder="session-folder",
+            )
+
+            async def upload_path(local_path, _remote_path):
+                return True, {"size": local_path.stat().st_size}
+
+            with patch("backend.yadisk_cloud._ensure_directory",
+                       AsyncMock(return_value=True)), \
+                 patch("backend.yadisk_cloud._upload_path",
+                       side_effect=upload_path), \
+                 patch("backend.yadisk_cloud._publish_directory",
+                       AsyncMock(return_value=None)), \
+                 patch("backend.yadisk_cloud._ensure_promo_card",
+                       AsyncMock(return_value=True)) as promo, \
+                 patch("backend.yadisk_cloud._copy_path",
+                       AsyncMock(return_value=True)) as copy_path, \
+                 patch("backend.yadisk_cloud._upload_bytes",
+                       AsyncMock(return_value=True)) as upload_bytes, \
+                 patch("backend.yadisk_cloud._prepared_links", {}), \
+                 patch("backend.yadisk_cloud._bus_root", "/photobooth_system/control"):
+                # An unpublishable folder fails the job, so it stays queued and
+                # retries instead of announcing a session nobody can open.
+                self.assertFalse(await _upload_job(job))
+
+            promo.assert_not_awaited()
+            copy_path.assert_not_awaited()
+            upload_bytes.assert_not_awaited()
 
     async def test_retry_skips_already_uploaded_session_file_by_size(self):
         with TemporaryDirectory() as tmpdir:
