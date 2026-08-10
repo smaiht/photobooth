@@ -776,6 +776,12 @@ async def _run_session():
                 "without_frame_url": (
                     f"/photos/{SESSION_ID}/previews/{choice.without_frame.name}"
                 ),
+                # Full-size original for the magnifier. Previews are 720 px
+                # wide, so only this file has detail worth zooming into.
+                "original_url": (
+                    f"/photos/{SESSION_ID}/"
+                    f"{Path(SESSION_PHOTOS[choice.photo_index]).name}"
+                ),
             } for choice in choices]
         TEMPLATE_OPTIONS.append(option)
     selectable_templates = set(preview_paths)

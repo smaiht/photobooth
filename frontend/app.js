@@ -31,6 +31,13 @@ const photoChoicePanel = document.getElementById("photo-choice-panel");
 const photoChoiceOptions = document.getElementById("photo-choice-options");
 const frameOn = document.getElementById("frame-on");
 const frameOff = document.getElementById("frame-off");
+const templateZoom = document.getElementById("template-zoom");
+const photoViewer = document.getElementById("photo-viewer");
+const photoViewerViewport = document.getElementById("photo-viewer-viewport");
+const photoViewerImage = document.getElementById("photo-viewer-image");
+const photoViewerPrev = document.getElementById("photo-viewer-prev");
+const photoViewerNext = document.getElementById("photo-viewer-next");
+const photoViewerThumbs = document.getElementById("photo-viewer-thumbs");
 const qrModal = document.getElementById("qr-modal");
 const qrModalClose = document.getElementById("qr-modal-close");
 const qrModalCode = document.getElementById("qr-modal-code");
@@ -612,6 +619,7 @@ function animateTemplateMainFrom(previousTop) {
 }
 
 function lockTemplateSelection() {
+    closePhotoViewer();
     clearInterval(templateTimeout);
     setTemplateTimerText("");
     templateSkip.disabled = true;
@@ -665,6 +673,7 @@ function renderTemplateOptions(options) {
                 preview.photo_index,
                 preview.with_frame_url,
                 preview.without_frame_url,
+                preview.original_url,
             ])
             : [],
     ]));
@@ -752,6 +761,7 @@ function renderTemplateOptions(options) {
         });
         templateOptions.appendChild(button);
     });
+    configurePhotoViewer(options);
     startPhotoPreviewCycle();
 }
 
@@ -822,6 +832,9 @@ function resetTemplateSelection() {
     clearInterval(photoPreviewCycle);
     photoPreviewCycle = null;
     renderedTemplateSignature = "";
+    closePhotoViewer();
+    viewerFrames = [];
+    templateZoom.hidden = true;
     resetPhotoChoice();
     templateOptions.replaceChildren();
 }
@@ -902,10 +915,257 @@ frameOff.addEventListener("click", () => {
 screens.template.addEventListener("click", (event) => {
     if (photoChoicePanel.hidden) return;
     const target = event.target instanceof Element ? event.target : null;
-    if (!target || target.closest(".template-btn, .photo-choice-panel, #template-skip")) {
+    // The viewer sits on top of this screen, so its own clicks must not
+    // collapse the chooser underneath it.
+    if (!target || target.closest(
+        ".template-btn, .photo-choice-panel, #template-skip,"
+        + " #template-zoom, .photo-viewer",
+    )) {
         return;
     }
     closePhotoChoice();
+});
+
+// --- Photo viewer (magnifier) ---
+// Frames come from the photo_choice template: it is the only one that produces
+// per-photo previews, and those previews are what makes the viewer open
+// instantly. Without such a template the magnifier stays hidden.
+let viewerFrames = [];
+let viewerIndex = 0;
+
+function showViewerFrame(index) {
+    if (!viewerFrames.length) return;
+    viewerIndex = (index + viewerFrames.length) % viewerFrames.length;
+    const frame = viewerFrames[viewerIndex];
+    // Every frame starts unzoomed, so a leftover pan cannot hide the new photo.
+    resetViewerTransform();
+
+    // Show the cached preview immediately, then swap in the original once it
+    // has decoded. Only one full-size bitmap is ever held.
+    photoViewerImage.src = frame.previewUrl;
+    photoViewerImage.alt = `Кадр ${viewerIndex + 1}`;
+    if (frame.originalUrl) {
+        const original = new Image();
+        original.decoding = "async";
+        original.onload = () => {
+            if (!photoViewer.hidden && viewerFrames[viewerIndex] === frame) {
+                photoViewerImage.src = frame.originalUrl;
+            }
+        };
+        original.src = frame.originalUrl;
+    }
+    photoViewerThumbs.querySelectorAll("button").forEach((thumb, position) => {
+        thumb.classList.toggle("active", position === viewerIndex);
+        thumb.setAttribute("aria-current", String(position === viewerIndex));
+    });
+}
+
+function renderViewerThumbs() {
+    photoViewerThumbs.replaceChildren();
+    viewerFrames.forEach((frame, position) => {
+        const thumb = document.createElement("button");
+        thumb.type = "button";
+        thumb.className = "photo-viewer-thumb";
+        thumb.setAttribute("aria-label", `Кадр ${position + 1}`);
+        const image = document.createElement("img");
+        image.src = frame.previewUrl;
+        image.alt = "";
+        image.draggable = false;
+        thumb.appendChild(image);
+        thumb.addEventListener("click", () => showViewerFrame(position));
+        photoViewerThumbs.appendChild(thumb);
+    });
+}
+
+function openPhotoViewer() {
+    if (!viewerFrames.length) return;
+    photoViewer.hidden = false;
+    templateZoom.setAttribute("aria-expanded", "true");
+    renderViewerThumbs();
+    showViewerFrame(0);
+}
+
+function closePhotoViewer() {
+    if (photoViewer.hidden) return;
+    photoViewer.hidden = true;
+    templateZoom.setAttribute("aria-expanded", "false");
+    resetViewerTransform();
+    // Drop the full-size bitmap instead of keeping it alive behind the screen.
+    photoViewerImage.removeAttribute("src");
+    photoViewerThumbs.replaceChildren();
+}
+
+function togglePhotoViewer() {
+    if (photoViewer.hidden) {
+        openPhotoViewer();
+    } else {
+        closePhotoViewer();
+    }
+}
+
+function configurePhotoViewer(options) {
+    const source = Array.isArray(options)
+        ? options.find((option) => option?.photo_choice === true
+            && Array.isArray(option.photo_previews)
+            && option.photo_previews.length > 0)
+        : null;
+    viewerFrames = source
+        ? source.photo_previews.map((preview) => ({
+            previewUrl: preview.without_frame_url ?? preview.with_frame_url,
+            originalUrl: preview.original_url,
+        }))
+        : [];
+    templateZoom.hidden = viewerFrames.length === 0;
+}
+
+templateZoom.addEventListener("click", togglePhotoViewer);
+photoViewerPrev.addEventListener("click", () => showViewerFrame(viewerIndex - 1));
+photoViewerNext.addEventListener("click", () => showViewerFrame(viewerIndex + 1));
+
+// --- Pinch zoom and swipe ---
+// Pointer Events are tracked only inside the viewport, so the rest of the kiosk
+// UI keeps its normal single-tap behaviour and never scales.
+const VIEWER_MAX_SCALE = 4;
+const VIEWER_SWIPE_RATIO = 0.08;
+const viewerPointers = new Map();
+let viewerScale = 1;
+let viewerOffsetX = 0;
+let viewerOffsetY = 0;
+let gestureStart = null;
+
+function applyViewerTransform() {
+    photoViewerImage.style.transform =
+        `translate(${viewerOffsetX}px, ${viewerOffsetY}px) scale(${viewerScale})`;
+    // Panning only makes sense once the photo is larger than the viewport.
+    photoViewerViewport.classList.toggle("zoomed", viewerScale > 1);
+}
+
+function resetViewerTransform() {
+    viewerScale = 1;
+    viewerOffsetX = 0;
+    viewerOffsetY = 0;
+    gestureStart = null;
+    viewerPointers.clear();
+    applyViewerTransform();
+}
+
+// Keep the photo from being dragged away from the viewport: at scale 1 it stays
+// centred, and beyond that it may travel only over its own hidden overflow.
+function clampViewerOffset() {
+    const frame = photoViewerViewport.getBoundingClientRect();
+    const width = photoViewerImage.clientWidth * viewerScale;
+    const height = photoViewerImage.clientHeight * viewerScale;
+    const limitX = Math.max(0, (width - frame.width) / 2);
+    const limitY = Math.max(0, (height - frame.height) / 2);
+    viewerOffsetX = Math.min(limitX, Math.max(-limitX, viewerOffsetX));
+    viewerOffsetY = Math.min(limitY, Math.max(-limitY, viewerOffsetY));
+}
+
+function pointerCentroid() {
+    const points = [...viewerPointers.values()];
+    const total = points.reduce(
+        (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
+        { x: 0, y: 0 },
+    );
+    return { x: total.x / points.length, y: total.y / points.length };
+}
+
+function pointerSpread() {
+    const [first, second] = [...viewerPointers.values()];
+    if (!second) return 0;
+    return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+function beginGesture() {
+    gestureStart = {
+        centroid: pointerCentroid(),
+        spread: pointerSpread(),
+        scale: viewerScale,
+        offsetX: viewerOffsetX,
+        offsetY: viewerOffsetY,
+        pointers: viewerPointers.size,
+    };
+}
+
+photoViewerViewport.addEventListener("pointerdown", (event) => {
+    photoViewerViewport.setPointerCapture(event.pointerId);
+    viewerPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    beginGesture();
+});
+
+photoViewerViewport.addEventListener("pointermove", (event) => {
+    if (!viewerPointers.has(event.pointerId) || !gestureStart) return;
+    viewerPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+    const centroid = pointerCentroid();
+    if (gestureStart.spread > 0 && viewerPointers.size >= 2) {
+        // Two fingers: scale around the point between them, so the spot the
+        // guest pinched stays under their fingers.
+        const ratio = pointerSpread() / gestureStart.spread;
+        viewerScale = Math.min(
+            VIEWER_MAX_SCALE, Math.max(1, gestureStart.scale * ratio));
+        const growth = viewerScale / gestureStart.scale;
+        const frame = photoViewerViewport.getBoundingClientRect();
+        const anchorX = gestureStart.centroid.x - frame.left - frame.width / 2;
+        const anchorY = gestureStart.centroid.y - frame.top - frame.height / 2;
+        viewerOffsetX = centroid.x - frame.left - frame.width / 2
+            - (anchorX - gestureStart.offsetX) * growth;
+        viewerOffsetY = centroid.y - frame.top - frame.height / 2
+            - (anchorY - gestureStart.offsetY) * growth;
+    } else if (viewerScale > 1) {
+        // One finger on a zoomed photo pans it.
+        viewerOffsetX = gestureStart.offsetX + centroid.x - gestureStart.centroid.x;
+        viewerOffsetY = gestureStart.offsetY + centroid.y - gestureStart.centroid.y;
+    } else {
+        return;
+    }
+    clampViewerOffset();
+    applyViewerTransform();
+});
+
+function endViewerPointer(event) {
+    if (!viewerPointers.has(event.pointerId)) return;
+    const start = gestureStart;
+    const wasSingleTouch = viewerPointers.size === 1 && start?.pointers === 1;
+    viewerPointers.delete(event.pointerId);
+
+    if (wasSingleTouch && viewerScale === 1 && event.type === "pointerup") {
+        const travel = event.clientX - start.centroid.x;
+        const drift = Math.abs(event.clientY - start.centroid.y);
+        const swipe = window.innerWidth * VIEWER_SWIPE_RATIO;
+        if (Math.abs(travel) > swipe && Math.abs(travel) > drift) {
+            // A horizontal swipe flips frames, but only while not zoomed in:
+            // otherwise the same movement is a pan.
+            showViewerFrame(viewerIndex + (travel < 0 ? 1 : -1));
+        } else if (Math.abs(travel) < 10 && drift < 10) {
+            // A plain tap anywhere over the photo area closes the viewer, so
+            // the whole dark overlay behaves the same way.
+            closePhotoViewer();
+            return;
+        }
+    }
+
+    if (viewerPointers.size === 0) {
+        gestureStart = null;
+        if (viewerScale === 1) resetViewerTransform();
+    } else {
+        // Lifting one finger of a pinch continues as a pan without a jump.
+        beginGesture();
+    }
+}
+
+photoViewerViewport.addEventListener("pointerup", endViewerPointer);
+photoViewerViewport.addEventListener("pointercancel", endViewerPointer);
+
+// Any tap on the dark backdrop closes the viewer; the magnifier button itself
+// toggles it back. Taps over the photo are handled by the gesture code, which
+// tells a tap apart from a swipe or a pan.
+photoViewer.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || target.closest(
+        ".photo-viewer-viewport, .photo-viewer-nav, .photo-viewer-thumbs",
+    )) return;
+    closePhotoViewer();
 });
 
 function setTemplateTimerText(text) {
@@ -946,7 +1206,7 @@ function startTemplateTimer(seconds) {
 // Any touch anywhere on the template screen restarts the selection timeout.
 // There is no button: the backend is told to extend, and the visible countdown
 // restarts from the same configured value.
-function extendTemplateTimer() {
+function requestTemplateExtension() {
     if (currentState !== "template_select" || templateSkip.disabled) return;
     if (previewMode) {
         startTemplateTimer(templateTimerSeconds);
@@ -955,7 +1215,7 @@ function extendTemplateTimer() {
     send({ type: "template_activity" });
 }
 
-screens.template.addEventListener("pointerdown", extendTemplateTimer);
+screens.template.addEventListener("pointerdown", requestTemplateExtension);
 
 // --- Start session ---
 idleStartButton.addEventListener("click", () => {

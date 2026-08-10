@@ -118,6 +118,9 @@
                         photo_index: photoIndex,
                         with_frame_url: photoUrl(photoIndex, true),
                         without_frame_url: photoUrl(photoIndex, false),
+                        // No session originals in preview mode: the viewer
+                        // simply keeps showing the placeholder.
+                        original_url: photoUrl(photoIndex, false),
                     }),
                 );
             }

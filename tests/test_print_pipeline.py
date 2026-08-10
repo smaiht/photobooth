@@ -780,6 +780,73 @@ class FrontendPreviewTests(unittest.TestCase):
         self.assertIn('screens.template.addEventListener("click"', script)
         self.assertIn("closePhotoChoice();", script)
 
+    def test_photo_viewer_is_an_overlay_backed_by_previews_and_originals(self):
+        html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "frontend" / "style.css").read_text(encoding="utf-8")
+        backend = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+
+        def rule(selector):
+            self.assertIn(f"{selector} {{", styles)
+            return styles.split(f"{selector} {{", 1)[1].split("}", 1)[0]
+
+        # Backend exposes the session original next to the previews.
+        self.assertIn('"original_url": (', backend)
+        self.assertIn("Path(SESSION_PHOTOS[choice.photo_index]).name", backend)
+
+        # An overlay inside the template screen, not another screen.
+        self.assertIn('id="photo-viewer"', html)
+        self.assertNotIn('id="screen-photo-viewer"', html)
+        self.assertIn("position: absolute", rule(".photo-viewer"))
+        self.assertIn("inset: 0", rule(".photo-viewer"))
+
+        # Pinch zoom is scoped to the photo viewport: the rest of the kiosk UI
+        # keeps normal touch behaviour and never scales.
+        self.assertIn('id="photo-viewer-viewport"', html)
+        self.assertIn("touch-action: none", rule(".photo-viewer-viewport"))
+        self.assertIn("overflow: hidden", rule(".photo-viewer-viewport"))
+        self.assertNotIn("touch-action: none", rule(".photo-viewer-stage"))
+        self.assertIn('photoViewerViewport.addEventListener("pointerdown"', script)
+        self.assertIn('photoViewerViewport.addEventListener("pointermove"', script)
+        self.assertIn('photoViewerViewport.addEventListener("pointercancel"', script)
+        self.assertIn("function pointerSpread()", script)
+        self.assertIn("const VIEWER_MAX_SCALE = 4;", script)
+        self.assertIn("function clampViewerOffset()", script)
+        # Zoom resets per frame and on close, so a pan cannot hide a new photo.
+        self.assertEqual(script.count("resetViewerTransform();"), 3)
+
+        # Cached preview first, full-size original swapped in once decoded.
+        self.assertIn("photoViewerImage.src = frame.previewUrl;", script)
+        self.assertIn("photoViewerImage.src = frame.originalUrl;", script)
+        # Closing releases the full-size bitmap.
+        self.assertIn('photoViewerImage.removeAttribute("src");', script)
+
+        # The magnifier only exists when a photo_choice template does.
+        self.assertIn("function configurePhotoViewer(options)", script)
+        self.assertIn("templateZoom.hidden = viewerFrames.length === 0;", script)
+        self.assertIn('option?.photo_choice === true', script)
+
+        # The magnifier button toggles the viewer; there is no close button and
+        # the selection timeout keeps running untouched.
+        self.assertIn("function togglePhotoViewer()", script)
+        self.assertIn('templateZoom.addEventListener("click", togglePhotoViewer)',
+                      script)
+        self.assertNotIn("photo-viewer-close", html)
+        self.assertNotIn("photoViewerClose", script)
+        self.assertNotIn("photo-viewer-close", styles)
+        self.assertNotIn("pauseTemplateTimer", script)
+        self.assertNotIn("templateTimerHeartbeat", script)
+        # Any tap on the dark backdrop closes it.
+        self.assertIn('photoViewer.addEventListener("click"', script)
+        self.assertIn('".photo-viewer-viewport, .photo-viewer-nav,'
+                      ' .photo-viewer-thumbs"', script)
+        # The countdown and the toggle stay visible above the overlay.
+        self.assertIn("z-index: 12", rule("#template-timer"))
+        self.assertIn("z-index: 12", rule("#template-zoom"))
+        self.assertIn("z-index: 10", rule(".photo-viewer"))
+        # A locked selection must not leave the viewer hanging over the screen.
+        self.assertIn("closePhotoViewer();", script)
+
     def test_frame_default_is_configured_once_for_booth_and_frontend(self):
         config = json.loads(
             (ROOT / "config_app.json").read_text(encoding="utf-8"))
@@ -1756,6 +1823,119 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(print_job.await_args.args[2], "strips")
         self.assertEqual(states.count("composing"), 1)
         self.assertEqual(states.count("printing") + states.count("done"), 1)
+
+    async def test_template_options_expose_session_originals_for_the_viewer(self):
+        class Camera:
+            is_connected = True
+            connection_generation = 1
+
+            def set_download_dir(self, path):
+                self.download_dir = Path(path)
+
+            def start_live_view(self):
+                pass
+
+            def stop_live_view(self):
+                pass
+
+            def take_picture(self, _tag=""):
+                photo_number = len(main.SESSION_PHOTOS) + 1
+                main.SESSION_PHOTOS.append(
+                    str(self.download_dir / f"photo_{photo_number}.jpg"))
+
+        exposed_options = []
+
+        async def set_state(state, _extra=None):
+            main.STATE = state
+            if state == "template_select":
+                exposed_options.extend(main.TEMPLATE_OPTIONS)
+                main.app.state.on_template_choice("grid")
+
+        def previews(_template_dir, _photos, config, output_dir):
+            paths = {
+                name: Path(output_dir) / f"{name}.jpg"
+                for name in config["templates"]
+            }
+            choices = [
+                PhotoChoicePreview(
+                    index,
+                    Path(output_dir) / f"single_{index + 1}_frame.jpg",
+                    Path(output_dir) / f"single_{index + 1}_no_frame.jpg",
+                )
+                for index in range(4)
+            ]
+            paths["single"] = choices[0].with_frame
+            return PreviewBatch(paths, {"single": choices})
+
+        uploaded = asyncio.Event()
+
+        async def enqueue(*_args, **_kwargs):
+            uploaded.set()
+
+        recorder = Mock()
+        recorder.stop_and_encode.return_value = "session.mp4"
+        config = dict(main.CONFIG)
+        config.update({
+            "num_photos": 4,
+            "pre_countdown_delay": 0,
+            "countdown_seconds": 0,
+            "countdown_sound_seconds": 0,
+            "template_select_timeout": 1,
+            "done_screen_seconds": 0,
+            "default_template": "grid",
+            "template_pack": "kvas01aug26",
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "event",
+            "print_enabled": False,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.multiple(
+                 main,
+                 camera=Camera(),
+                 video_recorder=recorder,
+                 CONFIG=config,
+                 PHOTOS_DIR=Path(tmpdir),
+                 CLIENTS=[],
+                 STATE="idle",
+                 SESSION_ID="",
+                 SESSION_PHOTOS=[],
+                 SESSION_LINK="",
+                 TEMPLATE_OPTIONS=[],
+                 SESSION_COUNT=0,
+                 _session_running=False,
+                 _background_uploads=set(),
+                 _camera_disconnected_event=asyncio.Event(),
+             ), \
+             patch("backend.main._start_locked", return_value=False), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="event"), \
+             patch("backend.main.yadisk_cloud.enqueue_session",
+                   new_callable=AsyncMock, side_effect=enqueue), \
+             patch("backend.main._prepare_session_link",
+                   new_callable=AsyncMock), \
+             patch("backend.main.generate_template_previews",
+                   side_effect=previews), \
+             patch("backend.main.compose",
+                   return_value=Image.new("RGB", (120, 80), "white")), \
+             patch("backend.main.broadcast", new_callable=AsyncMock), \
+             patch("backend.main.set_state", side_effect=set_state):
+            await main.run_session()
+            await asyncio.wait_for(uploaded.wait(), timeout=2)
+            if main._background_uploads:
+                await asyncio.gather(*list(main._background_uploads))
+
+        single = next(
+            option for option in exposed_options if option["name"] == "single")
+        originals = [
+            preview["original_url"] for preview in single["photo_previews"]]
+        # Full-size session frames, served straight from the mounted /photos.
+        self.assertEqual(len(originals), 4)
+        for index, url in enumerate(originals, start=1):
+            with self.subTest(photo=index):
+                self.assertTrue(url.startswith("/photos/"))
+                self.assertTrue(url.endswith(f"/photo_{index}.jpg"))
+                self.assertNotIn("/previews/", url)
 
     async def test_timeout_fallback_uses_configured_frame_default(self):
         class Camera:

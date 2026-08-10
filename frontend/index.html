@@ -104,6 +104,43 @@
                 <div class="photo-choice-options" id="photo-choice-options"></div>
             </section>
             <div id="template-timer"></div>
+            <!-- Magnifier: only rendered when a photo_choice template exists,
+                 because its per-photo previews are what the gallery shows. -->
+            <button id="template-zoom" type="button" hidden
+                    aria-label="Рассмотреть кадры" aria-expanded="false"
+                    aria-controls="photo-viewer">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+                    <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor"
+                            stroke-width="2.2"/>
+                    <path d="M15.5 15.5 21 21" stroke="currentColor"
+                          stroke-width="2.2" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <section class="photo-viewer" id="photo-viewer" hidden
+                     aria-label="Просмотр кадров">
+                <div class="photo-viewer-stage">
+                    <button class="photo-viewer-nav prev" id="photo-viewer-prev"
+                            type="button" aria-label="Предыдущий кадр">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+                            <path d="M15 4 7 12l8 8" stroke="currentColor"
+                                  stroke-width="2.4" stroke-linecap="round"
+                                  stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <div class="photo-viewer-viewport" id="photo-viewer-viewport">
+                        <img id="photo-viewer-image" alt="" draggable="false">
+                    </div>
+                    <button class="photo-viewer-nav next" id="photo-viewer-next"
+                            type="button" aria-label="Следующий кадр">
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+                            <path d="M9 4l8 8-8 8" stroke="currentColor"
+                                  stroke-width="2.4" stroke-linecap="round"
+                                  stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="photo-viewer-thumbs" id="photo-viewer-thumbs"></div>
+            </section>
         </div>
 
         <!-- DONE: printing status -->

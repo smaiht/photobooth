@@ -611,6 +611,9 @@ html, body {
 }
 
 #template-timer {
+    /* Stays readable above the viewer overlay: the countdown keeps running
+       while the guest looks at the frames. */
+    z-index: 12;
     position: absolute;
     bottom: 1.7vh;
     left: 50%;
@@ -618,6 +621,139 @@ html, body {
     font-size: 1vw;
     opacity: 0.6;
     white-space: nowrap;
+}
+#screen-template:has(.photo-viewer:not([hidden])) #template-timer {
+    color: #fff;
+}
+
+/* Magnifier button, mirroring the skip button in the opposite corner. It also
+   closes the viewer, so it stays above the overlay. */
+#template-zoom {
+    z-index: 12;
+    position: absolute;
+    top: 5vh;
+    left: 5vh;
+    width: 7vw;
+    height: 7vw;
+    border: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: #eee;
+    color: #555;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+#template-zoom[hidden] { display: none; }
+#template-zoom:active { background: #ddd; }
+#template-zoom svg { width: 3.4vw; height: 3.4vw; }
+
+/* Photo viewer: an overlay inside the template screen, not a separate screen. */
+.photo-viewer {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2vh;
+    padding: 4vh 4vw;
+    background: rgba(12, 12, 12, 0.92);
+    animation: photo-viewer-reveal 0.18s ease-out;
+}
+.photo-viewer[hidden] { display: none; }
+
+@keyframes photo-viewer-reveal {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.photo-viewer-stage {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2vw;
+}
+
+/* Pinch/pan happens only here, so the rest of the kiosk UI never scales.
+   touch-action is scoped to this element instead of the whole page. */
+.photo-viewer-viewport {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+#photo-viewer-image {
+    flex: 0 1 auto;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 0.6vw;
+    background: #000;
+    transform-origin: center center;
+    will-change: transform;
+}
+
+.photo-viewer-nav {
+    flex: 0 0 auto;
+    width: 6.5vw;
+    height: 6.5vw;
+    border: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+.photo-viewer-nav:active { background: rgba(255, 255, 255, 0.26); }
+.photo-viewer-nav svg { width: 3vw; height: 3vw; }
+
+.photo-viewer-thumbs {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.2vw;
+}
+
+.photo-viewer-thumb {
+    width: 6.5vw;
+    aspect-ratio: 3 / 2;
+    padding: 0;
+    border: 0.3vh solid transparent;
+    border-radius: 0.5vw;
+    overflow: hidden;
+    background: transparent;
+    opacity: 0.5;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+.photo-viewer-thumb.active {
+    border-color: #FF2973;
+    opacity: 1;
+}
+
+.photo-viewer-thumb img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .photo-choice-panel {
