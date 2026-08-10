@@ -731,8 +731,9 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
         def consume():
             order.append("consume")
 
-        async def state(value):
+        async def state(value, extra=None):
             self.assertEqual(value, "done")
+            self.assertEqual(extra, {"print_sheets": 1})
             order.append("done")
 
         with patch.object(main, "CONFIG", {"print_enabled": True}), \
@@ -742,9 +743,51 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
                    side_effect=consume), \
              patch("backend.main.set_state", side_effect=state):
             await main._finish_successful_session(
-                Path("print.jpg"), "grid", 7, True)
+                [(Path("print.jpg"), "grid")], 7, True)
 
         self.assertEqual(order, ["print", "camera", "consume", "done"])
+
+    async def test_basket_queues_every_sheet_before_consuming_one_allowance(self):
+        """A multi-sheet basket is one paid session, not one job per sheet."""
+        queued = []
+
+        async def enqueue(path, _config, template=""):
+            queued.append((Path(path).name, template))
+
+        consumed = []
+
+        async def state(value, extra=None):
+            self.assertEqual(value, "done")
+            self.assertEqual(extra, {"print_sheets": 5})
+
+        with patch.object(main, "CONFIG", {"print_enabled": True}), \
+             patch("backend.printer.enqueue_print", side_effect=enqueue), \
+             patch("backend.main._require_session_camera"), \
+             patch("backend.main._consume_cafe_unlock_session",
+                   side_effect=lambda: consumed.append(1)), \
+             patch("backend.main.set_state", side_effect=state):
+            await main._finish_successful_session(
+                [
+                    (Path("print_strips.jpg"), "strips"),
+                    (Path("print_strips.jpg"), "strips"),
+                    (Path("print_grid.jpg"), "grid"),
+                    (Path("print_grid.jpg"), "grid"),
+                    (Path("print_single_photo_02_frame.jpg"), "single"),
+                ],
+                7,
+                True,
+            )
+
+        # Every sheet reaches the spooler, and strips keep their own queue name
+        # so the DNP 2inch cut still applies to them alone.
+        self.assertEqual(queued, [
+            ("print_strips.jpg", "strips"),
+            ("print_strips.jpg", "strips"),
+            ("print_grid.jpg", "grid"),
+            ("print_grid.jpg", "grid"),
+            ("print_single_photo_02_frame.jpg", "single"),
+        ])
+        self.assertEqual(consumed, [1])
 
     async def test_print_enqueue_error_does_not_consume_allowance(self):
         with patch.object(main, "CONFIG", {"print_enabled": True}), \
@@ -754,7 +797,7 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
              patch("backend.main.set_state", new_callable=AsyncMock) as state:
             with self.assertRaisesRegex(RuntimeError, "printer unavailable"):
                 await main._finish_successful_session(
-                    Path("print.jpg"), "grid", 7, True)
+                    [(Path("print.jpg"), "grid")], 7, True)
 
         consume.assert_not_called()
         state.assert_not_awaited()

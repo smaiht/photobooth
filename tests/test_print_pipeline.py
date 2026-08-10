@@ -688,6 +688,7 @@ class FrontendPreviewTests(unittest.TestCase):
             'processing: "processing"',
             'template: "template"',
             '"photo-choice": "photo_choice"',
+            '"template-multi": "template_multi"',
             'done: "done"',
         ):
             with self.subTest(route=route):
@@ -779,6 +780,62 @@ class FrontendPreviewTests(unittest.TestCase):
         self.assertIn("if (isOpen)", script)
         self.assertIn('screens.template.addEventListener("click"', script)
         self.assertIn("closePhotoChoice();", script)
+
+    def test_multi_select_mode_is_opt_in_and_never_prints_on_a_stray_tap(self):
+        html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "frontend" / "style.css").read_text(encoding="utf-8")
+
+        def rule(selector):
+            self.assertIn(f"{selector} {{", styles)
+            return styles.split(f"{selector} {{", 1)[1].split("}", 1)[0]
+
+        self.assertIn('id="template-multi"', html)
+        self.assertIn('id="template-print"', html)
+        self.assertIn('id="template-print-count"', html)
+        # The toggle sits next to the magnifier, not centred.
+        self.assertIn("left: calc(5vh + 8.5vw)", rule(".template-multi-group"))
+        # Badges only exist while the mode is on, so the plain screen is
+        # untouched for guest events.
+        self.assertIn("display: none", rule(".print-badge-layer"))
+        self.assertIn("display: grid",
+                      rule("#screen-template.multi-select .print-badge-layer"))
+        self.assertIn("display: flex",
+                      rule("#screen-template.multi-select .print-badge"))
+        # The print button is a circle in the lower right corner. It must not
+        # reserve layout space: a padding on the centred screen would shift the
+        # whole title/previews block upwards.
+        print_rule = rule("#template-print")
+        self.assertIn("position: absolute", print_rule)
+        self.assertIn("right: 5vh", print_rule)
+        self.assertIn("bottom: 55vh", print_rule)
+        self.assertIn("border-radius: 50%", print_rule)
+        self.assertNotIn("#screen-template.multi-select {", styles)
+
+        # The gallery overlay must cover both new controls. Only the magnifier
+        # stays above it, because it is what closes the gallery again.
+        viewer_z = int(rule(".photo-viewer").split("z-index:")[1]
+                       .split(";")[0].strip())
+        for selector in (".template-multi-group", "#template-print"):
+            with self.subTest(selector=selector):
+                depth = int(rule(selector).split("z-index:")[1]
+                            .split(";")[0].strip())
+                self.assertLess(depth, viewer_z)
+
+        # A tile tap in multi-select is inert: only +/- change the basket.
+        self.assertIn("if (multiSelectActive) return;", script)
+        # Nested buttons are invalid HTML, so badges are siblings of the tile.
+        self.assertIn('tile.className = "template-tile"', script)
+        self.assertIn('tile.className = "photo-choice-tile"', script)
+        # The button is disabled while the basket is empty.
+        self.assertIn("templatePrint.disabled = total === 0", script)
+        # Availability is decided by the backend, not by the frontend.
+        self.assertIn("multiPrintAvailable = data.multi_print === true", script)
+        self.assertIn('send({ type: "select_template", items })', script)
+
+        backend = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertIn('msg["multi_print"] = _multi_print_available()', backend)
+        self.assertIn('msg["multi_print_max_sheets"]', backend)
 
     def test_photo_viewer_is_an_overlay_backed_by_previews_and_originals(self):
         html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
@@ -914,7 +971,7 @@ class FrontendPreviewTests(unittest.TestCase):
 
         # The skip button carries a visible label, and only the circle is
         # tappable so the label cannot swallow background extension taps.
-        self.assertIn("НЕ ПЕЧАТАТЬ", html)
+        self.assertIn("ФОТКАТЬ ЗАНОВО", html)
         self.assertIn('class="template-skip-label"', html)
         self.assertIn("pointer-events: none", rule(".template-skip-group"))
         self.assertIn("pointer-events: auto", rule("#template-skip"))
@@ -2043,6 +2100,374 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         # unframed compositor ran and the framed one did not.
         compose_without_frame.assert_called_once()
         compose_with_frame.assert_not_called()
+
+
+class PrintBasketTests(unittest.TestCase):
+    """Basket normalization: the one-tap path is the single-item case."""
+
+    AVAILABLE = {
+        "grid": {},
+        "strips": {},
+        "single": {"photo_choice": True},
+    }
+    SELECTABLE = {"grid", "strips", "single"}
+
+    def normalize(self, raw, photo_count=4):
+        return main._normalize_print_item(
+            raw, self.SELECTABLE, self.AVAILABLE, photo_count)
+
+    def test_plain_template_ignores_photo_fields(self):
+        item = self.normalize({
+            "template": "grid",
+            "photo_index": 3,
+            "with_frame": False,
+        })
+        self.assertEqual(item, {
+            "template": "grid",
+            "photo_index": None,
+            "with_frame": True,
+            "copies": 1,
+        })
+
+    def test_photo_choice_requires_valid_index_and_frame(self):
+        for raw in (
+            {"template": "single"},
+            {"template": "single", "photo_index": 4, "with_frame": True},
+            {"template": "single", "photo_index": -1, "with_frame": True},
+            {"template": "single", "photo_index": True, "with_frame": True},
+            {"template": "single", "photo_index": 2},
+            {"template": "single", "photo_index": 2, "with_frame": "false"},
+        ):
+            with self.subTest(raw=raw):
+                self.assertIsNone(self.normalize(raw))
+
+        self.assertEqual(
+            self.normalize(
+                {"template": "single", "photo_index": 2, "with_frame": False}),
+            {
+                "template": "single",
+                "photo_index": 2,
+                "with_frame": False,
+                "copies": 1,
+            },
+        )
+
+    def test_unknown_template_and_bad_copies_are_rejected(self):
+        for raw in (
+            {"template": "unknown"},
+            {"template": None},
+            "grid",
+            {"template": "grid", "copies": 0},
+            {"template": "grid", "copies": -2},
+            {"template": "grid", "copies": 1.5},
+            {"template": "grid", "copies": "2"},
+            {"template": "grid", "copies": True},
+        ):
+            with self.subTest(raw=raw):
+                self.assertIsNone(self.normalize(raw))
+
+    def test_identical_entries_merge_but_frame_variants_stay_apart(self):
+        merged = main._merge_print_items([
+            {"template": "strips", "photo_index": None,
+             "with_frame": True, "copies": 1},
+            {"template": "strips", "photo_index": None,
+             "with_frame": True, "copies": 2},
+            {"template": "single", "photo_index": 1,
+             "with_frame": True, "copies": 1},
+            {"template": "single", "photo_index": 1,
+             "with_frame": False, "copies": 1},
+        ])
+
+        # Three strips sheets compose once; the framed and unframed versions of
+        # the same photo remain two different sheets.
+        self.assertEqual(merged, [
+            {"template": "strips", "photo_index": None,
+             "with_frame": True, "copies": 3},
+            {"template": "single", "photo_index": 1,
+             "with_frame": True, "copies": 1},
+            {"template": "single", "photo_index": 1,
+             "with_frame": False, "copies": 1},
+        ])
+
+    def test_multi_select_is_limited_to_the_technical_event(self):
+        config = {
+            "multi_print_enabled": True,
+            "technical_event_name": "Кафе",
+        }
+        with patch.object(main, "CONFIG", config), \
+             patch("backend.main._active_event_name", return_value="Кафе"):
+            self.assertTrue(main._multi_print_available())
+        with patch.object(main, "CONFIG", config), \
+             patch("backend.main._active_event_name",
+                   return_value="Свадьба Ивановых"):
+            self.assertFalse(main._multi_print_available())
+
+        disabled = dict(config, multi_print_enabled=False)
+        with patch.object(main, "CONFIG", disabled), \
+             patch("backend.main._active_event_name", return_value="Кафе"):
+            self.assertFalse(main._multi_print_available())
+
+    def test_sheet_limit_falls_back_for_unusable_values(self):
+        for raw in (0, -1, 21, 2.5, "6", True, None):
+            with self.subTest(raw=raw), \
+                 patch.object(main, "CONFIG", {"multi_print_max_sheets": raw}):
+                self.assertEqual(
+                    main._multi_print_max_sheets(),
+                    main.DEFAULT_MULTI_PRINT_MAX_SHEETS,
+                )
+        with patch.object(main, "CONFIG", {"multi_print_max_sheets": 8}):
+            self.assertEqual(main._multi_print_max_sheets(), 8)
+
+    def test_config_ships_multi_print_fields(self):
+        config = json.loads(
+            (ROOT / "config_app.json").read_text(encoding="utf-8"))
+        self.assertIs(config["multi_print_enabled"], True)
+        self.assertEqual(config["multi_print_max_sheets"], 6)
+        self.assertLessEqual(
+            config["multi_print_max_sheets"], main.MAX_MULTI_PRINT_SHEETS)
+
+
+class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
+    """A basket reaches the printer as several sheets from one session."""
+
+    class Camera:
+        is_connected = True
+        connection_generation = 1
+
+        def set_download_dir(self, path):
+            self.download_dir = Path(path)
+
+        def start_live_view(self):
+            pass
+
+        def stop_live_view(self):
+            pass
+
+        def take_picture(self, _tag=""):
+            photo_number = len(main.SESSION_PHOTOS) + 1
+            main.SESSION_PHOTOS.append(
+                str(self.download_dir / f"photo_{photo_number}.jpg"))
+
+    @staticmethod
+    def _previews(_template_dir, _photos, config, output_dir):
+        paths = {
+            name: Path(output_dir) / f"{name}.jpg"
+            for name in config["templates"]
+        }
+        choices = [
+            PhotoChoicePreview(
+                index,
+                Path(output_dir) / f"single_{index + 1}_frame.jpg",
+                Path(output_dir) / f"single_{index + 1}_no_frame.jpg",
+            )
+            for index in range(4)
+        ]
+        paths["single"] = choices[0].with_frame
+        return PreviewBatch(paths, {"single": choices})
+
+    async def _run(self, choose, *, multi_print=True, max_sheets=6,
+                   select_timeout=30):
+        """Run one full session, letting ``choose`` drive the basket."""
+        composed = []
+        unframed = []
+        states = []
+
+        async def set_state(state, extra=None):
+            main.STATE = state
+            states.append((state, extra))
+            if state == "template_select":
+                choose(main.app.state.on_template_choice)
+
+        uploaded = asyncio.Event()
+
+        async def enqueue(*_args, **_kwargs):
+            uploaded.set()
+
+        def compose_template(_dir, name, photos, _config):
+            composed.append((name, len(photos)))
+            return Image.new("RGB", (120, 80), "white")
+
+        def compose_plain(photo, _config):
+            unframed.append(Path(photo).name)
+            return Image.new("RGB", (120, 80), "red")
+
+        recorder = Mock()
+        recorder.stop_and_encode.return_value = "session.mp4"
+        config = dict(main.CONFIG)
+        config.update({
+            "num_photos": 4,
+            "pre_countdown_delay": 0,
+            "countdown_seconds": 0,
+            "countdown_sound_seconds": 0,
+            "template_select_timeout": select_timeout,
+            "done_screen_seconds": 0,
+            "default_template": "grid",
+            "template_pack": "kvas01aug26",
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Кафе",
+            "print_enabled": True,
+            "multi_print_enabled": multi_print,
+            "multi_print_max_sheets": max_sheets,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.multiple(
+                 main,
+                 camera=self.Camera(),
+                 video_recorder=recorder,
+                 CONFIG=config,
+                 PHOTOS_DIR=Path(tmpdir),
+                 CLIENTS=[],
+                 STATE="idle",
+                 SESSION_ID="",
+                 SESSION_PHOTOS=[],
+                 SESSION_LINK="",
+                 TEMPLATE_OPTIONS=[],
+                 SESSION_COUNT=0,
+                 _session_running=False,
+                 _background_uploads=set(),
+                 _camera_disconnected_event=asyncio.Event(),
+             ), \
+             patch("backend.main._start_locked", return_value=False), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="Кафе"), \
+             patch("backend.main.yadisk_cloud.enqueue_session",
+                   new_callable=AsyncMock, side_effect=enqueue), \
+             patch("backend.main._prepare_session_link",
+                   new_callable=AsyncMock), \
+             patch("backend.main.generate_template_previews",
+                   side_effect=self._previews), \
+             patch("backend.main.compose", side_effect=compose_template), \
+             patch("backend.main.compose_unframed_photo",
+                   side_effect=compose_plain), \
+             patch("backend.printer.enqueue_print",
+                   new_callable=AsyncMock) as print_job, \
+             patch("backend.main._consume_cafe_unlock_session") as consume, \
+             patch("backend.main.broadcast", new_callable=AsyncMock), \
+             patch("backend.main.set_state", side_effect=set_state):
+            await main.run_session()
+            await asyncio.wait_for(uploaded.wait(), timeout=2)
+            if main._background_uploads:
+                await asyncio.gather(*list(main._background_uploads))
+            queued = [
+                (Path(call.args[0]).name, call.args[2])
+                for call in print_job.await_args_list
+            ]
+
+        return {
+            "queued": queued,
+            "composed": composed,
+            "unframed": unframed,
+            "states": states,
+            "consumed": consume.call_count,
+        }
+
+    async def test_mixed_basket_prints_every_sheet_from_one_composition_each(self):
+        def choose(select):
+            select("", None, None, [
+                {"template": "strips", "copies": 2},
+                {"template": "grid", "copies": 2},
+                {"template": "single", "photo_index": 1,
+                 "with_frame": False, "copies": 1},
+            ])
+
+        result = await self._run(choose)
+
+        # Six sheets: 2 strips (= 4 physical strips), 2 grid postcards, 1 photo.
+        self.assertEqual(result["queued"], [
+            ("print_strips.jpg", "strips"),
+            ("print_strips.jpg", "strips"),
+            ("print_grid.jpg", "grid"),
+            ("print_grid.jpg", "grid"),
+            ("print_single_photo_02_no_frame.jpg", "single"),
+        ])
+        # Each distinct layout is composed exactly once, copies reuse the JPEG.
+        self.assertEqual(result["composed"], [("strips", 4), ("grid", 4)])
+        self.assertEqual(result["unframed"], ["photo_2.jpg"])
+        # One session, one allowance, regardless of the sheet count.
+        self.assertEqual(result["consumed"], 1)
+        done = [extra for state, extra in result["states"] if state == "done"]
+        self.assertEqual(done, [{"print_sheets": 5}])
+
+    async def test_basket_over_the_sheet_limit_is_refused_entirely(self):
+        def choose(select):
+            select("", None, None, [
+                {"template": "grid", "copies": 4},
+                {"template": "strips", "copies": 3},
+            ])
+            # The oversized basket was ignored, so the guest can still choose.
+            select("strips")
+
+        result = await self._run(choose, max_sheets=6)
+
+        self.assertEqual(result["queued"], [("print_strips.jpg", "strips")])
+
+    async def test_one_invalid_entry_rejects_the_whole_basket(self):
+        def choose(select):
+            select("", None, None, [
+                {"template": "grid", "copies": 1},
+                {"template": "single", "photo_index": 9, "with_frame": True},
+            ])
+            select("grid")
+
+        result = await self._run(choose)
+
+        # A partial print would charge the guest for sheets they never chose.
+        self.assertEqual(result["queued"], [("print_grid.jpg", "grid")])
+
+    async def test_basket_is_refused_outside_the_technical_event(self):
+        def choose(select):
+            select("", None, None, [{"template": "grid", "copies": 2}])
+            select("grid")
+
+        result = await self._run(choose, multi_print=False)
+
+        self.assertEqual(result["queued"], [("print_grid.jpg", "grid")])
+
+    async def test_single_tap_still_prints_exactly_one_sheet(self):
+        def choose(select):
+            select("strips")
+
+        result = await self._run(choose)
+
+        self.assertEqual(result["queued"], [("print_strips.jpg", "strips")])
+        self.assertEqual(result["composed"], [("strips", 4)])
+        self.assertEqual(result["consumed"], 1)
+        done = [extra for state, extra in result["states"] if state == "done"]
+        self.assertEqual(done, [{"print_sheets": 1}])
+
+    async def test_duplicate_taps_in_a_basket_merge_into_copies(self):
+        def choose(select):
+            select("", None, None, [
+                {"template": "grid", "copies": 1},
+                {"template": "grid", "copies": 1},
+                {"template": "grid", "copies": 1},
+            ])
+
+        result = await self._run(choose)
+
+        self.assertEqual(result["queued"], [
+            ("print_grid.jpg", "grid"),
+            ("print_grid.jpg", "grid"),
+            ("print_grid.jpg", "grid"),
+        ])
+        self.assertEqual(result["composed"], [("grid", 4)])
+
+    async def test_timeout_prints_one_default_sheet_not_an_unsent_basket(self):
+        """An abandoned screen must not spend a roll on an unconfirmed basket.
+
+        The basket only ever reaches the booth when the guest presses the print
+        button, so a walk-away falls back to the single default sheet exactly as
+        it did before multi-select existed.
+        """
+        def choose(_select):
+            pass
+
+        result = await self._run(choose, select_timeout=0.1)
+
+        self.assertEqual(result["queued"], [("print_grid.jpg", "grid")])
+        done = [extra for state, extra in result["states"] if state == "done"]
+        self.assertEqual(done, [{"print_sheets": 1}])
 
 
 if __name__ == "__main__":

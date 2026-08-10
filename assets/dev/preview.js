@@ -8,6 +8,7 @@
         processing: "processing",
         template: "template",
         "photo-choice": "photo_choice",
+        "template-multi": "template_multi",
         done: "done",
     };
 
@@ -183,15 +184,26 @@
                 countdown.classList.add("visible");
             } else if (route === "processing") {
                 api.switchScreen("processing", {});
-            } else if (route === "template" || route === "photo_choice") {
+            } else if (route === "template" || route === "photo_choice"
+                    || route === "template_multi") {
+                const maxSheets = Math.floor(
+                    Number(appConfig.multi_print_max_sheets));
                 api.switchScreen("template_select", {
                     templates: buildTemplateOptions(appConfig, templateConfig),
                     timeout: appConfig.template_select_timeout,
+                    // Preview always offers the mode so its layout can be
+                    // checked; the booth only shows it in the technical event.
+                    multi_print: true,
+                    multi_print_max_sheets: Number.isFinite(maxSheets)
+                        ? maxSheets
+                        : 6,
                 });
                 if (route === "photo_choice") {
                     document.querySelector(
                         '.template-btn[data-photo-choice="true"]',
                     )?.click();
+                } else if (route === "template_multi") {
+                    document.getElementById("template-multi")?.click();
                 }
             } else if (route === "done") {
                 api.switchScreen("done", {

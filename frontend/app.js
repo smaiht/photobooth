@@ -27,6 +27,10 @@ const templateTimer = document.getElementById("template-timer");
 const templateMain = document.getElementById("template-main");
 const templateOptions = document.getElementById("template-options");
 const templateSkip = document.getElementById("template-skip");
+const templateMultiGroup = document.getElementById("template-multi-group");
+const templateMulti = document.getElementById("template-multi");
+const templatePrint = document.getElementById("template-print");
+const templatePrintCount = document.getElementById("template-print-count");
 const photoChoicePanel = document.getElementById("photo-choice-panel");
 const photoChoiceOptions = document.getElementById("photo-choice-options");
 const frameOn = document.getElementById("frame-on");
@@ -44,6 +48,7 @@ const qrModalCode = document.getElementById("qr-modal-code");
 const qrModalText = document.getElementById("qr-modal-text");
 const resultQrPanel = document.getElementById("result-qr-panel");
 const resultQrCode = document.getElementById("result-qr-code");
+const doneTitle = document.getElementById("done-title");
 const cameraStatusTitle = document.getElementById("camera-status-title");
 const cameraStatusSubtitle = document.getElementById("camera-status-subtitle");
 const cameraRecoverButton = document.getElementById("camera-recover-button");
@@ -61,6 +66,12 @@ let renderedTemplateSignature = "";
 let photoChoiceTemplate = null;
 let photoChoiceWithFrame = false;
 let photoPreviewCycle = null;
+// Multi-select basket. Keyed exactly like the backend keys a print item, so a
+// framed and an unframed copy of the same photo stay separate entries.
+let multiPrintAvailable = false;
+let multiPrintMaxSheets = 0;
+let multiSelectActive = false;
+const printBasket = new Map();
 let currentShootingPhotoIndex = 0;
 let technicalEventActive = false;
 let technicalEventPriceRubles = 0;
@@ -179,6 +190,24 @@ function secondWord(count) {
     if (mod10 === 1) return "СЕКУНДА";
     if (mod10 >= 2 && mod10 <= 4) return "СЕКУНДЫ";
     return "СЕКУНД";
+}
+
+function sheetWord(count) {
+    const mod100 = count % 100;
+    const mod10 = count % 10;
+    if (mod100 >= 11 && mod100 <= 14) return "листов";
+    if (mod10 === 1) return "лист";
+    if (mod10 >= 2 && mod10 <= 4) return "листа";
+    return "листов";
+}
+
+// A basket keeps the printer busy well past the done screen, so the guest is
+// told how many sheets are still coming instead of leaving after the first one.
+function renderDoneTitle(data = {}) {
+    const sheets = Math.floor(Number(data.print_sheets));
+    doneTitle.textContent = Number.isFinite(sheets) && sheets > 1
+        ? `Печатаем ${sheets} ${sheetWord(sheets)}…`
+        : "Идёт печать";
 }
 
 function configureIdleSessionInfo(cfg) {
@@ -304,6 +333,7 @@ if (!previewMode) {
                 syncTechnicalEvent(s);
                 syncSessionContext(s.state, s);
                 if (s.state === "template_select") {
+                    syncMultiPrintConfig(s);
                     renderTemplateOptions(s.templates);
                 }
                 refreshQr();
@@ -545,6 +575,7 @@ function _doSwitch(state, data) {
     const key = map[state];
     if (key && screens[key]) screens[key].hidden = false;
     setLiveView(key === "shooting");
+    if (key === "done") renderDoneTitle(data);
 
     if (key === "no_camera" && !cameraRecoveryPending) {
         const searching = state === "camera_searching";
@@ -572,6 +603,7 @@ function _doSwitch(state, data) {
 
     if (state === "template_select") {
         templateSkip.disabled = false;
+        syncMultiPrintConfig(data);
         renderTemplateOptions(data.templates);
         startTemplateTimer(data.timeout ?? config.template_select_timeout ?? 5);
     } else {
@@ -623,6 +655,8 @@ function lockTemplateSelection() {
     clearInterval(templateTimeout);
     setTemplateTimerText("");
     templateSkip.disabled = true;
+    templateMulti.disabled = true;
+    templatePrint.disabled = true;
     templateOptions.querySelectorAll("button").forEach((item) => {
         item.disabled = true;
     });
@@ -632,6 +666,178 @@ function lockTemplateSelection() {
     frameOn.disabled = true;
     frameOff.disabled = true;
 }
+
+// --- Multi-select basket ---
+// One entry per distinct sheet layout. The key matches what the backend treats
+// as one print item, so a framed and an unframed copy of the same photo are
+// separate entries and identical taps only raise a counter.
+function printItemKey(item) {
+    return `${item.template}|${item.photo_index ?? ""}|${item.with_frame}`;
+}
+
+function basketTotal() {
+    let total = 0;
+    printBasket.forEach((entry) => { total += entry.copies; });
+    return total;
+}
+
+function basketCopies(item) {
+    return printBasket.get(printItemKey(item))?.copies ?? 0;
+}
+
+function basketTemplateTotal(templateName) {
+    let total = 0;
+    printBasket.forEach((entry) => {
+        if (entry.template === templateName) total += entry.copies;
+    });
+    return total;
+}
+
+function adjustBasket(item, delta) {
+    // templateSkip.disabled marks a locked-in selection: the choice is already
+    // sent, so the basket must not change any more.
+    if (!multiSelectActive || templateSkip.disabled) return;
+    const key = printItemKey(item);
+    const current = basketCopies(item);
+    const otherSheets = basketTotal() - current;
+    // The cap counts physical sheets, so it is checked against the whole
+    // basket and not against one tile.
+    const next = Math.max(
+        0, Math.min(current + delta, multiPrintMaxSheets - otherSheets));
+    if (next === current) return;
+    if (next === 0) {
+        printBasket.delete(key);
+    } else {
+        printBasket.set(key, { ...item, copies: next });
+    }
+    renderBasket();
+}
+
+function renderBasket() {
+    const total = basketTotal();
+    const full = total >= multiPrintMaxSheets;
+    templateOptions.querySelectorAll(".print-badge").forEach((badge) => {
+        const item = badge.printItem;
+        if (!item) return;
+        applyBadgeState(badge, basketCopies(item), full);
+    });
+    photoChoiceOptions.querySelectorAll(".print-badge").forEach((badge) => {
+        const item = badge.printItem;
+        if (!item) return;
+        applyBadgeState(badge, basketCopies(item), full);
+    });
+    // A photo_choice tile has no counter of its own: its sheets are picked per
+    // photo inside the expanded panel, so the tile only reports their sum.
+    templateOptions.querySelectorAll(".print-total-badge").forEach((badge) => {
+        const count = basketTemplateTotal(badge.dataset.template);
+        badge.textContent = count;
+        badge.classList.toggle("empty", count === 0);
+    });
+    templatePrintCount.textContent = total;
+    // A locked-in selection must stay locked: the once-per-second state poll
+    // re-renders this screen and must not hand the button back.
+    templatePrint.disabled = total === 0 || templateSkip.disabled;
+}
+
+function applyBadgeState(badge, copies, full) {
+    badge.querySelector(".print-badge-count").textContent = copies;
+    badge.classList.toggle("empty", copies === 0);
+    const locked = templateSkip.disabled;
+    badge.querySelector(".print-badge-minus").disabled = locked || copies === 0;
+    badge.querySelector(".print-badge-plus").disabled = locked || full;
+}
+
+function createPrintBadge(item) {
+    const badge = document.createElement("div");
+    badge.className = "print-badge empty";
+    badge.printItem = item;
+
+    const minus = document.createElement("button");
+    minus.type = "button";
+    minus.className = "print-badge-minus";
+    minus.textContent = "−";
+    minus.setAttribute("aria-label", "Убрать один отпечаток");
+
+    const count = document.createElement("span");
+    count.className = "print-badge-count";
+    count.textContent = "0";
+
+    const plus = document.createElement("button");
+    plus.type = "button";
+    plus.className = "print-badge-plus";
+    plus.textContent = "+";
+    plus.setAttribute("aria-label", "Добавить один отпечаток");
+
+    minus.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        adjustBasket(item, -1);
+    });
+    plus.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        adjustBasket(item, 1);
+    });
+
+    badge.append(minus, count, plus);
+    return badgeLayer(badge);
+}
+
+// The counter belongs over the middle of the preview image, not of the whole
+// tile: a tile may also carry a caption below the preview, which would push a
+// tile-centred badge off the photo.
+function badgeLayer(badge) {
+    const layer = document.createElement("div");
+    layer.className = "print-badge-layer";
+    layer.appendChild(badge);
+    return layer;
+}
+
+function syncMultiPrintConfig(data = {}) {
+    multiPrintAvailable = data.multi_print === true;
+    const configuredMax = Math.floor(Number(data.multi_print_max_sheets));
+    multiPrintMaxSheets = Number.isFinite(configuredMax)
+        ? Math.max(1, configuredMax)
+        : 1;
+    templateMultiGroup.hidden = !multiPrintAvailable;
+    // The state poll re-runs this every second, so a locked-in selection must
+    // not get its controls back.
+    templateMulti.disabled = templateSkip.disabled;
+}
+
+function setMultiSelect(active) {
+    multiSelectActive = active === true && multiPrintAvailable;
+    screens.template.classList.toggle("multi-select", multiSelectActive);
+    templateMulti.setAttribute("aria-pressed", String(multiSelectActive));
+    templatePrint.hidden = !multiSelectActive;
+    // Leaving the mode drops the basket: a hidden selection that still prints
+    // would be impossible for the guest to check.
+    if (!multiSelectActive) printBasket.clear();
+    renderBasket();
+}
+
+templateMulti.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (currentState !== "template_select" || templateMulti.disabled) return;
+    closePhotoChoice();
+    setMultiSelect(!multiSelectActive);
+});
+
+templatePrint.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (currentState !== "template_select" || templatePrint.disabled) return;
+    const items = [...printBasket.values()].map((entry) => ({
+        template: entry.template,
+        photo_index: entry.photo_index ?? null,
+        with_frame: entry.with_frame,
+        copies: entry.copies,
+    }));
+    if (!items.length) return;
+    if (!send({ type: "select_template", items })) return;
+    lockTemplateSelection();
+});
 
 templateSkip.addEventListener("click", (event) => {
     event.preventDefault();
@@ -742,8 +948,25 @@ function renderTemplateOptions(options) {
             caption.appendChild(toggle);
         }
         button.append(preview, caption);
+        // A badge holds its own buttons, so it must be a sibling of the tile
+        // button rather than a child: nested buttons are invalid HTML.
+        const tile = document.createElement("div");
+        tile.className = "template-tile";
+        tile.appendChild(button);
         if (isPhotoChoice) {
             button.photoPreviews = option.photo_previews;
+            // Its sheets are chosen per photo, so the tile only shows a total.
+            const total = document.createElement("div");
+            total.className = "print-total-badge empty";
+            total.dataset.template = option.name;
+            total.textContent = "0";
+            tile.appendChild(badgeLayer(total));
+        } else {
+            tile.appendChild(createPrintBadge({
+                template: option.name,
+                photo_index: null,
+                with_frame: true,
+            }));
         }
         button.addEventListener("click", () => {
             if (isPhotoChoice) {
@@ -756,13 +979,17 @@ function renderTemplateOptions(options) {
                 openPhotoChoice(option, button);
                 return;
             }
+            // In multi-select the tile itself is inert: only its +/- change
+            // the basket, so a stray tap can never print a sheet outright.
+            if (multiSelectActive) return;
             if (!send({ type: "select_template", template: option.name })) return;
             lockTemplateSelection();
         });
-        templateOptions.appendChild(button);
+        templateOptions.appendChild(tile);
     });
     configurePhotoViewer(options);
     startPhotoPreviewCycle();
+    renderBasket();
 }
 
 // The frame default lives in config_app.json, so backend and frontend cannot
@@ -837,6 +1064,14 @@ function resetTemplateSelection() {
     templateZoom.hidden = true;
     resetPhotoChoice();
     templateOptions.replaceChildren();
+    printBasket.clear();
+    multiSelectActive = false;
+    screens.template.classList.remove("multi-select");
+    templateMulti.setAttribute("aria-pressed", "false");
+    templateMultiGroup.hidden = true;
+    templatePrint.hidden = true;
+    templatePrint.disabled = true;
+    templatePrintCount.textContent = "0";
 }
 
 function openPhotoChoice(option, selectedButton) {
@@ -888,6 +1123,7 @@ function renderPhotoChoices() {
         number.textContent = photoNumber;
         button.append(preview, number);
         button.addEventListener("click", () => {
+            if (multiSelectActive) return;
             const sent = send({
                 type: "select_template",
                 template: photoChoiceTemplate.name,
@@ -896,8 +1132,16 @@ function renderPhotoChoices() {
             });
             if (sent) lockTemplateSelection();
         });
-        photoChoiceOptions.appendChild(button);
+        const tile = document.createElement("div");
+        tile.className = "photo-choice-tile";
+        tile.append(button, createPrintBadge({
+            template: photoChoiceTemplate.name,
+            photo_index: choice.photo_index,
+            with_frame: photoChoiceWithFrame,
+        }));
+        photoChoiceOptions.appendChild(tile);
     });
+    renderBasket();
 }
 
 frameOn.addEventListener("click", () => {
@@ -918,8 +1162,9 @@ screens.template.addEventListener("click", (event) => {
     // The viewer sits on top of this screen, so its own clicks must not
     // collapse the chooser underneath it.
     if (!target || target.closest(
-        ".template-btn, .photo-choice-panel, #template-skip,"
-        + " #template-zoom, .photo-viewer",
+        ".template-tile, .photo-choice-panel, #template-skip,"
+        + " #template-zoom, .photo-viewer, #template-multi-group,"
+        + " #template-print",
     )) {
         return;
     }

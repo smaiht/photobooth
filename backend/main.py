@@ -62,6 +62,8 @@ CAFE_UNLOCK_STATE_FILENAME = "cafe_unlock_state.json"
 MAX_UNLOCK_SESSIONS = 1000
 CAMERA_RESET_TASK_NAME = "PhotoboothResetCanonR8"
 CAMERA_USB_RESET_WAIT_SECONDS = 5.0
+DEFAULT_MULTI_PRINT_MAX_SHEETS = 6
+MAX_MULTI_PRINT_SHEETS = 20
 
 
 def _technical_event_name() -> str:
@@ -171,6 +173,27 @@ def _consume_cafe_unlock_session() -> int:
 
 def _start_locked() -> bool:
     return _is_technical_event() and _cafe_unlock_sessions_remaining <= 0
+
+
+def _multi_print_max_sheets() -> int:
+    """Clamp the basket limit so a misedited config cannot waste a whole roll."""
+    raw = CONFIG.get("multi_print_max_sheets", DEFAULT_MULTI_PRINT_MAX_SHEETS)
+    if type(raw) is not int or not 1 <= raw <= MAX_MULTI_PRINT_SHEETS:
+        log.warning(
+            "multi_print_max_sheets=%r is unusable; falling back to %d",
+            raw, DEFAULT_MULTI_PRINT_MAX_SHEETS,
+        )
+        return DEFAULT_MULTI_PRINT_MAX_SHEETS
+    return raw
+
+
+def _multi_print_available() -> bool:
+    """Multi-select is a technical-event tool only.
+
+    Guest events keep the plain one-tap choice: there the operator is paid per
+    session, so a basket of sheets would silently give away consumables.
+    """
+    return CONFIG.get("multi_print_enabled") is True and _is_technical_event()
 
 CLIENTS: list[WebSocket] = []
 
@@ -331,6 +354,8 @@ def _state_message(new_state: str) -> dict:
     if new_state == "template_select":
         msg["timeout"] = int(CONFIG["template_select_timeout"])
         msg["templates"] = [dict(option) for option in TEMPLATE_OPTIONS]
+        msg["multi_print"] = _multi_print_available()
+        msg["multi_print_max_sheets"] = _multi_print_max_sheets()
     return msg
 
 
@@ -501,6 +526,72 @@ async def _report_camera_config_to_admin() -> None:
     log.info("Camera config report published for the administrator")
 
 
+def _normalize_print_item(
+    raw: dict,
+    selectable_templates: set[str],
+    available_templates: dict,
+    photo_count: int,
+) -> dict | None:
+    """Validate one basket entry and return it normalized, or ``None``.
+
+    Every rejection is logged and rejects the entry outright: a silently
+    repaired entry would print a sheet the guest never asked for.
+    """
+    if not isinstance(raw, dict):
+        log.warning("Ignoring malformed print item: %r", raw)
+        return None
+    name = raw.get("template")
+    if not isinstance(name, str) or name not in selectable_templates:
+        log.warning("Ignoring unknown template: %r", name)
+        return None
+    photo_index = raw.get("photo_index")
+    with_frame = raw.get("with_frame")
+    if available_templates[name].get("photo_choice") is True:
+        if type(photo_index) is not int or not 0 <= photo_index < photo_count:
+            log.warning(
+                "Ignoring invalid photo index for %s: %r", name, photo_index)
+            return None
+        if type(with_frame) is not bool:
+            log.warning(
+                "Ignoring invalid frame choice for %s: %r", name, with_frame)
+            return None
+    else:
+        photo_index = None
+        with_frame = True
+    copies = raw.get("copies", 1)
+    if type(copies) is not int or copies < 1:
+        log.warning("Ignoring invalid copies for %s: %r", name, copies)
+        return None
+    return {
+        "template": name,
+        "photo_index": photo_index,
+        "with_frame": with_frame,
+        "copies": copies,
+    }
+
+
+def _merge_print_items(items: list[dict]) -> list[dict]:
+    """Collapse identical entries so one layout is composed exactly once."""
+    merged: dict[tuple, dict] = {}
+    for item in items:
+        key = (item["template"], item["photo_index"], item["with_frame"])
+        if key in merged:
+            merged[key]["copies"] += item["copies"]
+        else:
+            merged[key] = dict(item)
+    return list(merged.values())
+
+
+def _print_item_label(item: dict) -> str:
+    label = item["template"]
+    if item["photo_index"] is not None:
+        frame = "с рамкой" if item["with_frame"] else "без рамки"
+        label += f"[фото {item['photo_index'] + 1}, {frame}]"
+    if item["copies"] > 1:
+        label += f" x{item['copies']}"
+    return label
+
+
 def _countdown_timing() -> tuple[float, int, int]:
     pre_countdown_delay = max(0.0, float(CONFIG["pre_countdown_delay"]))
     countdown_seconds = max(0, int(CONFIG["countdown_seconds"]))
@@ -510,21 +601,25 @@ def _countdown_timing() -> tuple[float, int, int]:
 
 
 async def _finish_successful_session(
-    output_path: Path,
-    selected_template: str,
+    sheets: list[tuple[Path, str]],
     camera_generation: int,
     session_uses_cafe_unlock: bool,
 ) -> None:
-    """Queue the completed print, charge its allowance, then expose done."""
+    """Queue every composed sheet, charge the allowance, then expose done.
+
+    ``sheets`` is already expanded: one entry per physical 4x6 sheet, so two
+    copies of the same layout appear twice and reuse one composed JPEG.
+    """
     if CONFIG["print_enabled"]:
         from .printer import enqueue_print
-        await enqueue_print(str(output_path), CONFIG, selected_template)
+        for sheet_path, sheet_template in sheets:
+            await enqueue_print(str(sheet_path), CONFIG, sheet_template)
         _require_session_camera(camera_generation)
 
     if session_uses_cafe_unlock:
         _consume_cafe_unlock_session()
 
-    await set_state("done")
+    await set_state("done", {"print_sheets": len(sheets)})
 
 
 # --- Session flow ---
@@ -802,45 +897,73 @@ async def _run_session():
     # One source of truth for the frame default: the frontend reads the same
     # config field through /api/config.
     default_with_frame = CONFIG["photo_choice_default_with_frame"] is True
+    multi_print_allowed = _multi_print_available()
+    max_sheets = _multi_print_max_sheets()
+    # A single tap is the one-item case of the same basket, so there is only one
+    # code path from here to the printer.
     chosen = {
-        "template": selected_template,
-        "photo_index": (
-            0 if available_templates[selected_template].get("photo_choice") is True
-            else None
-        ),
-        "with_frame": default_with_frame,
+        "items": [{
+            "template": selected_template,
+            "photo_index": (
+                0 if available_templates[selected_template].get("photo_choice") is True
+                else None
+            ),
+            "with_frame": default_with_frame,
+            "copies": 1,
+        }],
         "skip_print": False,
     }
 
-    def on_template_choice(t, photo_index=None, with_frame=None):
+    def on_template_choice(t, photo_index=None, with_frame=None, items=None):
         if template_event.is_set():
             return
-        if t not in selectable_templates:
-            log.warning(f"Ignoring unknown template: {t}")
+        if items is None:
+            raw_items = [{
+                "template": t,
+                "photo_index": photo_index,
+                "with_frame": with_frame,
+                "copies": 1,
+            }]
+        elif not isinstance(items, list) or not items:
+            log.warning("Ignoring empty or malformed print basket: %r", items)
             return
-        is_photo_choice = available_templates[t].get("photo_choice") is True
-        if is_photo_choice:
-            if (type(photo_index) is not int
-                    or not 0 <= photo_index < len(SESSION_PHOTOS)):
-                log.warning(
-                    "Ignoring invalid photo index for %s: %r", t, photo_index)
-                return
-            if type(with_frame) is not bool:
-                log.warning(
-                    "Ignoring invalid frame choice for %s: %r", t, with_frame)
-                return
+        elif not multi_print_allowed:
+            log.warning(
+                "Ignoring print basket: multi-select is not available for the "
+                "active event"
+            )
+            return
         else:
-            photo_index = None
-            with_frame = True
+            raw_items = items
+
+        normalized = []
+        for raw in raw_items:
+            item = _normalize_print_item(
+                raw, selectable_templates, available_templates,
+                len(SESSION_PHOTOS),
+            )
+            # One bad entry rejects the whole basket: printing a partial
+            # selection would charge the guest for sheets they did not confirm.
+            if item is None:
+                return
+            normalized.append(item)
+
+        normalized = _merge_print_items(normalized)
+        sheets = sum(item["copies"] for item in normalized)
+        limit = max_sheets if items is not None else 1
+        if sheets > limit:
+            log.warning(
+                "Ignoring print basket of %d sheets: limit is %d",
+                sheets, limit,
+            )
+            return
+
         log.info(
-            "Template chosen: %s, photo_index=%r, with_frame=%s",
-            t,
-            photo_index,
-            with_frame,
+            "Print basket chosen: %d sheet(s): %s",
+            sheets,
+            ", ".join(_print_item_label(item) for item in normalized),
         )
-        chosen["template"] = t
-        chosen["photo_index"] = photo_index
-        chosen["with_frame"] = with_frame
+        chosen["items"] = normalized
         template_event.set()
 
     def on_skip_print():
@@ -908,46 +1031,46 @@ async def _run_session():
         await set_state("idle")
         return
 
-    selected_template = chosen["template"]
-    selected_photo_index = chosen["photo_index"]
-    selected_with_frame = chosen["with_frame"]
+    selected_items = chosen["items"]
+    total_sheets = sum(item["copies"] for item in selected_items)
     log.info(
-        "Selected template: %s, photo_index=%r, with_frame=%s",
-        selected_template,
-        selected_photo_index,
-        selected_with_frame,
+        "Selected %d sheet(s): %s",
+        total_sheets,
+        ", ".join(_print_item_label(item) for item in selected_items),
     )
 
-    # Compose the local print file. It never enters the cloud outbox.
-    await set_state("composing")
+    # Compose the local print files. They never enter the cloud outbox.
+    await set_state("composing", {"print_sheets": total_sheets})
     TEMPLATE_OPTIONS = []
     try:
         _remove_preview_dir(preview_dir)
     except OSError:
         log.exception("Could not remove session template previews: %s", preview_dir)
     log.info(f"SESSION_PHOTOS: {SESSION_PHOTOS}")
-    output_path = None
+    composed: list[tuple[Path, str]] = []
     if SESSION_PHOTOS:
-        def _compose():
-            log.info(f"Composing {selected_template}...")
-            template = available_templates[selected_template]
+        def _compose_item(item: dict) -> Path:
+            name = item["template"]
+            photo_index = item["photo_index"]
+            with_frame = item["with_frame"]
+            log.info(f"Composing {name}...")
+            template = available_templates[name]
             if template.get("photo_choice") is True:
-                photo = SESSION_PHOTOS[selected_photo_index]
-                if selected_with_frame:
-                    result = compose(
-                        template_dir, selected_template, [photo], tpl_config)
+                photo = SESSION_PHOTOS[photo_index]
+                if with_frame:
+                    result = compose(template_dir, name, [photo], tpl_config)
                     frame_label = "frame"
                 else:
                     result = compose_unframed_photo(photo, tpl_config)
                     frame_label = "no_frame"
                 path = session_dir / (
-                    f"print_{selected_template}_photo_"
-                    f"{selected_photo_index + 1:02d}_{frame_label}.jpg"
+                    f"print_{name}_photo_"
+                    f"{photo_index + 1:02d}_{frame_label}.jpg"
                 )
             else:
                 result = compose(
-                    template_dir, selected_template, SESSION_PHOTOS, tpl_config)
-                path = session_dir / f"print_{selected_template}.jpg"
+                    template_dir, name, SESSION_PHOTOS, tpl_config)
+                path = session_dir / f"print_{name}.jpg"
             try:
                 dpi = int(CONFIG.get("print_dpi", 600))
                 result.save(str(path), "JPEG", quality=95, subsampling=0, dpi=(dpi, dpi))
@@ -955,21 +1078,25 @@ async def _run_session():
                 result.close()
             return path
 
-        output_path = await asyncio.get_event_loop().run_in_executor(None, _compose)
-        _require_session_camera(camera_generation)
-        log.info(f"Composed: {output_path}")
+        for item in selected_items:
+            # Identical entries were merged, so each layout is composed once
+            # and its single JPEG is queued as many times as requested.
+            item_path = await loop.run_in_executor(None, _compose_item, item)
+            _require_session_camera(camera_generation)
+            log.info(f"Composed: {item_path}")
+            composed.extend(
+                [(item_path, item["template"])] * item["copies"])
     else:
         log.warning("No photos to compose!")
 
     _require_session_camera(camera_generation)
-    if output_path is None:
+    if not composed:
         raise RuntimeError("Session composition produced no print file")
 
     # Any compose/print-enqueue error happens before the durable allowance is
     # consumed, so a failed visitor session can be retried.
     await _finish_successful_session(
-        output_path,
-        selected_template,
+        composed,
         camera_generation,
         session_uses_cafe_unlock,
     )
@@ -1815,6 +1942,7 @@ async def websocket_endpoint(ws: WebSocket):
                         msg.get("template", ""),
                         msg.get("photo_index"),
                         msg.get("with_frame"),
+                        msg.get("items"),
                     )
 
             elif msg["type"] == "skip_print" and STATE == "template_select":

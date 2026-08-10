@@ -85,9 +85,24 @@
 
         <!-- TEMPLATE SELECT -->
         <div class="screen" id="screen-template" hidden>
+            <div class="template-multi-group" id="template-multi-group" hidden>
+                <button id="template-multi" type="button" aria-pressed="false"
+                        aria-label="Выбрать несколько отпечатков">
+                    <!-- Two sheets: the front one is a full rectangle, the back
+                         one only its visible corner, so no strokes cross. -->
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+                        <rect x="3" y="8" width="13" height="13" rx="2.4"
+                              stroke="currentColor" stroke-width="2"/>
+                        <path d="M8 8V7a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1"
+                              stroke="currentColor" stroke-width="2"
+                              stroke-linecap="round"/>
+                    </svg>
+                </button>
+                <span class="template-multi-label" aria-hidden="true"></span>
+            </div>
             <div class="template-skip-group">
-                <span class="template-skip-label" aria-hidden="true">НЕ ПЕЧАТАТЬ</span>
-                <button id="template-skip" type="button" aria-label="Не печатать">×</button>
+                <span class="template-skip-label" aria-hidden="true">ФОТКАТЬ ЗАНОВО</span>
+                <button id="template-skip" type="button" aria-label="Фоткать заново">×</button>
             </div>
             <div class="template-main" id="template-main">
                 <div class="template-title">ВЫБЕРИТЕ ФОРМАТ</div>
@@ -103,6 +118,10 @@
                 </div>
                 <div class="photo-choice-options" id="photo-choice-options"></div>
             </section>
+            <button id="template-print" type="button" hidden disabled>
+                <span class="template-print-title">ПЕЧАТАТЬ</span>
+                <span class="template-print-count" id="template-print-count">0</span>
+            </button>
             <div id="template-timer"></div>
             <!-- Magnifier: only rendered when a photo_choice template exists,
                  because its per-photo previews are what the gallery shows. -->
@@ -147,7 +166,7 @@
         <div class="screen" id="screen-done" hidden>
             <div class="done-row">
                 <img src="../assets/dots.svg" class="dots-anim">
-                <div class="done-title">Идёт печать</div>
+                <div class="done-title" id="done-title">Идёт печать</div>
             </div>
             <section class="result-qr-panel" id="result-qr-panel" aria-live="polite" hidden>
                 <div id="result-qr-code" aria-label="QR-код для скачивания оригиналов"></div>

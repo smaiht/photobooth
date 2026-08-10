@@ -529,6 +529,208 @@ html, body {
     opacity: 0.45;
 }
 
+/* Multi-select toggle: sits next to the magnifier in the top left, not centred,
+   so the two related controls read as one group. The magnifier is 7vw wide at
+   left: 5vh, so this clears it with a small gap.
+   z-index matches the skip button and stays below the photo viewer (10): the
+   gallery must cover it, unlike the magnifier that closes the gallery. */
+.template-multi-group {
+    z-index: 2;
+    position: absolute;
+    top: 5vh;
+    left: calc(5vh + 8.5vw);
+    display: flex;
+    align-items: center;
+    gap: 1vw;
+    pointer-events: none;
+}
+.template-multi-group[hidden] { display: none; }
+
+/* Empty for now: the icon speaks for itself. Kept in the markup so a caption
+   can be restored without touching the layout. */
+.template-multi-label {
+    font-size: 1.15vw;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    line-height: 1.15;
+    color: #777;
+    white-space: nowrap;
+}
+.template-multi-label:empty { display: none; }
+
+#template-multi {
+    position: relative;
+    pointer-events: auto;
+    width: 7vw;
+    height: 7vw;
+    border: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: #eee;
+    color: #555;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+#template-multi svg { width: 3.4vw; height: 3.4vw; }
+#template-multi:active { background: #ddd; }
+#template-multi:disabled { opacity: 0.45; }
+#template-multi[aria-pressed="true"] {
+    background: #FF2973;
+    color: #fff;
+}
+.template-multi-group:has(#template-multi[aria-pressed="true"]) .template-multi-label {
+    color: #FF2973;
+}
+.template-multi-group:has(#template-multi:disabled) .template-multi-label {
+    opacity: 0.45;
+}
+
+/* Counter badge over the middle of a preview. The layer covers only the preview
+   area, so a caption underneath cannot pull the badge off the photo. Hidden
+   until multi-select is on, so the plain one-tap screen looks as before. */
+.print-badge-layer {
+    display: none;
+    z-index: 3;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    /* Matches .template-preview and .photo-choice-btn: both are 3:2. */
+    aspect-ratio: 3 / 2;
+    pointer-events: none;
+}
+
+#screen-template.multi-select .print-badge-layer {
+    display: grid;
+    place-items: center;
+}
+
+.print-badge,
+.print-total-badge {
+    pointer-events: none;
+}
+
+#screen-template.multi-select .print-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.6vw;
+    padding: 0.5vw 0.7vw;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 0.4vh 1.6vh rgba(0, 0, 0, 0.28);
+}
+
+#screen-template.multi-select .print-total-badge {
+    display: grid;
+    place-items: center;
+    min-width: 4.6vw;
+    height: 4.6vw;
+    padding: 0 0.6vw;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 0.4vh 1.6vh rgba(0, 0, 0, 0.28);
+    color: #FF2973;
+    font-size: 2.4vw;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.print-badge.empty,
+.print-total-badge.empty {
+    color: #999;
+    opacity: 0.82;
+}
+
+.print-badge-count {
+    min-width: 2.6vw;
+    text-align: center;
+    color: #FF2973;
+    font-size: 2.6vw;
+    font-weight: 700;
+    line-height: 1;
+}
+.print-badge.empty .print-badge-count { color: #999; }
+
+.print-badge-minus,
+.print-badge-plus {
+    pointer-events: auto;
+    width: 4.2vw;
+    height: 4.2vw;
+    border: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: #222;
+    color: #fff;
+    font-family: inherit;
+    font-size: 2.4vw;
+    font-weight: 700;
+    line-height: 1;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+.print-badge-minus:active,
+.print-badge-plus:active { background: #444; }
+.print-badge-minus:disabled,
+.print-badge-plus:disabled { opacity: 0.35; }
+
+/* Print button: only visible in multi-select. A circle in the lower right
+   corner, matching the round magnifier/multi/skip controls. Absolutely
+   positioned and without any layout padding, so it never shifts the centred
+   title/previews block. The corner also keeps it clear of the counter badges in
+   the middle of the previews and of the countdown at the bottom centre.
+   z-index stays below the photo viewer (10) so the gallery covers it. */
+#template-print {
+    z-index: 2;
+    position: absolute;
+    right: 5vh;
+    bottom: 55vh;
+    width: 11vw;
+    height: 11vw;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2vh;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: #FF2973;
+    color: #fff;
+    font-family: inherit;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    box-shadow: 0 0.5vh 2.4vh rgba(255, 41, 115, 0.38);
+    transition: transform 0.15s, background 0.15s;
+}
+#template-print[hidden] { display: none; }
+#template-print:active {
+    background: #e01f61;
+    transform: scale(0.96);
+}
+#template-print:disabled {
+    background: #eee;
+    color: #999;
+    box-shadow: none;
+}
+
+.template-print-title {
+    font-size: 1.35vw;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1;
+}
+
+.template-print-count {
+    font-size: 3.6vw;
+    font-weight: 700;
+    line-height: 1.05;
+}
+
 .template-title { font-size: 4vw; font-weight: 700; }
 
 .template-options {
@@ -537,6 +739,15 @@ html, body {
     grid-template-columns: repeat(auto-fit, minmax(20vw, 30vw));
     justify-content: center;
     gap: 1.5vw;
+}
+
+/* Holds the tile button and its counter badge as siblings: a badge carries its
+   own +/- buttons, which may not be nested inside another button. A single-cell
+   grid stretches the button exactly as the grid column used to. */
+.template-tile {
+    position: relative;
+    display: grid;
+    min-width: 0;
 }
 
 .template-btn {
@@ -830,10 +1041,19 @@ html, body {
     gap: 1.4vw;
 }
 
-.photo-choice-btn {
+/* Same sibling wrapper as the template tiles, for the same nested-button
+   reason. It owns the width the button used to claim. */
+.photo-choice-tile {
     position: relative;
     flex: 0 1 calc((100% - 4.2vw) / 4);
     width: calc((100% - 4.2vw) / 4);
+    min-width: 0;
+    display: grid;
+}
+
+.photo-choice-btn {
+    position: relative;
+    width: 100%;
     aspect-ratio: 3 / 2;
     min-width: 0;
     appearance: none;
