@@ -24,6 +24,10 @@ PRINT_JOBS_DIR = ROOT_DIR / "photos_print_jobs"
 PRINT_JOBS_DIR.mkdir(exist_ok=True)
 
 CAMERA_CONFIG_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+CAMERA_PRESET_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+# Presets live under a service key, so "/presets ..." can never overwrite them
+# and they stay out of the public-field validation.
+PRESETS_FIELD = "_presets"
 _TRUE_VALUES = {"1", "true", "yes", "on", "да", "вкл"}
 _FALSE_VALUES = {"0", "false", "no", "off", "нет", "выкл"}
 
@@ -106,32 +110,60 @@ def _coerce_camera_value(field: str, raw_value: str, config: dict):
     return value
 
 
+def _write_camera_config(path: Path, config: dict) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(config, ensure_ascii=False, indent=4) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _load_camera_config(config_path: Path | None) -> tuple[Path, dict]:
+    path = (
+        Path(config_path)
+        if config_path is not None
+        else ROOT_DIR / "config_camera.json"
+    )
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("config_camera.json должен содержать JSON-объект")
+    return path, config
+
+
+def _normalized_camera_field(field: str) -> str:
+    normalized = str(field or "").strip().lower()
+    if normalized.startswith("_"):
+        raise ValueError("служебные поля камеры нельзя изменять")
+    if not CAMERA_CONFIG_FIELD_RE.fullmatch(normalized):
+        raise ValueError("некорректное имя параметра камеры")
+    return normalized
+
+
+def _raw_camera_text(raw_value) -> str:
+    """Accept the shapes a messenger or a JSON preset can deliver."""
+    # Telegram always delivers a string, but a VPS build or a preset may hold a
+    # JSON number. Accept both instead of rejecting "/iso 200" on a type detail.
+    if isinstance(raw_value, bool):
+        return "true" if raw_value else "false"
+    if isinstance(raw_value, int):
+        return str(raw_value)
+    if isinstance(raw_value, float):
+        return repr(raw_value)
+    if not isinstance(raw_value, str):
+        raise ValueError("значение параметра должно быть строкой")
+    return raw_value
+
+
 def update_camera_config_field(
     field: str,
     raw_value: str,
     config_path: Path | None = None,
 ) -> tuple[str, object, object, bool]:
     """Type-check and atomically update one public camera config field."""
-    normalized_field = str(field or "").strip().lower()
-    if normalized_field.startswith("_"):
-        raise ValueError("служебные поля камеры нельзя изменять")
-    if not CAMERA_CONFIG_FIELD_RE.fullmatch(normalized_field):
-        raise ValueError("некорректное имя параметра камеры")
-    # Telegram always delivers a string, but a VPS build may serialise a JSON
-    # number. Accept both instead of rejecting "/iso 200" on a type detail.
-    if isinstance(raw_value, bool):
-        raw_value = "true" if raw_value else "false"
-    elif isinstance(raw_value, int):
-        raw_value = str(raw_value)
-    elif isinstance(raw_value, float):
-        raw_value = repr(raw_value)
-    if not isinstance(raw_value, str):
-        raise ValueError("значение параметра должно быть строкой")
-
-    path = Path(config_path) if config_path is not None else ROOT_DIR / "config_camera.json"
-    config = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(config, dict):
-        raise ValueError("config_camera.json должен содержать JSON-объект")
+    normalized_field = _normalized_camera_field(field)
+    raw_value = _raw_camera_text(raw_value)
+    path, config = _load_camera_config(config_path)
     if normalized_field not in config:
         raise ValueError(f"неизвестный параметр камеры: {normalized_field}")
 
@@ -141,10 +173,97 @@ def update_camera_config_field(
         return normalized_field, old_value, new_value, False
 
     config[normalized_field] = new_value
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(config, ensure_ascii=False, indent=4) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    _write_camera_config(path, config)
     return normalized_field, old_value, new_value, True
+
+
+def camera_presets(config: dict) -> dict:
+    """Named lighting presets stored as data in config_camera.json."""
+    presets = config.get(PRESETS_FIELD)
+    if presets is None:
+        return {}
+    if not isinstance(presets, dict):
+        raise ValueError(f"{PRESETS_FIELD} должен быть JSON-объектом")
+    return presets
+
+
+def _preset_names(config: dict) -> list[str]:
+    names = []
+    for name in camera_presets(config):
+        if isinstance(name, str) and name.startswith("_"):
+            continue
+        if not isinstance(name, str) or not CAMERA_PRESET_NAME_RE.fullmatch(name):
+            raise ValueError(f"некорректное имя пресета: {name!r}")
+        names.append(name)
+    return names
+
+
+def preset_names(config_path: Path | None = None) -> list[str]:
+    _, config = _load_camera_config(config_path)
+    return _preset_names(config)
+
+
+def apply_camera_preset(
+    name: str,
+    config_path: Path | None = None,
+) -> tuple[str, dict[str, tuple[object, object]], str]:
+    """Validate a whole preset, then write every field in one atomic update.
+
+    A preset is all-or-nothing on purpose: applying half of it would leave the
+    booth in a combination the operator never chose, and a wrong exposure is
+    only visible after the event.
+    """
+    requested = str(name or "").strip().lower()
+    if not CAMERA_PRESET_NAME_RE.fullmatch(requested):
+        raise ValueError("некорректное имя пресета")
+    path, config = _load_camera_config(config_path)
+    presets = camera_presets(config)
+    available = _preset_names(config)
+    if not available:
+        raise ValueError("в config_camera.json нет пресетов")
+    if requested not in available:
+        raise ValueError(
+            f"неизвестный пресет; доступно: {', '.join(sorted(available))}")
+
+    preset = presets[requested]
+    if not isinstance(preset, dict):
+        raise ValueError(f"пресет {requested} должен быть JSON-объектом")
+    label = preset.get("_label", requested)
+    hint = preset.get("_hint", "")
+    if not isinstance(label, str) or not label.strip():
+        raise ValueError(f"пресет {requested}: _label должен быть строкой")
+    if not isinstance(hint, str):
+        raise ValueError(f"пресет {requested}: _hint должен быть строкой")
+    label = label.strip()
+    hint = hint.strip()
+
+    fields = {
+        field: value for field, value in preset.items()
+        if not str(field).startswith("_")
+    }
+    if not fields:
+        raise ValueError(f"пресет {requested} не содержит параметров")
+
+    changes: dict[str, tuple[object, object]] = {}
+    for field, value in fields.items():
+        normalized_field = _normalized_camera_field(field)
+        if normalized_field not in config:
+            raise ValueError(
+                f"пресет {requested}: неизвестный параметр камеры "
+                f"{normalized_field}")
+        new_value = _coerce_camera_value(
+            normalized_field,
+            _raw_camera_text(value),
+            config,
+        )
+        old_value = config[normalized_field]
+        if type(old_value) is not type(new_value) or old_value != new_value:
+            changes[normalized_field] = (old_value, new_value)
+
+    if not changes:
+        return label, {}, hint
+
+    for field, (_old, new_value) in changes.items():
+        config[field] = new_value
+    _write_camera_config(path, config)
+    return label, changes, hint

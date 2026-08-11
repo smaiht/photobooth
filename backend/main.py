@@ -32,7 +32,9 @@ from .config import (
     PRINT_JOBS_DIR,
     ROOT_DIR,
     TEMPLATES_DIR,
+    apply_camera_preset,
     load_event_config,
+    preset_names,
     update_camera_config_field,
 )
 from .composer import (
@@ -1656,6 +1658,48 @@ async def handle_disk_command(command: dict) -> dict:
             "_post_action": _do_restart,
         }
 
+    if cmd == "set_camera_preset":
+        if STATE not in ("idle", "no_camera", "camera_searching"):
+            return {
+                "status": "error",
+                "message": f"Пресет не применён: state={STATE}",
+            }
+        if _background_uploads:
+            return {
+                "status": "error",
+                "message": "Пресет не применён: завершается подготовка загрузки",
+            }
+        if not isinstance(data, dict):
+            return {
+                "status": "error",
+                "message": "Пресет не применён: отсутствует name",
+            }
+        name = data.get("name", "")
+        try:
+            label, changes, hint = apply_camera_preset(name)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return {
+                "status": "error",
+                "message": f"Пресет не применён: {exc}",
+            }
+        lines = [f"Пресет «{label}» применён"]
+        if changes:
+            lines.extend(
+                f"{field}: {json.dumps(old, ensure_ascii=False)} → "
+                f"{json.dumps(new, ensure_ascii=False)}"
+                for field, (old, new) in changes.items()
+            )
+        else:
+            lines.append("Все параметры уже соответствуют пресету")
+        if hint:
+            lines.append(f"Подсказка: {hint}")
+        lines.append("Перезапуск подтверждён")
+        return {
+            "status": "ok",
+            "message": "\n".join(lines),
+            "_post_action": _do_restart,
+        }
+
     if cmd in ("run", "start_session"):
         if STATE != "idle":
             return {"status": "error", "message": f"Будка занята: state={STATE}"}
@@ -1783,6 +1827,15 @@ async def handle_disk_command(command: dict) -> dict:
             f"Upload queue: {yadisk_cloud.pending_count()}",
             f"Version: {version}",
         ])
+        try:
+            presets = preset_names()
+        except (OSError, ValueError, json.JSONDecodeError):
+            presets = []
+        if presets:
+            status_lines.append(
+                "Пресеты света: "
+                + ", ".join(f"/light {name}" for name in presets)
+            )
         return {
             "status": "ok",
             "message": "\n".join(status_lines),

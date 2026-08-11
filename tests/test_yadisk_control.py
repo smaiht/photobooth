@@ -452,6 +452,88 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("уже равен 200", result["message"])
         self.assertIs(result["_post_action"], main._do_restart)
 
+    async def test_camera_preset_change_restarts_only_after_success(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "set_camera_preset",
+            "data": {"name": "evening"},
+        }
+        changes = {
+            "tv": ("1/200", "1/60"),
+            "iso": (100, 400),
+        }
+        with patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_background_uploads", set()), \
+             patch("backend.main.apply_camera_preset",
+                   return_value=(
+                       "Улица, тёмный вечер",
+                       changes,
+                       "Вспышка: начните с 1/32. Фон тёмный — /tv 1/50.",
+                   )) as apply:
+            result = await main.handle_disk_command(command)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("Улица, тёмный вечер", result["message"])
+        self.assertIn('tv: "1/200" → "1/60"', result["message"])
+        self.assertIn("iso: 100 → 400", result["message"])
+        self.assertIn(
+            "Подсказка: Вспышка: начните с 1/32",
+            result["message"],
+        )
+        self.assertIs(result["_post_action"], main._do_restart)
+        apply.assert_called_once_with("evening")
+
+    async def test_camera_preset_is_rejected_without_restart_when_busy(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "set_camera_preset",
+            "data": {"name": "sun"},
+        }
+        with patch.object(main, "STATE", "countdown"), \
+             patch("backend.main.apply_camera_preset") as apply:
+            result = await main.handle_disk_command(command)
+
+        self.assertEqual(result["status"], "error")
+        self.assertNotIn("_post_action", result)
+        apply.assert_not_called()
+
+    async def test_invalid_camera_preset_does_not_restart(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "set_camera_preset",
+            "data": {"name": "missing"},
+        }
+        with patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_background_uploads", set()), \
+             patch("backend.main.apply_camera_preset",
+                   side_effect=ValueError("неизвестный пресет")):
+            result = await main.handle_disk_command(command)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("неизвестный пресет", result["message"])
+        self.assertNotIn("_post_action", result)
+
+    async def test_status_lists_ready_to_copy_light_commands(self):
+        with patch.object(main, "STATE", "idle"), \
+             patch.object(main, "camera", None), \
+             patch.object(main, "CONFIG", {"yadisk_folder": "event"}), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="event"), \
+             patch("backend.main.yadisk_cloud.pending_count", return_value=0), \
+             patch("backend.main.preset_names",
+                   return_value=["sun", "indoor_dark"]):
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "status",
+                "data": None,
+            })
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn(
+            "Пресеты света: /light sun, /light indoor_dark",
+            result["message"],
+        )
+
     async def test_get_config_uploads_one_text_export(self):
         command = {
             "command_id": "a" * 32,

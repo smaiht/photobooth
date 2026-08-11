@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend import main
 from backend.camera import constants, edsdk
-from backend.config import ROOT_DIR, update_camera_config_field
+from backend.config import (
+    ROOT_DIR,
+    apply_camera_preset,
+    preset_names,
+    update_camera_config_field,
+)
 
 
 class ConfigOptionsMatchEdsdkMapsTests(unittest.TestCase):
@@ -85,6 +90,21 @@ class ConfigOptionsMatchEdsdkMapsTests(unittest.TestCase):
                 continue
             unchecked.append(field)
         self.assertEqual(unchecked, [])
+
+    def test_every_configured_lighting_preset_can_be_applied(self):
+        presets = self.config["_presets"]
+        self.assertTrue(presets)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "config_camera.json"
+            for name in presets:
+                with self.subTest(preset=name):
+                    path.write_text(
+                        json.dumps(self.config, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    label, _changes, hint = apply_camera_preset(name, path)
+                    self.assertTrue(label)
+                    self.assertIsInstance(hint, str)
 
 
 class ResolveCameraValueTests(unittest.TestCase):
@@ -523,6 +543,104 @@ class TelegramCameraFieldUpdateTests(unittest.TestCase):
             update_camera_config_field("iso", 400, self.config_path),
             ("iso", 100, 400, True))
         self.assertIs(type(self._read()["iso"]), int)
+
+
+class CameraPresetTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.config_path = Path(self.temporary.name) / "config_camera.json"
+        self.config = {
+            "_presets": {
+                "bright": {
+                    "_label": "Ярко",
+                    "_hint": "1/16",
+                    "av": "8",
+                    "tv": "1/160",
+                    "iso": 200,
+                },
+                "already": {
+                    "_label": "Без изменений",
+                    "av": "16",
+                    "tv": "1/200",
+                    "iso": 100,
+                },
+            },
+            "av": "16",
+            "tv": "1/200",
+            "iso": 100,
+        }
+        self._write()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _write(self):
+        self.config_path.write_text(
+            json.dumps(self.config, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _read(self):
+        return json.loads(self.config_path.read_text(encoding="utf-8"))
+
+    def test_lists_and_applies_a_preset_in_one_write(self):
+        self.assertEqual(
+            preset_names(self.config_path),
+            ["bright", "already"],
+        )
+
+        label, changes, hint = apply_camera_preset(
+            " BRIGHT ", self.config_path)
+
+        self.assertEqual(label, "Ярко")
+        self.assertEqual(hint, "1/16")
+        self.assertEqual(changes, {
+            "av": ("16", "8.0"),
+            "tv": ("1/200", "1/160"),
+            "iso": (100, 200),
+        })
+        saved = self._read()
+        self.assertEqual(
+            {field: saved[field] for field in ("av", "tv", "iso")},
+            {"av": "8.0", "tv": "1/160", "iso": 200},
+        )
+        self.assertEqual(saved["_presets"], self.config["_presets"])
+
+    def test_invalid_field_keeps_the_whole_file_unchanged(self):
+        self.config["_presets"]["broken"] = {
+            "av": "8.0",
+            "iso": 150,
+        }
+        self._write()
+        before = self.config_path.read_bytes()
+
+        with self.assertRaisesRegex(ValueError, "доступно"):
+            apply_camera_preset("broken", self.config_path)
+
+        self.assertEqual(self.config_path.read_bytes(), before)
+
+    def test_unknown_preset_lists_available_names_without_writing(self):
+        before = self.config_path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "already, bright"):
+            apply_camera_preset("missing", self.config_path)
+        self.assertEqual(self.config_path.read_bytes(), before)
+
+    def test_already_applied_preset_does_not_rewrite_the_file(self):
+        before = self.config_path.read_bytes()
+        result = apply_camera_preset("already", self.config_path)
+        self.assertEqual(result, ("Без изменений", {}, ""))
+        self.assertEqual(self.config_path.read_bytes(), before)
+
+    def test_malformed_preset_container_and_name_are_rejected(self):
+        self.config["_presets"] = []
+        self._write()
+        with self.assertRaisesRegex(ValueError, "JSON-объект"):
+            preset_names(self.config_path)
+
+        self.config["_presets"] = {"bad-name": {"iso": 200}}
+        self._write()
+        with self.assertRaisesRegex(ValueError, "имя пресета"):
+            preset_names(self.config_path)
 
 
 class CameraAppliesConfigValuesTests(unittest.TestCase):
