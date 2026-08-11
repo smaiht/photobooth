@@ -30,6 +30,11 @@ build/
 .update_backup.*/
 
 
+marketing/samples/
+marketing/sessions/
+marketing/frames/
+marketing/collages/
+
 photobooth.log*
 yadisk_queue.json
 cafe_unlock_state.json

@@ -787,4 +787,12 @@ EDSDK, запускает системный PnP-reset только для USB I
 
 
 # Tests
-- venv/bin/python -m unittest discover -s tests
+venv/bin/python -m unittest discover -s tests
+
+# Сгенерить примеры по сессии из зип на ядиске:
+venv/bin/python marketing/generate_samples.py marketing/sessions/2026-08-08_09-20-43_18066800658831ef9407b.zip --pack kvas01aug26
+
+venv/bin/python marketing/generate_samples.py marketing/sessions/2026-08-08_16-06-26_b9e1d30665888c9ed50d7.zip --pack park08082026
+
+# Сгенерить коллаж примеров сессий:
+venv/bin/python marketing/build_formats_collage.py
