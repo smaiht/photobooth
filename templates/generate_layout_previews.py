@@ -3,9 +3,20 @@
 
 import argparse
 import json
+import sys
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from backend.text_layer import (  # noqa: E402  (path setup must run first)
+    date_values,
+    draw_text_blocks,
+    validated_text_blocks,
+)
 
 
 TEMPLATES_DIR = Path(__file__).resolve().parent
@@ -149,6 +160,8 @@ def _write_preview(
     output_path: Path,
     print_size: tuple[int, int],
     rectangles: list[tuple[int, int, int, int]],
+    template_name: str,
+    text_blocks: list,
 ) -> None:
     with Image.open(source_path) as source:
         preview = source.convert("RGB")
@@ -181,6 +194,12 @@ def _write_preview(
             preview.paste(foreground, (0, 0), foreground)
         finally:
             foreground.close()
+
+    if text_blocks:
+        # Same last layer as the print, so a layout check shows the caption
+        # exactly where a guest will see it.
+        draw_text_blocks(
+            preview, text_blocks, date_values(datetime.now()), template_name)
 
     temporary = output_path.with_name(output_path.name + ".tmp")
     try:
@@ -279,6 +298,8 @@ def main() -> None:
                 )
             source_path, foreground_path, rectangles = _slot_rectangles(
                 config_path, template_name, template, print_size)
+            text_blocks = validated_text_blocks(
+                template["print_layout"], template_name, print_size)
             output_path = source_path.with_name(
                 f"{template_name}_layout_preview.png")
             _write_preview(
@@ -287,6 +308,8 @@ def main() -> None:
                 output_path,
                 print_size,
                 rectangles,
+                template_name,
+                text_blocks,
             )
             generated += 1
             print(

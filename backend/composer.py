@@ -1,8 +1,8 @@
 """Compose photos onto native-resolution print templates.
 
 Template folder contains config.json and image layers. Each template has one
-print_layout shared by final composition and the on-screen preview. An optional
-foreground layer is composited after the photos.
+print_layout shared by final composition and the on-screen preview. Layers are
+drawn in a fixed order: background, photos, optional foreground, optional text.
 """
 
 from pathlib import Path
@@ -12,6 +12,13 @@ from typing import NamedTuple
 
 from PIL import Image, ImageOps
 
+from .text_layer import (
+    ROTATION_TRANSPOSE,
+    TextBlock,
+    draw_text_blocks,
+    validated_text_blocks,
+)
+
 
 DEFAULT_PRINT_SIZE = (3688, 2480)
 DEFAULT_PREVIEW_WIDTH = 720
@@ -20,11 +27,6 @@ PREVIEW_CANVAS_COLOR = (51, 51, 51)
 PREVIEW_SPLIT_HEIGHT_RATIO = 0.86
 PREVIEW_SPLIT_Y_OFFSET_RATIO = 0.08
 PREVIEW_SPLIT_GAP_RATIO = 0.035
-ROTATION_TRANSPOSE = {
-    "none": None,
-    "cw": Image.Transpose.ROTATE_270,
-    "ccw": Image.Transpose.ROTATE_90,
-}
 log = logging.getLogger(__name__)
 
 
@@ -43,6 +45,7 @@ class TemplateSpec(NamedTuple):
     slots: list[PhotoSlot]
     preview_rotation: str
     preview_split: str
+    texts: list[TextBlock]
 
 
 class PhotoChoicePreview(NamedTuple):
@@ -67,11 +70,17 @@ class PreviewBatch(dict[str, Path]):
         self.photo_choices = photo_choices
 
 
-def compose(template_dir: Path, template_name: str, photos: list[str | Path], config: dict) -> Image.Image:
+def compose(
+    template_dir: Path,
+    template_name: str,
+    photos: list[str | Path],
+    config: dict,
+    text_values: dict[str, str] | None = None,
+) -> Image.Image:
     """Compose photos onto a template. Returns print-ready image."""
     print_size = _validated_print_size(config)
     spec = _validated_template(
-        config["templates"][template_name], template_name)
+        config["templates"][template_name], template_name, print_size)
     required_photos = _required_photo_count(spec.slots)
     if len(photos) < required_photos:
         raise ValueError(
@@ -118,6 +127,9 @@ def compose(template_dir: Path, template_name: str, photos: list[str | Path], co
                 print_size,
                 template_name,
             )
+        if spec.texts:
+            draw_text_blocks(
+                canvas, spec.texts, text_values or {}, template_name)
         return canvas
     except Exception:
         canvas.close()
@@ -147,12 +159,14 @@ def generate_template_previews(
     config: dict,
     output_dir: Path,
     preview_width: int = DEFAULT_PREVIEW_WIDTH,
+    text_values: dict[str, str] | None = None,
 ) -> PreviewBatch:
     """Compose every configured template at screen resolution.
 
     Source photos are decoded and reduced once, kept in memory only for this
     batch, and explicitly closed before returning. Static reduced backgrounds
-    are cached beside their full-size source images.
+    are cached beside their full-size source images. Text blocks are drawn on
+    every call, so a date is never cached.
     """
     templates = config.get("templates")
     if not isinstance(templates, dict) or not templates:
@@ -161,7 +175,7 @@ def generate_template_previews(
     if not isinstance(preview_width, int) or preview_width < 100:
         raise ValueError("preview_width must be at least 100")
     required_photos = max(
-        template_photo_count(template, name)
+        template_photo_count(template, name, print_size)
         for name, template in templates.items()
     )
     if len(photos) < required_photos:
@@ -206,6 +220,7 @@ def generate_template_previews(
                             config,
                             print_size,
                             preview_width,
+                            text_values,
                         )
                         output_path = output_dir / (
                             f"preview_{index:02d}_photo_{photo_index + 1:02d}.jpg"
@@ -226,6 +241,7 @@ def generate_template_previews(
                         config,
                         print_size,
                         preview_width,
+                        text_values,
                     )
                     output_path = output_dir / f"preview_{index:02d}.jpg"
                     try:
@@ -254,6 +270,7 @@ def _validated_print_size(config: dict) -> tuple[int, int]:
 def _validated_template(
     template: dict,
     template_name: str,
+    print_size: tuple[int, int] = DEFAULT_PRINT_SIZE,
 ) -> TemplateSpec:
     """Validate one template and return its layers, slots and preview settings."""
     if not isinstance(template, dict):
@@ -332,12 +349,16 @@ def _validated_template(
             f"unsupported preview_split {preview_split!r} "
             f"in template {template_name!r}"
         )
+    # Drawn last, over the photos and the optional foreground. An absent
+    # "texts" key simply means this template carries no caption.
+    texts = validated_text_blocks(layout, template_name, print_size)
     return TemplateSpec(
         background,
         foreground,
         slots,
         preview_rotation,
         preview_split,
+        texts,
     )
 
 
@@ -345,9 +366,13 @@ def _required_photo_count(slots: list[PhotoSlot]) -> int:
     return max(slot.photo_index for slot in slots) + 1
 
 
-def template_photo_count(template: dict, template_name: str = "template") -> int:
+def template_photo_count(
+    template: dict,
+    template_name: str = "template",
+    print_size: tuple[int, int] = DEFAULT_PRINT_SIZE,
+) -> int:
     """Return how many distinct session photos a template references."""
-    spec = _validated_template(template, template_name)
+    spec = _validated_template(template, template_name, print_size)
     return _required_photo_count(spec.slots)
 
 
@@ -457,9 +482,10 @@ def _compose_preview(
     config: dict,
     print_size: tuple[int, int],
     preview_width: int,
+    text_values: dict[str, str] | None = None,
 ) -> Image.Image:
     spec = _validated_template(
-        config["templates"][template_name], template_name)
+        config["templates"][template_name], template_name, print_size)
     required_photos = _required_photo_count(spec.slots)
     if len(photos) < required_photos:
         raise ValueError(
@@ -516,6 +542,15 @@ def _compose_preview(
                 print_size,
                 background_size,
                 template_name,
+            )
+        if spec.texts:
+            # Same blocks as the print, scaled by the same factor as the slots.
+            draw_text_blocks(
+                background,
+                spec.texts,
+                text_values or {},
+                template_name,
+                scale=scale,
             )
     except Exception:
         background.close()

@@ -6,6 +6,7 @@ State machine:
 """
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -35,11 +36,13 @@ from .config import (
     update_camera_config_field,
 )
 from .composer import (
+    DEFAULT_PRINT_SIZE,
     compose,
     compose_unframed_photo,
     generate_template_previews,
     template_photo_count,
 )
+from .text_layer import date_values
 from .log import read_log_snapshot
 from .video import VideoRecorder
 from . import yadisk_cloud, yadisk_control
@@ -694,8 +697,10 @@ async def _run_session():
     available_templates = tpl_config.get("templates", {})
     if not isinstance(available_templates, dict) or not available_templates:
         raise ValueError(f"No templates configured in {template_dir}")
+    tpl_print_size = tuple(tpl_config.get("print_size", DEFAULT_PRINT_SIZE))
     for template_name, template in available_templates.items():
-        required_photos = template_photo_count(template, template_name)
+        required_photos = template_photo_count(
+            template, template_name, tpl_print_size)
         # A layout may intentionally use only the first captured photo, but it
         # must never reference a photo the session does not capture.
         if required_photos > num_photos:
@@ -727,6 +732,9 @@ async def _run_session():
     SESSION_LINK = ""
     TEMPLATE_OPTIONS = []
     session_created_at = datetime.now(timezone.utc)
+    # Local booth date, resolved once per session: a session started at 23:59
+    # must not print tomorrow's date, and preview and print must agree.
+    text_values = date_values(session_created_at.astimezone())
     event_folder = (
         yadisk_cloud.current_event_folder()
         or str(CONFIG.get("yadisk_folder") or "").strip().strip("/")
@@ -839,11 +847,14 @@ async def _run_session():
     preview_started = time.monotonic()
     preview_batch = await asyncio.get_running_loop().run_in_executor(
         None,
-        generate_template_previews,
-        template_dir,
-        photos_copy,
-        tpl_config,
-        preview_dir,
+        functools.partial(
+            generate_template_previews,
+            template_dir,
+            photos_copy,
+            tpl_config,
+            preview_dir,
+            text_values=text_values,
+        ),
     )
     _require_session_camera(camera_generation)
     preview_paths = dict(preview_batch)
@@ -1058,7 +1069,9 @@ async def _run_session():
             if template.get("photo_choice") is True:
                 photo = SESSION_PHOTOS[photo_index]
                 if with_frame:
-                    result = compose(template_dir, name, [photo], tpl_config)
+                    result = compose(
+                        template_dir, name, [photo], tpl_config,
+                        text_values=text_values)
                     frame_label = "frame"
                 else:
                     result = compose_unframed_photo(photo, tpl_config)
@@ -1069,7 +1082,8 @@ async def _run_session():
                 )
             else:
                 result = compose(
-                    template_dir, name, SESSION_PHOTOS, tpl_config)
+                    template_dir, name, SESSION_PHOTOS, tpl_config,
+                    text_values=text_values)
                 path = session_dir / f"print_{name}.jpg"
             try:
                 dpi = int(CONFIG.get("print_dpi", 600))

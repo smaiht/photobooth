@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
@@ -36,6 +38,7 @@ from backend.composer import (  # noqa: E402  (path setup must run first)
     compose,
     compose_unframed_photo,
 )
+from backend.text_layer import date_values  # noqa: E402
 
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v")
@@ -170,6 +173,22 @@ def _emit(
     return written
 
 
+def _session_date(session_name: str) -> datetime:
+    """Date of the session itself, so samples match the printed sheet.
+
+    Session folders are named ``2026-08-08_09-20-43_<id>``. Without that prefix
+    there is nothing to recover, and today's date is the honest fallback.
+    """
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", session_name)
+    if not match:
+        print(
+            f"note: {session_name} has no date prefix; using today",
+            file=sys.stderr,
+        )
+        return datetime.now()
+    return datetime(*(int(value) for value in match.groups()))
+
+
 def build(source: Path, pack: str, out_root: Path) -> Path:
     template_dir = TEMPLATES_DIR / pack
     config_path = template_dir / "config.json"
@@ -194,12 +213,15 @@ def build(source: Path, pack: str, out_root: Path) -> Path:
             print(f"note: {session_name} has no video", file=sys.stderr)
 
         written: list[Path] = []
+        text_values = date_values(_session_date(session_name))
         for template_name, template in config["templates"].items():
             split = template.get("preview_split", "none")
             rotation = template.get("preview_rotation", "none")
             if template.get("photo_choice"):
                 for index, photo in enumerate(photos, start=1):
-                    framed = compose(template_dir, template_name, [photo], config)
+                    framed = compose(
+                        template_dir, template_name, [photo], config,
+                        text_values=text_values)
                     try:
                         written += _emit(
                             framed,
@@ -226,7 +248,9 @@ def build(source: Path, pack: str, out_root: Path) -> Path:
                     finally:
                         plain.close()
                 continue
-            sheet = compose(template_dir, template_name, photos, config)
+            sheet = compose(
+                template_dir, template_name, photos, config,
+                text_values=text_values)
             try:
                 written += _emit(
                     sheet, template_name, out_dir, trim, print_dpi, split, rotation

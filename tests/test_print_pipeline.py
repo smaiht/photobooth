@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -18,7 +19,9 @@ from backend.composer import (
     generate_template_previews,
     template_photo_count,
 )
+from backend.text_layer import DATE_TOKENS, date_values
 from backend import composer as composer_module
+from backend import text_layer
 from backend import main
 from backend.printer import (
     _print_driver,
@@ -335,6 +338,310 @@ class ComposerTests(unittest.TestCase):
                     visible.close()
             finally:
                 result.close()
+
+
+class TemplateTextTests(unittest.TestCase):
+    """Text is the last layer and never blocks a print when it fails."""
+
+    FONT = "Comfortaa-VariableFont_wght.ttf"
+
+    def setUp(self):
+        self.moment = datetime(2026, 8, 8, 9, 20, 43)
+
+    @staticmethod
+    def _pack(folder: Path, texts, size=(400, 200)) -> dict:
+        Image.new("RGB", size, "white").save(folder / "background.png")
+        Image.new("RGB", size, "white").save(folder / "photo.png")
+        layout = {
+            "background": "background.png",
+            "photos": [{"photo_index": 0, "x": 0, "y": 0, "rotate": "none"}],
+        }
+        if texts is not None:
+            layout["texts"] = texts
+        return {
+            "print_size": list(size),
+            "templates": {
+                "grid": {
+                    "photo_size_px": {"width": size[0], "height": 100},
+                    "print_layout": layout,
+                    "preview_rotation": "none",
+                    "preview_split": "none",
+                },
+            },
+        }
+
+    def _block(self, **overrides) -> dict:
+        block = {
+            "box": {"x": 0, "y": 100, "width": 400, "height": 100},
+            "align": "center",
+            "valign": "middle",
+            "rotate": "none",
+            "font": self.FONT,
+            "color": "#000000",
+            "lines": [{"text": "{dd}.{mm}.{yyyy}", "size": 40}],
+        }
+        block.update(overrides)
+        return block
+
+    @staticmethod
+    def _ink(image: Image.Image, box: tuple[int, int, int, int]) -> int:
+        region = image.crop(box).convert("L")
+        try:
+            return sum(count for value, count in enumerate(
+                region.histogram()) if value < 128)
+        finally:
+            region.close()
+
+    def test_date_tokens_use_russian_genitive_month(self):
+        values = date_values(self.moment)
+        self.assertEqual(values["{dd}.{mm}.{yyyy}"], "08.08.2026")
+        self.assertEqual(values["{dd} {month_ru} {yyyy}"], "8 августа 2026")
+        # Every documented token must resolve, or a pack could reference one
+        # that silently stays literal.
+        self.assertEqual(set(values), set(DATE_TOKENS))
+
+    def test_january_and_december_do_not_fall_off_the_month_table(self):
+        self.assertEqual(
+            date_values(datetime(2026, 1, 1))["{dd} {month_ru} {yyyy}"],
+            "1 января 2026",
+        )
+        self.assertEqual(
+            date_values(datetime(2026, 12, 31))["{dd} {month_ru} {yyyy}"],
+            "31 декабря 2026",
+        )
+
+    def test_date_is_drawn_inside_its_box(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            config = self._pack(folder, [self._block()])
+            result = compose(
+                folder, "grid", [folder / "photo.png"], config,
+                text_values=date_values(self.moment),
+            )
+            try:
+                self.assertGreater(self._ink(result, (0, 100, 400, 200)), 100)
+                # The photo area above the box must stay untouched.
+                self.assertEqual(self._ink(result, (0, 0, 400, 100)), 0)
+            finally:
+                result.close()
+
+    def test_absent_texts_key_keeps_the_sheet_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            without = compose(
+                folder, "grid", [folder / "photo.png"],
+                self._pack(folder, None),
+            )
+            try:
+                self.assertEqual(self._ink(without, (0, 0, 400, 200)), 0)
+            finally:
+                without.close()
+
+    def test_text_is_drawn_over_the_foreground(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            config = self._pack(folder, [self._block()])
+            foreground = Image.new("RGBA", (400, 200), (255, 255, 255, 255))
+            try:
+                foreground.save(folder / "foreground.png")
+            finally:
+                foreground.close()
+            config["templates"]["grid"]["print_layout"]["foreground"] = \
+                "foreground.png"
+            result = compose(
+                folder, "grid", [folder / "photo.png"], config,
+                text_values=date_values(self.moment),
+            )
+            try:
+                # An opaque white foreground would hide any earlier layer, so
+                # visible ink proves the text came last.
+                self.assertGreater(self._ink(result, (0, 100, 400, 200)), 100)
+            finally:
+                result.close()
+
+    def test_a_failing_block_is_skipped_and_the_sheet_still_composes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            config = self._pack(folder, [
+                self._block(font="NoSuchFont.ttf"),
+                self._block(lines=[{"text": "{unknown}", "size": 40}]),
+            ])
+            with self.assertLogs("backend.text_layer", level="ERROR") as logs:
+                result = compose(
+                    folder, "grid", [folder / "photo.png"], config,
+                    text_values=date_values(self.moment),
+                )
+            try:
+                self.assertEqual(result.size, (400, 200))
+                self.assertEqual(self._ink(result, (0, 0, 400, 200)), 0)
+            finally:
+                result.close()
+            self.assertEqual(len(logs.output), 2)
+            self.assertIn("font not found", logs.output[0])
+            self.assertIn("unknown token", logs.output[1])
+
+    def test_align_moves_the_text_within_the_box(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            positions = {}
+            for align in ("left", "right"):
+                config = self._pack(folder, [self._block(align=align)])
+                result = compose(
+                    folder, "grid", [folder / "photo.png"], config,
+                    text_values=date_values(self.moment),
+                )
+                try:
+                    positions[align] = (
+                        self._ink(result, (0, 100, 100, 200)),
+                        self._ink(result, (300, 100, 400, 200)),
+                    )
+                finally:
+                    result.close()
+            self.assertGreater(positions["left"][0], positions["left"][1])
+            self.assertGreater(positions["right"][1], positions["right"][0])
+
+    def test_weight_changes_stroke_thickness(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            ink = {}
+            for weight in (300, 700):
+                config = self._pack(folder, [self._block(
+                    lines=[{"text": "08.08.2026", "size": 40, "weight": weight}],
+                )])
+                result = compose(
+                    folder, "grid", [folder / "photo.png"], config,
+                    text_values=date_values(self.moment),
+                )
+                try:
+                    ink[weight] = self._ink(result, (0, 100, 400, 200))
+                finally:
+                    result.close()
+            self.assertGreater(ink[700], ink[300])
+
+    def test_out_of_range_weight_is_clamped_and_logged(self):
+        with self.assertLogs("backend.text_layer", level="ERROR") as logs:
+            clamped = text_layer._load_font(self.FONT, 40, 5000)
+        limit = text_layer._load_font(self.FONT, 40, 700)
+        self.assertEqual(
+            clamped.getbbox("08.08.2026"), limit.getbbox("08.08.2026"))
+        self.assertIn("Out-of-range weight=5000", logs.output[0])
+
+    def test_line_overrides_only_what_it_declares(self):
+        blocks = text_layer.validated_text_blocks(
+            {"texts": [self._block(
+                color="#111111",
+                size=30,
+                weight=400,
+                lines=[
+                    {"text": "первая"},
+                    {"text": "вторая", "size": 50, "color": "#222222"},
+                ],
+            )]},
+            "grid",
+            (400, 200),
+        )
+        first, second = blocks[0].lines
+        self.assertEqual((first.size, first.color, first.weight), (30, "#111111", 400))
+        self.assertEqual((second.size, second.color), (50, "#222222"))
+        # An override must not drop the block-level font or weight.
+        self.assertEqual(second.font, first.font)
+        self.assertEqual(second.weight, 400)
+
+    def test_structural_mistakes_in_a_pack_are_refused(self):
+        cases = {
+            "texts must be a list": {"texts": {}},
+            "box exceeds the print size": [self._block(
+                box={"x": 0, "y": 100, "width": 500, "height": 100})],
+            "unsupported align": [self._block(align="middle")],
+            "unsupported valign": [self._block(valign="center")],
+            "unsupported rotate": [self._block(rotate="upside")],
+            "needs a non-empty lines list": [self._block(lines=[])],
+            "size must be an integer": [self._block(
+                lines=[{"text": "x", "size": 0}])],
+            "needs a font file name": [self._block(
+                font="../secrets.ttf", lines=[{"text": "x", "size": 20}])],
+            "line_spacing must be": [self._block(line_spacing=99)],
+        }
+        for message, texts in cases.items():
+            with self.subTest(message=message):
+                layout = texts if isinstance(texts, dict) else {"texts": texts}
+                with self.assertRaisesRegex(ValueError, message):
+                    text_layer.validated_text_blocks(layout, "grid", (400, 200))
+
+    def test_rotated_block_turns_with_the_strip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            config = self._pack(
+                folder,
+                [self._block(
+                    box={"x": 150, "y": 0, "width": 100, "height": 400},
+                    rotate="ccw",
+                    lines=[{"text": "08.08.2026", "size": 40}],
+                )],
+                size=(400, 400),
+            )
+            config["templates"]["grid"]["photo_size_px"] = {
+                "width": 100, "height": 100}
+            result = compose(
+                folder, "grid", [folder / "photo.png"], config,
+                text_values=date_values(self.moment),
+            )
+            try:
+                # A rotated line is taller than wide, so ink stays in the narrow
+                # vertical box instead of spilling sideways.
+                self.assertGreater(self._ink(result, (150, 0, 250, 400)), 100)
+                self.assertEqual(self._ink(result, (0, 0, 150, 400)), 0)
+                self.assertEqual(self._ink(result, (250, 0, 400, 400)), 0)
+            finally:
+                result.close()
+
+    def test_preview_scales_text_with_the_layout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            config = self._pack(folder, [self._block()], size=(400, 200))
+            output_dir = folder / "previews"
+            with Image.open(folder / "photo.png") as source:
+                photo = source.convert("RGB")
+            try:
+                preview = composer_module._compose_preview(
+                    folder, "grid", [photo], config, (400, 200), 200,
+                    date_values(self.moment),
+                )
+            finally:
+                photo.close()
+            try:
+                self.assertEqual(preview.size, (200, 100))
+                # The box occupies the lower half at any scale.
+                self.assertGreater(self._ink(preview, (0, 50, 200, 100)), 20)
+                self.assertEqual(self._ink(preview, (0, 0, 200, 50)), 0)
+            finally:
+                preview.close()
+            self.assertFalse(output_dir.exists())
+
+    def test_session_previews_receive_the_same_values_as_the_print(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            config = self._pack(folder, [self._block()])
+            output_dir = folder / "previews"
+            batch = generate_template_previews(
+                folder,
+                [folder / "photo.png"],
+                config,
+                output_dir,
+                preview_width=200,
+                text_values=date_values(self.moment),
+            )
+            with Image.open(batch["grid"]) as preview:
+                self.assertGreater(self._ink(preview, (0, 50, 200, 100)), 20)
+
+    def test_colour_parsing_accepts_rgb_and_rgba_only(self):
+        self.assertEqual(text_layer._parse_color("#ff8000"), (255, 128, 0, 255))
+        self.assertEqual(
+            text_layer._parse_color("#ff800080"), (255, 128, 0, 128))
+        for invalid in ("ff8000", "#fff", "#gggggg", ""):
+            with self.subTest(color=invalid):
+                with self.assertRaises(ValueError):
+                    text_layer._parse_color(invalid)
 
 
 class PreviewComposerTests(unittest.TestCase):
@@ -1441,7 +1748,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
             if state == "template_select":
                 main.app.state.on_skip_print()
 
-        def previews(_template_dir, _photos, config, output_dir):
+        def previews(_template_dir, _photos, config, output_dir, **_kwargs):
             return {
                 name: Path(output_dir) / f"{name}.jpg"
                 for name in config["templates"]
@@ -1551,7 +1858,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 choose("single", 2, "false")
                 choose("single", 2, False)
 
-        def previews(_template_dir, _photos, config, output_dir):
+        def previews(_template_dir, _photos, config, output_dir, **_kwargs):
             paths = {
                 name: Path(output_dir) / f"{name}.jpg"
                 for name in config["templates"]
@@ -1685,7 +1992,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
         states = []
 
-        def previews(_template_dir, _photos, config, output_dir):
+        def previews(_template_dir, _photos, config, output_dir, **_kwargs):
             return {
                 name: Path(output_dir) / f"{name}.jpg"
                 for name in config["templates"]
@@ -1696,7 +2003,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         async def enqueue(*_args, **_kwargs):
             uploaded.set()
 
-        def compose_template(_dir, name, _photos, _config):
+        def compose_template(_dir, name, _photos, _config, **_kwargs):
             chosen_templates.append(name)
             return Image.new("RGB", (120, 80), "white")
 
@@ -1798,7 +2105,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 main.app.state.on_template_choice("grid")
                 main.app.state.on_skip_print()
 
-        def previews(_template_dir, _photos, config, output_dir):
+        def previews(_template_dir, _photos, config, output_dir, **_kwargs):
             return {
                 name: Path(output_dir) / f"{name}.jpg"
                 for name in config["templates"]
@@ -1809,7 +2116,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         async def enqueue(*_args, **_kwargs):
             uploaded.set()
 
-        def compose_template(_dir, name, _photos, _config):
+        def compose_template(_dir, name, _photos, _config, **_kwargs):
             chosen_templates.append(name)
             return Image.new("RGB", (120, 80), "white")
 
@@ -1908,7 +2215,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 exposed_options.extend(main.TEMPLATE_OPTIONS)
                 main.app.state.on_template_choice("grid")
 
-        def previews(_template_dir, _photos, config, output_dir):
+        def previews(_template_dir, _photos, config, output_dir, **_kwargs):
             paths = {
                 name: Path(output_dir) / f"{name}.jpg"
                 for name in config["templates"]
@@ -2016,7 +2323,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
         async def set_state(state, _extra=None):
             main.STATE = state
 
-        def previews(_template_dir, _photos, config, output_dir):
+        def previews(_template_dir, _photos, config, output_dir, **_kwargs):
             paths = {
                 name: Path(output_dir) / f"{name}.jpg"
                 for name in config["templates"]
@@ -2249,7 +2556,7 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
                 str(self.download_dir / f"photo_{photo_number}.jpg"))
 
     @staticmethod
-    def _previews(_template_dir, _photos, config, output_dir):
+    def _previews(_template_dir, _photos, config, output_dir, **_kwargs):
         paths = {
             name: Path(output_dir) / f"{name}.jpg"
             for name in config["templates"]
@@ -2283,7 +2590,7 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
         async def enqueue(*_args, **_kwargs):
             uploaded.set()
 
-        def compose_template(_dir, name, photos, _config):
+        def compose_template(_dir, name, photos, _config, **_kwargs):
             composed.append((name, len(photos)))
             return Image.new("RGB", (120, 80), "white")
 

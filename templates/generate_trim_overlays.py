@@ -2,9 +2,20 @@
 """Generate visual copies of template backgrounds with print trim in red."""
 
 import json
+import sys
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from backend.text_layer import (  # noqa: E402  (path setup must run first)
+    date_values,
+    draw_text_blocks,
+    validated_text_blocks,
+)
 
 
 TEMPLATES_DIR = Path(__file__).resolve().parent
@@ -78,7 +89,8 @@ def _layer_path(
 def _template_layers(
     config_path: Path,
     config: dict,
-) -> list[tuple[Path, Path | None]]:
+    print_size: tuple[int, int],
+) -> list[tuple[Path, Path | None, str, list]]:
     templates = config.get("templates")
     if not isinstance(templates, dict) or not templates:
         raise ValueError(f"{config_path}: templates must be a non-empty object")
@@ -106,10 +118,18 @@ def _template_layers(
             "foreground",
             required=False,
         )
-        pair = (background_path, foreground_path)
-        if pair not in seen:
-            seen.add(pair)
-            layers.append(pair)
+        text_blocks = validated_text_blocks(layout, template_name, print_size)
+        # Text is part of the identity here: two templates may share one
+        # background yet carry different captions, and each needs its own file.
+        key = (
+            background_path,
+            foreground_path,
+            json.dumps(layout.get("texts"), sort_keys=True, ensure_ascii=False),
+        )
+        if key not in seen:
+            seen.add(key)
+            layers.append(
+                (background_path, foreground_path, template_name, text_blocks))
     return layers
 
 
@@ -118,6 +138,8 @@ def _write_overlay(
     foreground_path: Path | None,
     print_size: tuple[int, int],
     trim: tuple[int, int, int, int],
+    template_name: str,
+    text_blocks: list,
 ) -> Path:
     with Image.open(source_path) as source:
         background = source.convert("RGBA")
@@ -148,6 +170,12 @@ def _write_overlay(
             background.close()
         background = composed
 
+    if text_blocks:
+        # Drawn before the trim marks so the overlay shows whether a caption
+        # survives the physical cut.
+        draw_text_blocks(
+            background, text_blocks, date_values(datetime.now()), template_name)
+
     width, height = print_size
     left, top, right, bottom = trim
     overlay = Image.new("RGBA", print_size, (0, 0, 0, 0))
@@ -167,7 +195,11 @@ def _write_overlay(
         overlay.close()
         background.close()
 
-    output_path = source_path.with_name(f"{source_path.stem}_trim.png")
+    # Without text one file per background is unambiguous, and the existing
+    # names stay put. With text two templates may share a background and need
+    # distinct files.
+    suffix = f"_{template_name}_trim" if text_blocks else "_trim"
+    output_path = source_path.with_name(f"{source_path.stem}{suffix}.png")
     temporary = output_path.with_name(output_path.name + ".tmp")
     try:
         result.save(temporary, "PNG", optimize=True)
@@ -192,12 +224,15 @@ def main() -> None:
             print_size,
             f"{config_path}: print_trim",
         )
-        for source_path, foreground_path in _template_layers(config_path, config):
+        for source_path, foreground_path, template_name, text_blocks in \
+                _template_layers(config_path, config, print_size):
             output_path = _write_overlay(
                 source_path,
                 foreground_path,
                 print_size,
                 trim,
+                template_name,
+                text_blocks,
             )
             generated += 1
             print(f"{config_path.parent.name}: {source_path.name} -> {output_path.name}")

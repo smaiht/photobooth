@@ -1,0 +1,126 @@
+{
+    "print_size": [3688, 2480],
+    "print_trim": {
+        "left": 40,
+        "top": 50,
+        "right": 55,
+        "bottom": 55,
+        "visible_size": [3593, 2375]
+    },
+    "templates": {
+        "strips": {
+            "label": "2 полоски",
+            "photo_size_px": {"width": 712, "height": 1068},
+            "print_layout": {
+                "background": "strip_bg.png",
+                "photos": [
+                    {"photo_index": 0, "x": 129, "y": 110, "rotate": "ccw"},
+                    {"photo_index": 1, "x": 900, "y": 110, "rotate": "ccw"},
+                    {"photo_index": 2, "x": 1671, "y": 110, "rotate": "ccw"},
+                    {"photo_index": 3, "x": 2442, "y": 110, "rotate": "ccw"},
+                    {"photo_index": 0, "x": 129, "y": 1298, "rotate": "ccw"},
+                    {"photo_index": 1, "x": 900, "y": 1298, "rotate": "ccw"},
+                    {"photo_index": 2, "x": 1671, "y": 1298, "rotate": "ccw"},
+                    {"photo_index": 3, "x": 2442, "y": 1298, "rotate": "ccw"}
+                ],
+                "texts": [
+                    {
+                        "box": {"x": 3490, "y": 470, "width": 110, "height": 330},
+                        "align": "center",
+                        "valign": "middle",
+                        "rotate": "ccw",
+                        "font": "Comfortaa-VariableFont_wght.ttf",
+                        "weight": 700,
+                        "color": "#8c3b2e",
+                        "line_spacing": 1.25,
+                        "lines": [
+                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 30},
+                            {"text": "{dd} {month_ru} {yyyy}", "size": 26, "weight": 500}
+                        ]
+                    },
+                    {
+                        "box": {"x": 3490, "y": 1704, "width": 110, "height": 330},
+                        "align": "center",
+                        "valign": "middle",
+                        "rotate": "ccw",
+                        "font": "Comfortaa-VariableFont_wght.ttf",
+                        "weight": 700,
+                        "color": "#8c3b2e",
+                        "line_spacing": 1.25,
+                        "lines": [
+                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 30},
+                            {"text": "{dd} {month_ru} {yyyy}", "size": 26, "weight": 500}
+                        ]
+                    }
+                ],
+                "_texts_comment": "По одной подписи на каждую физическую полоску: обе лежат на светлых плашках арта у правого края, второй блок сдвинут на 1234 px.",
+                "_texts_date_tokens": ["{dd}.{mm}.{yyyy}", "{dd} {month_ru} {yyyy}"]
+            },
+            "preview_rotation": "cw",
+            "preview_split": "horizontal"
+        },
+        "grid": {
+            "label": "Открытка",
+            "photo_size_px": {"width": 1500, "height": 1000},
+            "print_layout": {
+                "background": "grid_bg.png",
+                "photos": [
+                    {"photo_index": 0, "x": 312, "y": 110, "rotate": "none"},
+                    {"photo_index": 1, "x": 1862, "y": 110, "rotate": "none"},
+                    {"photo_index": 2, "x": 312, "y": 1160, "rotate": "none"},
+                    {"photo_index": 3, "x": 1862, "y": 1160, "rotate": "none"}
+                ],
+                "texts": [
+                    {
+                        "box": {"x": 1480, "y": 2258, "width": 720, "height": 134},
+                        "align": "center",
+                        "valign": "middle",
+                        "rotate": "none",
+                        "font": "Comfortaa-VariableFont_wght.ttf",
+                        "weight": 700,
+                        "color": "#8c3b2e",
+                        "line_spacing": 1.2,
+                        "lines": [
+                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 56},
+                            {"text": "{dd} {month_ru} {yyyy}", "size": 38, "weight": 500}
+                        ]
+                    }
+                ],
+                "_texts_date_tokens": ["{dd}.{mm}.{yyyy}", "{dd} {month_ru} {yyyy}"]
+            },
+            "preview_rotation": "none",
+            "preview_split": "none"
+        },
+        "single": {
+            "label": "1 фото",
+            "photo_choice": true,
+            "photo_size_px": {"width": 3050, "height": 2050},
+            "print_layout": {
+                "background": "grid_bg.png",
+                "photos": [
+                    {"photo_index": 0, "x": 312, "y": 110, "rotate": "none"}
+                ],
+                "texts": [
+                    {
+                        "box": {"x": 1480, "y": 2258, "width": 720, "height": 134},
+                        "align": "center",
+                        "valign": "middle",
+                        "rotate": "none",
+                        "font": "Comfortaa-VariableFont_wght.ttf",
+                        "weight": 700,
+                        "color": "#8c3b2e",
+                        "line_spacing": 1.2,
+                        "lines": [
+                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 56},
+                            {"text": "{dd} {month_ru} {yyyy}", "size": 38, "weight": 500}
+                        ]
+                    }
+                ],
+                "_texts_comment": "Слот single заканчивается на y=2160, поэтому та же плашка остаётся видимой под фотографией.",
+                "_texts_date_tokens": ["{dd}.{mm}.{yyyy}", "{dd} {month_ru} {yyyy}"]
+            },
+            "preview_rotation": "none",
+            "preview_split": "none"
+        }
+    }
+}
