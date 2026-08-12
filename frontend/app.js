@@ -54,7 +54,6 @@ const resultQrCode = document.getElementById("result-qr-code");
 const doneTitle = document.getElementById("done-title");
 const cameraStatusTitle = document.getElementById("camera-status-title");
 const cameraStatusSubtitle = document.getElementById("camera-status-subtitle");
-const cameraRecoverButton = document.getElementById("camera-recover-button");
 const tapLockStatus = document.querySelector(".tap-lock-status");
 
 let ws = null;
@@ -78,7 +77,6 @@ const printBasket = new Map();
 let currentShootingPhotoIndex = 0;
 let technicalEventActive = false;
 let technicalEventPriceRubles = 0;
-let cameraRecoveryPending = false;
 const sessionLinks = new Map();
 
 let poseExampleUrls = [];
@@ -312,29 +310,6 @@ function send(msg) {
     return true;
 }
 
-cameraRecoverButton.addEventListener("click", async () => {
-    if (cameraRecoveryPending
-            || !["no_camera", "camera_searching"].includes(currentState)) return;
-    cameraRecoveryPending = true;
-    cameraRecoverButton.disabled = true;
-    cameraStatusTitle.textContent = "ПЕРЕПОДКЛЮЧАЕМ КАМЕРУ…";
-    cameraStatusSubtitle.textContent = "Это может занять несколько секунд";
-    try {
-        const response = await fetch("/api/camera/recover", { method: "POST" });
-        const result = await response.json();
-        if (!response.ok || result.status !== "ok") {
-            throw new Error(result.message || `HTTP ${response.status}`);
-        }
-        cameraStatusSubtitle.textContent = result.message;
-    } catch (error) {
-        cameraStatusTitle.textContent = "КАМЕРА НЕ ПЕРЕПОДКЛЮЧЕНА";
-        cameraStatusSubtitle.textContent = error.message;
-    } finally {
-        cameraRecoveryPending = false;
-        cameraRecoverButton.disabled = false;
-    }
-});
-
 // --- Sound ---
 let audioCtx = null;
 function beep(freq, duration) {
@@ -530,7 +505,7 @@ function _doSwitch(state, data) {
     setLiveView(key === "shooting");
     if (key === "done") renderDoneTitle(data);
 
-    if (key === "no_camera" && !cameraRecoveryPending) {
+    if (key === "no_camera") {
         const searching = state === "camera_searching";
         cameraStatusTitle.textContent = searching
             ? "ИЩЕМ КАМЕРУ…"

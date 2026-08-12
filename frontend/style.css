@@ -73,17 +73,6 @@ html, body {
 #screen-no-camera { gap: 2vh; }
 .error-msg { font-size: 4vw; font-weight: 700; }
 .error-sub { font-size: 2vw; opacity: 0.5; }
-.camera-recover-button {
-    margin-top: 3vh;
-    padding: 2vh 3vw;
-    border: 0;
-    border-radius: 999px;
-    background: #191919;
-    color: #fff;
-    font: 700 clamp(22px, 1.7vw, 34px) 'Comfortaa', sans-serif;
-    letter-spacing: 0.05em;
-}
-.camera-recover-button:disabled { opacity: 0.4; }
 
 /* IDLE */
 #screen-idle {

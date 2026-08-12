@@ -281,12 +281,7 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         second = ctypes.c_void_p(102)
         with patch.object(camera, "_acquire_camera", side_effect=[first, second]), \
              patch.object(camera, "_enable_limited_properties"), \
-             patch.object(camera._retry_event, "wait"), \
-             patch.object(
-                 edsdk.time, "monotonic",
-                 side_effect=[10.0, 140.4, 141.0, 141.2],
-             ), \
-             self.assertLogs("backend.camera.edsdk", level="INFO") as logs:
+             patch.object(camera._retry_event, "wait"):
             camera._connect_camera()
 
         self.assertTrue(camera._session_open)
@@ -295,10 +290,6 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         camera._sdk.EdsCloseSession.assert_not_called()
         camera._sdk.EdsInitializeSDK.assert_not_called()
         camera._sdk.EdsTerminateSDK.assert_not_called()
-        output = "\n".join(logs.output)
-        self.assertIn("OpenSession attempt 1/5 started", output)
-        self.assertIn("failed after 130.4s", output)
-        self.assertIn("Session opened on attempt 2/5 after 0.2s", output)
 
     def test_sdk_init_and_terminate_are_each_guarded(self):
         camera = edsdk.Camera("fake-edSDK.dll")
@@ -772,160 +763,6 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
             )
 
         self.assertFalse(camera._pending_property_updates)
-
-
-class ManualCameraRecoveryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_recovery_resets_usb_between_stopping_and_starting_edsdk(self):
-        camera = MagicMock()
-        camera.stop.side_effect = [False, True]
-        recovery_lock = asyncio.Lock()
-
-        with patch.object(main, "camera", camera), \
-             patch.object(main, "STATE", "camera_searching"), \
-             patch.object(main, "_services_stopping", False), \
-             patch.object(main, "_camera_recovery_lock", recovery_lock), \
-             patch("backend.main.set_state", new_callable=AsyncMock) as set_state, \
-             patch("backend.main._request_camera_usb_restart",
-                   return_value=(True, "USB reset")) as usb_reset, \
-             patch("backend.main._wait_camera_usb_restart_result",
-                   return_value=(True, "USB reset complete")) as reset_result, \
-             patch("backend.main._log_camera_pnp_snapshot") as pnp_snapshot, \
-             patch.object(main, "CAMERA_USB_RESET_WAIT_SECONDS", 0):
-            result = await main._recover_camera()
-
-        self.assertEqual(result["status"], "ok")
-        self.assertTrue(result["usb_reset"])
-        self.assertTrue(result["usb_reset_succeeded"])
-        self.assertEqual(camera.stop.call_args_list, [call(3.0), call(10.0)])
-        usb_reset.assert_called_once_with()
-        reset_result.assert_called_once_with()
-        self.assertEqual(pnp_snapshot.call_args_list, [
-            call("before-recovery"),
-            call("after-recovery"),
-        ])
-        camera.start.assert_called_once_with()
-        set_state.assert_awaited_once_with("camera_searching")
-
-    async def test_recovery_still_cycles_edsdk_when_system_task_is_missing(self):
-        camera = MagicMock()
-        camera.stop.return_value = True
-
-        with patch.object(main, "camera", camera), \
-             patch.object(main, "STATE", "no_camera"), \
-             patch.object(main, "_services_stopping", False), \
-             patch.object(main, "_camera_recovery_lock", asyncio.Lock()), \
-             patch("backend.main.set_state", new_callable=AsyncMock), \
-             patch("backend.main._request_camera_usb_restart",
-                   return_value=(False, "task missing")):
-            result = await main._recover_camera()
-
-        self.assertEqual(result["status"], "ok")
-        self.assertFalse(result["usb_reset"])
-        self.assertIn("EDSDK перезапущен", result["message"])
-        camera.stop.assert_called_once_with(3.0)
-        camera.start.assert_called_once_with()
-
-    async def test_recovery_reports_reset_task_failure_without_claiming_success(self):
-        camera = MagicMock()
-        camera.stop.return_value = True
-
-        with patch.object(main, "camera", camera), \
-             patch.object(main, "STATE", "camera_searching"), \
-             patch.object(main, "_services_stopping", False), \
-             patch.object(main, "_camera_recovery_lock", asyncio.Lock()), \
-             patch("backend.main.set_state", new_callable=AsyncMock), \
-             patch("backend.main._request_camera_usb_restart",
-                   return_value=(True, "USB reset")), \
-             patch("backend.main._wait_camera_usb_restart_result",
-                   return_value=(False, "код 1167")), \
-             patch("backend.main._log_camera_pnp_snapshot"), \
-             patch.object(main, "CAMERA_USB_RESET_WAIT_SECONDS", 0):
-            result = await main._recover_camera()
-
-        self.assertEqual(result["status"], "ok")
-        self.assertFalse(result["usb_reset_succeeded"])
-        self.assertIn("код 1167", result["message"])
-        self.assertNotIn("подтверждён", result["message"])
-        camera.start.assert_called_once_with()
-
-    async def test_recovery_never_starts_a_second_worker_over_a_stuck_one(self):
-        camera = MagicMock()
-        camera.stop.return_value = False
-
-        with patch.object(main, "camera", camera), \
-             patch.object(main, "STATE", "camera_searching"), \
-             patch.object(main, "_services_stopping", False), \
-             patch.object(main, "_camera_recovery_lock", asyncio.Lock()), \
-             patch("backend.main.set_state", new_callable=AsyncMock), \
-             patch("backend.main._request_camera_usb_restart",
-                   return_value=(True, "USB reset")), \
-             patch.object(main, "CAMERA_USB_RESET_WAIT_SECONDS", 0):
-            result = await main._recover_camera()
-
-        self.assertEqual(result["status"], "error")
-        self.assertEqual(camera.stop.call_count, 2)
-        camera.start.assert_not_called()
-
-    def test_windows_usb_reset_uses_only_the_fixed_scheduled_task(self):
-        completed = SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
-        with patch.object(main.sys, "platform", "win32"), \
-             patch("backend.main.subprocess.run", return_value=completed) as run:
-            requested, _detail = main._request_camera_usb_restart()
-
-        self.assertTrue(requested)
-        command = run.call_args.args[0]
-        self.assertEqual(command, [
-            "schtasks.exe", "/Run", "/TN", "PhotoboothResetCanonR8",
-        ])
-        self.assertNotIn("pnputil", " ".join(command).lower())
-
-    def test_camera_pnp_snapshot_logs_one_compact_json_object(self):
-        completed = SimpleNamespace(
-            returncode=0,
-            stdout=(
-                '{"devices":[{"present":true,"status":"OK",'
-                '"instance_id":"USB\\\\VID_04A9&PID_330C\\\\R8"}]}'
-            ),
-            stderr="",
-        )
-        with patch.object(main.sys, "platform", "win32"), \
-             patch("backend.main.subprocess.run", return_value=completed) as run, \
-             self.assertLogs("backend.main", level="INFO") as logs:
-            snapshot = main._log_camera_pnp_snapshot("disconnect")
-
-        self.assertTrue(snapshot["devices"][0]["present"])
-        self.assertIn("Canon PnP [disconnect]", "\n".join(logs.output))
-        command = run.call_args.args[0]
-        self.assertIn("Get-PnpDevice", command[-1])
-        self.assertEqual(run.call_args.kwargs["timeout"], 8)
-
-    def test_camera_usb_reset_reports_scheduled_task_exit_code(self):
-        completed = SimpleNamespace(
-            returncode=0,
-            stdout=(
-                '{"state":"Ready","last_run_time":'
-                '"2026-08-12T10:47:21.0000000Z",'
-                '"last_task_result":1167}'
-            ),
-            stderr="",
-        )
-        with patch.object(main.sys, "platform", "win32"), \
-             patch("backend.main.subprocess.run", return_value=completed), \
-             self.assertLogs("backend.main", level="WARNING") as logs:
-            succeeded, detail = main._wait_camera_usb_restart_result()
-
-        self.assertFalse(succeeded)
-        self.assertIn("1167", detail)
-        self.assertIn("last_result=1167", "\n".join(logs.output))
-
-    def test_setup_task_is_immutable_and_scoped_to_canon_r8(self):
-        root = Path(__file__).resolve().parents[1]
-        setup = (root / "_setup_camera_reset.ps1").read_text(encoding="utf-8")
-
-        self.assertIn("VID_04A9&PID_330C", setup)
-        self.assertIn("-EncodedCommand", setup)
-        self.assertIn("(A;;GRGX;;;$kioskSid)", setup)
-        self.assertNotIn("-File $", setup)
 
 
 class CameraStatusTests(unittest.IsolatedAsyncioTestCase):

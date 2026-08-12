@@ -2,10 +2,6 @@
 :: Run as Administrator!
 echo Undoing kiosk setup...
 
-:: Remove the privileged camera recovery task
-schtasks /delete /tn "PhotoboothResetCanonR8" /f >nul 2>&1
-echo [OK] Camera recovery task removed
-
 :: Remove auto-login
 reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /f >nul 2>&1
 reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultUserName /f >nul 2>&1

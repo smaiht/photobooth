@@ -8,7 +8,7 @@ echo.
 set SHELL_PATH=C:\photobooth\python\pythonw.exe C:\photobooth\app.py
 
 :: 0. Ensure embedded Python
-echo [0/4] Setting up Python...
+echo [0/3] Setting up Python...
 call "%~dp0_ensure_python.bat"
 if not exist "C:\photobooth\python\pythonw.exe" (
     echo ERROR: Python setup failed.
@@ -19,7 +19,7 @@ echo [OK]
 echo.
 
 :: 1. Create kiosk user
-echo [1/4] Creating Photobooth user...
+echo [1/3] Creating Photobooth user...
 net user Photobooth /add /passwordreq:no >nul 2>&1
 net user Photobooth "" /active:yes /expires:never /passwordreq:no >nul 2>&1
 if errorlevel 1 (
@@ -35,24 +35,13 @@ if errorlevel 1 (
 )
 echo [OK]
 
-:: 2. Install the narrowly scoped elevated Canon R8 reset task
-echo [2/4] Installing Canon R8 recovery task...
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0_setup_camera_reset.ps1"
-if errorlevel 1 (
-    echo ERROR: Could not install the Canon R8 recovery task.
-    pause
-    exit /b 1
-)
-echo [OK]
-echo.
-
-:: 3. Set custom shell
-echo [3/4] Setting custom shell...
+:: 2. Set custom shell
+echo [2/3] Setting custom shell...
 powershell -ExecutionPolicy Bypass -File "%~dp0_set_shell.ps1" "%SHELL_PATH%"
 echo.
 
-:: 4. Auto-login
-echo [4/4] Setting auto-login...
+:: 3. Auto-login
+echo [3/3] Setting auto-login...
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 1 /f >nul
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultUserName /t REG_SZ /d Photobooth /f >nul
 reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /t REG_SZ /d "" /f >nul

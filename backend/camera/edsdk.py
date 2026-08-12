@@ -556,30 +556,15 @@ class Camera:
             self._camera = self._acquire_camera()
             try:
                 self._enable_limited_properties()
-                open_started = time.monotonic()
-                log.info("OpenSession attempt %d/5 started", attempt)
-                try:
-                    err = self._sdk.EdsOpenSession(self._camera)
-                except Exception:
-                    log.exception(
-                        "OpenSession attempt %d/5 raised after %.1fs",
-                        attempt,
-                        time.monotonic() - open_started,
-                    )
-                    raise
-                open_elapsed = time.monotonic() - open_started
+                err = self._sdk.EdsOpenSession(self._camera)
                 if err == EDS_ERR_OK:
                     self._session_open = True
-                    log.info(
-                        "Session opened on attempt %d/5 after %.1fs",
-                        attempt,
-                        open_elapsed,
-                    )
+                    log.info("Session opened")
                     return
                 last_error = err
                 log.warning(
-                    "OpenSession attempt %d/5 failed after %.1fs: 0x%08X %s",
-                    attempt, open_elapsed, err, edsdk_error_name(err),
+                    "OpenSession attempt %d/5 failed: 0x%08X %s",
+                    attempt, err, edsdk_error_name(err),
                 )
             finally:
                 if not self._session_open:

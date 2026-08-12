@@ -684,28 +684,6 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
         control_close.assert_awaited_once_with()
         cloud_close.assert_awaited_once_with()
 
-    async def test_unclean_camera_shutdown_requests_usb_reset_before_retry(self):
-        camera = MagicMock()
-        camera.stop.side_effect = [False, True]
-        with patch.object(main, "camera", camera), \
-             patch.object(main, "_service_tasks", set()), \
-             patch.object(main, "_background_uploads", set()), \
-             patch.object(main, "_services_stopping", False), \
-             patch.object(main.video_recorder, "abort"), \
-             patch("backend.main.yadisk_control.control_close", AsyncMock()), \
-             patch("backend.main.yadisk_cloud.yadisk_close", AsyncMock()), \
-             patch("backend.main._request_camera_usb_restart",
-                   return_value=(True, "USB reset")) as usb_reset, \
-             patch.object(main, "CAMERA_USB_RESET_WAIT_SECONDS", 0):
-            await main._shutdown_services()
-
-        self.assertEqual(camera.stop.call_args_list, [
-            call(),
-            call(10.0),
-        ])
-        usb_reset.assert_called_once_with()
-
-
 class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_and_invalid_persistent_state_fail_closed(self):
         invalid_payloads = (

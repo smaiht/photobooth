@@ -12,7 +12,6 @@ def _application_text_files() -> list[Path]:
         ROOT / "config_app.json",
         ROOT / "config_camera.json",
         ROOT / "_ensure_python.bat",
-        ROOT / "_setup_camera_reset.ps1",
         ROOT / "_set_shell.ps1",
         ROOT / "_setup_strips_printer.bat",
         ROOT / "_setup_windows.bat",
