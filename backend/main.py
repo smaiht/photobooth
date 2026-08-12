@@ -1336,11 +1336,79 @@ def _print_queue_clear_message(records: list[dict]) -> tuple[str, bool]:
     return "\n".join(lines), has_error
 
 
+def _clear_runtime_directory(path: Path) -> tuple[int, int]:
+    """Delete only the contents of one fixed application runtime directory."""
+    path.mkdir(parents=True, exist_ok=True)
+    file_count = 0
+    directory_count = 0
+    for _root, directories, files in os.walk(path, followlinks=False):
+        file_count += len(files)
+        directory_count += len(directories)
+    for child in path.iterdir():
+        if child.is_symlink() or not child.is_dir():
+            child.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(child)
+    return file_count, directory_count
+
+
 async def handle_disk_command(command: dict) -> dict:
     """Execute one validated Disk command and return its response payload."""
     cmd = command["command"]
     data = command.get("data")
     command_id = command["command_id"]
+
+    if cmd in ("clear_photos", "clear_print_jobs"):
+        if data is not None:
+            return {
+                "status": "error",
+                "message": "Команда очистки файлов не принимает аргументы",
+            }
+        from .printer import print_queue_busy
+        if _session_running:
+            return {
+                "status": "error",
+                "message": "Очистка не выполнена: сейчас идёт фотосессия",
+            }
+        if print_queue_busy():
+            return {
+                "status": "error",
+                "message": "Очистка не выполнена: внутренняя очередь печати не пуста",
+            }
+        if cmd == "clear_photos":
+            if _background_uploads:
+                return {
+                    "status": "error",
+                    "message": "Очистка photos не выполнена: готовятся файлы сессии",
+                }
+            pending_uploads = yadisk_cloud.pending_count()
+            if pending_uploads:
+                return {
+                    "status": "error",
+                    "message": (
+                        "Очистка photos не выполнена: незавершённых загрузок — "
+                        f"{pending_uploads}"
+                    ),
+                }
+            target = PHOTOS_DIR
+            label = "photos"
+        else:
+            target = PRINT_JOBS_DIR
+            label = "photos_print_jobs"
+        try:
+            files, directories = _clear_runtime_directory(target)
+        except OSError as exc:
+            return {
+                "status": "error",
+                "message": f"Папку {label} не удалось очистить: {exc}",
+            }
+        return {
+            "status": "ok",
+            "message": (
+                f"Папка {label} очищена: удалено файлов — {files}, "
+                f"папок — {directories}"
+            ),
+        }
 
     if cmd in ("print_queue", "clear_print_queue"):
         if data is not None:

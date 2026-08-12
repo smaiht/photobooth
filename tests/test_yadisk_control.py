@@ -488,6 +488,99 @@ class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
         clear.assert_not_called()
 
 
+class RuntimeDirectoryCleanupCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_clear_photos_removes_only_contents_when_idle(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            photos = Path(tmpdir) / "photos"
+            session = photos / "session-1"
+            session.mkdir(parents=True)
+            (session / "photo.jpg").write_bytes(b"photo")
+            (photos / "loose.txt").write_text("data", encoding="utf-8")
+
+            with patch.object(main, "PHOTOS_DIR", photos), \
+                 patch.object(main, "_session_running", False), \
+                 patch.object(main, "_background_uploads", set()), \
+                 patch("backend.printer.print_queue_busy", return_value=False), \
+                 patch("backend.main.yadisk_cloud.pending_count", return_value=0):
+                result = await main.handle_disk_command({
+                    "command_id": "a" * 32,
+                    "command": "clear_photos",
+                    "data": None,
+                })
+
+            self.assertEqual(result["status"], "ok")
+            self.assertTrue(photos.is_dir())
+            self.assertEqual(list(photos.iterdir()), [])
+            self.assertIn("удалено файлов — 2, папок — 1", result["message"])
+
+    async def test_clear_print_jobs_removes_only_contents_when_idle(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            print_jobs = Path(tmpdir) / "photos_print_jobs"
+            job = print_jobs / ("b" * 32)
+            job.mkdir(parents=True)
+            (job / "print_4x6.jpg").write_bytes(b"print")
+
+            with patch.object(main, "PRINT_JOBS_DIR", print_jobs), \
+                 patch.object(main, "_session_running", False), \
+                 patch("backend.printer.print_queue_busy", return_value=False):
+                result = await main.handle_disk_command({
+                    "command_id": "a" * 32,
+                    "command": "clear_print_jobs",
+                    "data": None,
+                })
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(list(print_jobs.iterdir()), [])
+            self.assertIn("photos_print_jobs очищена", result["message"])
+
+    async def test_cleanup_is_rejected_during_session_or_printing(self):
+        for running, printing, expected in (
+            (True, False, "идёт фотосессия"),
+            (False, True, "очередь печати не пуста"),
+        ):
+            with self.subTest(running=running, printing=printing), \
+                 patch.object(main, "_session_running", running), \
+                 patch("backend.printer.print_queue_busy", return_value=printing), \
+                 patch("backend.main._clear_runtime_directory") as clear:
+                result = await main.handle_disk_command({
+                    "command_id": "a" * 32,
+                    "command": "clear_print_jobs",
+                    "data": None,
+                })
+
+            self.assertEqual(result["status"], "error")
+            self.assertIn(expected, result["message"])
+            clear.assert_not_called()
+
+    async def test_clear_photos_preserves_pending_upload_sources(self):
+        with patch.object(main, "_session_running", False), \
+             patch.object(main, "_background_uploads", set()), \
+             patch("backend.printer.print_queue_busy", return_value=False), \
+             patch("backend.main.yadisk_cloud.pending_count", return_value=2), \
+             patch("backend.main._clear_runtime_directory") as clear:
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "clear_photos",
+                "data": None,
+            })
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("незавершённых загрузок — 2", result["message"])
+        clear.assert_not_called()
+
+    async def test_cleanup_commands_reject_arguments(self):
+        with patch("backend.main._clear_runtime_directory") as clear:
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "clear_photos",
+                "data": {"path": "../"},
+            })
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("не принимает аргументы", result["message"])
+        clear.assert_not_called()
+
+
 class EventCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_switches_event_and_persists_config(self):
         command = {

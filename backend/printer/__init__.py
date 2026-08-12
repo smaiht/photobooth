@@ -35,6 +35,11 @@ DEFAULT_CUSTOM_PRINT_SIZE = (3688, 2480)
 MAX_CUSTOM_PRINT_PIXELS = 100_000_000
 
 
+def print_queue_busy() -> bool:
+    """Return whether the application is waiting for or submitting a print."""
+    return _printing or bool(_print_queue)
+
+
 def _win32print():
     """Import pywin32 lazily so the booth can still run on development hosts."""
     try:
