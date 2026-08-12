@@ -2034,11 +2034,10 @@ async def handle_disk_command(command: dict) -> dict:
         if not log_path.is_file():
             return {"status": "error", "message": "photobooth.log не найден"}
         payload = await asyncio.to_thread(read_log_snapshot, log_path)
-        artifact_path = await yadisk_control.upload_log(command_id, payload)
         return {
             "status": "ok",
-            "message": "Лог загружен",
-            "artifact_path": artifact_path,
+            "message": "Лог готов",
+            "document": yadisk_control.response_document(payload),
         }
 
     if cmd == "get_config":
@@ -2049,12 +2048,10 @@ async def handle_disk_command(command: dict) -> dict:
                 "status": "error",
                 "message": f"Конфиги не отправлены: {exc}",
             }
-        artifact_path = await yadisk_control.upload_config_export(
-            command_id, payload)
         return {
             "status": "ok",
             "message": "Конфиги фотобудки готовы",
-            "artifact_path": artifact_path,
+            "document": yadisk_control.response_document(payload),
         }
 
     if cmd == "clear_logs":

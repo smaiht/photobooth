@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from backend import main
 from backend.log import LOG_BACKUP_COUNT, LOG_MAX_BYTES, read_log_snapshot
@@ -71,7 +71,7 @@ class LogSnapshotTests(unittest.TestCase):
 
 
 class LogCommandTests(unittest.IsolatedAsyncioTestCase):
-    async def test_send_logs_uploads_one_chronological_file(self):
+    async def test_send_logs_embeds_one_chronological_document_in_response(self):
         command_id = "a" * 32
         command = {
             "command_id": command_id,
@@ -79,9 +79,7 @@ class LogCommandTests(unittest.IsolatedAsyncioTestCase):
             "data": None,
         }
         with tempfile.TemporaryDirectory() as tmpdir, \
-             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
-             patch("backend.main.yadisk_control.upload_log", new_callable=AsyncMock,
-                   return_value=f"/control/logs/{command_id}.log") as upload:
+             patch.object(main, "ROOT_DIR", Path(tmpdir)):
             active = Path(tmpdir) / "photobooth.log"
             backup = Path(tmpdir) / "photobooth.log.1"
             backup.write_bytes(b"old\n")
@@ -90,7 +88,8 @@ class LogCommandTests(unittest.IsolatedAsyncioTestCase):
             result = await main.handle_disk_command(command)
 
         self.assertEqual(result["status"], "ok")
-        upload.assert_awaited_once_with(command_id, b"old\nnew\n")
+        self.assertEqual(result["document"], "old\nnew\n")
+        self.assertNotIn("artifact_path", result)
 
 
 if __name__ == "__main__":

@@ -74,24 +74,14 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         yadisk_control._pending_command_results.clear()
 
-    async def test_uploads_config_export_to_command_specific_path(self):
-        command_id = "a" * 32
-        with patch(
-            "backend.yadisk_control._connect",
-            AsyncMock(return_value=True),
-        ), patch.object(
-            yadisk_control,
-            "_root",
-            "/control",
-        ), patch(
-            "backend.yadisk_control._upload_bytes",
-            new_callable=AsyncMock,
-        ) as upload:
-            remote_path = await yadisk_control.upload_config_export(
-                command_id, b"configs")
-
-        self.assertEqual(remote_path, f"/control/configs/{command_id}.txt")
-        upload.assert_awaited_once_with(b"configs", remote_path)
+    async def test_encodes_text_document_without_a_second_disk_resource(self):
+        self.assertEqual(
+            yadisk_control.response_document("конфиги".encode()),
+            "конфиги",
+        )
+        with self.assertRaisesRegex(ValueError, "response document"):
+            yadisk_control.response_document(
+                b"x" * (yadisk_control.MAX_RESPONSE_DOCUMENT_SIZE + 1))
 
     async def test_writes_response_and_deletes_command_before_restart(self):
         command_id = "a" * 32
@@ -365,7 +355,7 @@ class ControlConnectionSettingsTests(unittest.IsolatedAsyncioTestCase):
                  api_session,
                  transfer_session,
              ]) as client_session, \
-             patch("backend.yadisk_control._ensure_directory", AsyncMock()):
+             patch("backend.yadisk_control._ensure_directory", AsyncMock()) as ensure:
             self.assertTrue(await yadisk_control._connect())
 
         headers = client_session.call_args_list[0].kwargs["headers"]
@@ -374,6 +364,10 @@ class ControlConnectionSettingsTests(unittest.IsolatedAsyncioTestCase):
             yadisk_control.YADISK_API_USER_AGENT,
         )
         self.assertEqual(headers["Authorization"], "OAuth secret")
+        self.assertEqual(
+            [call.args[0] for call in ensure.await_args_list],
+            ["/control", "/control/to_booth", "/control/to_vps"],
+        )
 
 
 class PrintArtifactDownloadTests(unittest.IsolatedAsyncioTestCase):
@@ -655,25 +649,21 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
             result["message"],
         )
 
-    async def test_get_config_uploads_one_text_export(self):
+    async def test_get_config_embeds_one_text_export_in_response(self):
         command = {
             "command_id": "a" * 32,
             "command": "get_config",
             "data": None,
         }
-        artifact_path = f"/control/configs/{'a' * 32}.txt"
         with patch(
             "backend.main._build_config_export",
             return_value=b"config export",
-        ), patch(
-            "backend.main.yadisk_control.upload_config_export",
-            AsyncMock(return_value=artifact_path),
-        ) as upload:
+        ):
             result = await main.handle_disk_command(command)
 
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["artifact_path"], artifact_path)
-        upload.assert_awaited_once_with("a" * 32, b"config export")
+        self.assertEqual(result["document"], "config export")
+        self.assertNotIn("artifact_path", result)
 
     async def test_backend_shutdown_closes_camera_and_http_sessions_once(self):
         camera = MagicMock()

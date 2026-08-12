@@ -26,10 +26,7 @@ YADISK_API_USER_AGENT = 'Yandex.Disk {"os":"windows"}'
 SCHEMA_VERSION = 3
 POLL_INTERVAL = 5
 PAGE_SIZE = 100
-# Normal snapshots are about 400 KB.  The larger ceiling allows one legacy
-# 1 MB segment to be delivered immediately after upgrading the rotation size.
-MAX_LOG_ARTIFACT_SIZE = 2 * 1024 * 1024
-MAX_CONFIG_EXPORT_SIZE = 512 * 1024
+MAX_RESPONSE_DOCUMENT_SIZE = 512 * 1024
 MAX_PRINT_ARTIFACT_SIZE = 20 * 1024 * 1024
 MAX_PRINT_INFO_SIZE = 512 * 1024
 MAX_PRINT_FOLDER_ARCHIVE_SIZE = 22 * 1024 * 1024
@@ -189,7 +186,7 @@ async def _connect() -> bool:
         for part in _root.strip("/").split("/"):
             current += "/" + part
             await _ensure_directory(current)
-        for suffix in ("to_booth", "to_vps", "logs", "configs"):
+        for suffix in ("to_booth", "to_vps"):
             await _ensure_directory(f"{_root}/{suffix}")
         return True
     except Exception as exc:
@@ -337,29 +334,12 @@ async def _upload_bytes(payload: bytes, remote_path: str) -> None:
         raise RuntimeError(f"uploaded control file did not verify: {remote_path}")
 
 
-async def upload_log(command_id: str, payload: bytes) -> str:
-    if (not COMMAND_ID_RE.fullmatch(command_id)
-            or not isinstance(payload, bytes)
-            or len(payload) > MAX_LOG_ARTIFACT_SIZE):
-        raise ValueError("invalid log upload")
-    if not await _connect():
-        raise RuntimeError("Yandex.Disk control is unavailable")
-    remote_path = f"{_root}/logs/{command_id}.log"
-    await _upload_bytes(payload, remote_path)
-    return remote_path
-
-
-async def upload_config_export(command_id: str, payload: bytes) -> str:
-    if (not COMMAND_ID_RE.fullmatch(command_id)
-            or not isinstance(payload, bytes)
-            or not payload
-            or len(payload) > MAX_CONFIG_EXPORT_SIZE):
-        raise ValueError("invalid config export upload")
-    if not await _connect():
-        raise RuntimeError("Yandex.Disk control is unavailable")
-    remote_path = f"{_root}/configs/{command_id}.txt"
-    await _upload_bytes(payload, remote_path)
-    return remote_path
+def response_document(payload: bytes) -> str:
+    """Encode one small text document directly into a command response."""
+    if (not isinstance(payload, bytes) or not payload
+            or len(payload) > MAX_RESPONSE_DOCUMENT_SIZE):
+        raise ValueError("invalid response document")
+    return payload.decode("utf-8", errors="replace")
 
 
 async def _prune_booth_notices(keep: int = MAX_BOOTH_NOTICES) -> None:
@@ -553,18 +533,29 @@ async def _delete_command(filename: str) -> bool:
 
 def _response(command: dict, result: dict) -> tuple[dict, Callable[[], Awaitable[None]] | None]:
     post_action = result.pop("_post_action", None)
+    status = result.get("status", "ok")
+    document = result.get("document")
+    if document is not None and (
+        status != "ok"
+        or command["command"] not in {"send_logs", "get_config"}
+        or not isinstance(document, str)
+        or not document
+        or len(document.encode("utf-8")) > MAX_RESPONSE_DOCUMENT_SIZE
+    ):
+        raise ValueError("invalid response document")
     response = {
         "schema_version": SCHEMA_VERSION,
         "message_type": "command_response",
         "command_id": command["command_id"],
         "command": command["command"],
-        "status": result.get("status", "ok"),
+        "status": status,
         "message": str(result.get("message", "Готово")),
-        "artifact_path": result.get("artifact_path"),
         "event_folder": result.get("event_folder"),
         "reply_target": command["reply_target"],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if document is not None:
+        response["document"] = document
     for field in ("start_locked", "unlock_sessions_remaining"):
         if field in result:
             response[field] = result[field]
