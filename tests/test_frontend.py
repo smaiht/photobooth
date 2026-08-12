@@ -53,7 +53,7 @@ class FrontendStaticContractTests(unittest.TestCase):
         self.assertLess(core_index, self.markup.scripts.index("app.js"))
 
     def test_frontend_directory_is_mounted_after_backend_routes(self):
-        mount = 'StaticFiles(directory=str(FRONTEND_DIR), html=True)'
+        mount = 'FrontendStaticFiles(directory=str(FRONTEND_DIR), html=True)'
         self.assertEqual(self.backend_source.count(mount), 1)
         mount_index = self.backend_source.index(mount)
         self.assertGreater(mount_index,

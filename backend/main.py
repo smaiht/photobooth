@@ -53,6 +53,16 @@ log = logging.getLogger(__name__)
 
 app = FastAPI()
 
+
+class FrontendStaticFiles(StaticFiles):
+    """Serve the frontend without letting WebView retain an old release."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 # --- State ---
 STATE = "idle"
 STATE_EXTRA: dict = {}
@@ -2050,6 +2060,6 @@ async def app_shutdown():
 # must get the first chance to match their own routes.
 app.mount(
     "/",
-    StaticFiles(directory=str(FRONTEND_DIR), html=True),
+    FrontendStaticFiles(directory=str(FRONTEND_DIR), html=True),
     name="frontend",
 )

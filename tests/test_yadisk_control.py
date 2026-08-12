@@ -1231,9 +1231,14 @@ class ConfigExportTests(unittest.TestCase):
 
 class FrontendCacheTests(unittest.IsolatedAsyncioTestCase):
     async def test_versioned_frontend_files_are_not_reused_after_update(self):
-        for endpoint in (main.index, main.style, main.script):
-            with self.subTest(endpoint=endpoint.__name__):
-                response = await endpoint()
+        frontend = next(
+            route.app for route in main.app.routes
+            if route.name == "frontend"
+        )
+        scope = {"method": "GET", "path": "/", "headers": []}
+        for filename in ("index.html", "style.css", "core.js", "app.js"):
+            with self.subTest(filename=filename):
+                response = await frontend.get_response(filename, scope)
                 self.assertEqual(response.headers["cache-control"], "no-store")
 
 
