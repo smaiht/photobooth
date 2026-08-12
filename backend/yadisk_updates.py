@@ -20,12 +20,12 @@ MAX_UPDATE_SIZE = 2 * 1024 * 1024 * 1024
 # Show sub-MiB progress; app.py throttles UI updates separately.
 DOWNLOAD_CHUNK_SIZE = 256 * 1024
 DOWNLOAD_TIMEOUT = 60
-DOWNLOAD_RETRY_DELAYS = (2, 4, 8, 16)
+DOWNLOAD_RETRY_DELAYS = (2, 3, 3, 3)
 # status.json is tiny and is fetched before the booth starts. Short requests
-# plus backoff survive normal Windows network warm-up without holding the booth
-# on the loading screen for many minutes when the network is genuinely down.
+# plus short retries survive normal Windows network warm-up without holding the
+# booth on the loading screen when the network is genuinely down.
 STATUS_REQUEST_TIMEOUT = 10
-STATUS_RETRY_DELAYS = (2, 4, 8, 16)
+STATUS_RETRY_DELAYS = (2, 3, 3, 3)
 
 ProgressCallback = Callable[[int, int, float, int, int], None]
 RetryCallback = Callable[[int, int, float, Exception], None]

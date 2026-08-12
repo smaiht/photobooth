@@ -487,6 +487,8 @@ def on_camera_error(error: str):
         async def show_disconnected():
             _camera_disconnected_event.set()
             await set_state("camera_searching")
+            await asyncio.to_thread(
+                _log_camera_pnp_snapshot, "disconnect")
 
         asyncio.run_coroutine_threadsafe(show_disconnected(), _event_loop)
 
@@ -1257,6 +1259,132 @@ def _request_camera_usb_restart() -> tuple[bool, str]:
     return True, "системный USB-reset Canon R8 запущен"
 
 
+def _run_camera_powershell_json(script: str, *, timeout: float) -> dict:
+    """Run one fixed read-only camera diagnostic and decode its JSON output."""
+    completed = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ],
+        check=False,
+        capture_output=True,
+        timeout=timeout,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(
+            f"PowerShell exited with code {completed.returncode}: {detail}")
+    raw = (completed.stdout or "").lstrip("\ufeff").strip()
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("PowerShell camera diagnostic did not return an object")
+    return payload
+
+
+def _log_camera_pnp_snapshot(label: str) -> dict | None:
+    """Log one compact Canon R8 PnP snapshot without changing device state."""
+    if sys.platform != "win32":
+        return None
+    script = r'''
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$pattern = 'USB\VID_04A9&PID_330C*'
+$all = @(Get-PnpDevice -ErrorAction Stop | Where-Object {
+    $_.InstanceId -like $pattern
+})
+$present = @{}
+Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object {
+    $_.InstanceId -like $pattern
+} | ForEach-Object {
+    $present[$_.InstanceId] = $true
+}
+$devices = @($all | ForEach-Object {
+    $problem = $null
+    if ($null -ne $_.Problem) {
+        $problem = [int]$_.Problem
+    }
+    [PSCustomObject]@{
+        present = [bool]$present.ContainsKey($_.InstanceId)
+        status = [string]$_.Status
+        class = [string]$_.Class
+        friendly_name = [string]$_.FriendlyName
+        instance_id = [string]$_.InstanceId
+        problem = $problem
+    }
+})
+[PSCustomObject]@{ devices = $devices } | ConvertTo-Json -Depth 3 -Compress
+'''
+    try:
+        snapshot = _run_camera_powershell_json(script, timeout=8)
+    except (OSError, subprocess.TimeoutExpired, RuntimeError, ValueError) as exc:
+        log.warning("Canon PnP [%s] failed: %s", label, exc)
+        return None
+    log.info(
+        "Canon PnP [%s]: %s",
+        label,
+        json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")),
+    )
+    return snapshot
+
+
+def _wait_camera_usb_restart_result() -> tuple[bool | None, str]:
+    """Wait briefly for the scheduled reset and report its real exit code."""
+    if sys.platform != "win32":
+        return None, "результат USB-reset доступен только на Windows"
+    script = rf'''
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$deadline = (Get-Date).AddSeconds(10)
+do {{
+    $task = Get-ScheduledTask -TaskName '{CAMERA_RESET_TASK_NAME}' -ErrorAction Stop
+    if ([string]$task.State -ne 'Running') {{
+        break
+    }}
+    Start-Sleep -Milliseconds 250
+}} while ((Get-Date) -lt $deadline)
+$task = Get-ScheduledTask -TaskName '{CAMERA_RESET_TASK_NAME}' -ErrorAction Stop
+$info = Get-ScheduledTaskInfo -TaskName '{CAMERA_RESET_TASK_NAME}' -ErrorAction Stop
+$lastRunTime = $null
+if ($info.LastRunTime.Year -gt 1900) {{
+    $lastRunTime = $info.LastRunTime.ToUniversalTime().ToString('o')
+}}
+[PSCustomObject]@{{
+    state = [string]$task.State
+    last_run_time = $lastRunTime
+    last_task_result = [long]$info.LastTaskResult
+}} | ConvertTo-Json -Compress
+'''
+    try:
+        result = _run_camera_powershell_json(script, timeout=15)
+        state = str(result.get("state") or "unknown")
+        code = int(result["last_task_result"])
+    except (OSError, subprocess.TimeoutExpired, RuntimeError, ValueError,
+            KeyError) as exc:
+        log.warning("Canon USB reset result could not be read: %s", exc)
+        return None, f"результат системной задачи не прочитан: {exc}"
+
+    detail = (
+        f"state={state} last_result={code} "
+        f"last_run={result.get('last_run_time') or 'unknown'}"
+    )
+    if state.casefold() == "running":
+        log.warning("Canon USB reset task is still running: %s", detail)
+        return None, "системная задача USB-reset не завершилась за 10 секунд"
+    if code != 0:
+        log.warning("Canon USB reset failed: %s", detail)
+        return False, f"системная задача завершилась с кодом {code}"
+    log.info("Canon USB reset completed: %s", detail)
+    return True, "системный USB-reset Canon R8 завершён"
+
+
 async def _recover_camera() -> dict:
     """Restart EDSDK and, when installed, the Canon R8 Windows device."""
     if not camera:
@@ -1277,14 +1405,22 @@ async def _recover_camera() -> dict:
         log.warning("Manual Canon R8 recovery requested")
         await set_state("camera_searching")
         _clear_live_view()
+        await asyncio.to_thread(
+            _log_camera_pnp_snapshot, "before-recovery")
 
         # Do not wait long before asking Windows to reset USB: EdsOpenSession
         # itself has occasionally remained inside Canon's DLL for minutes.
         stopped = await asyncio.to_thread(camera_device.stop, 3.0)
         usb_requested, usb_detail = await asyncio.to_thread(
             _request_camera_usb_restart)
+        usb_succeeded = None
         await asyncio.sleep(
             CAMERA_USB_RESET_WAIT_SECONDS if usb_requested else 0.5)
+        if usb_requested:
+            usb_succeeded, usb_detail = await asyncio.to_thread(
+                _wait_camera_usb_restart_result)
+        await asyncio.to_thread(
+            _log_camera_pnp_snapshot, "after-recovery")
 
         if not stopped:
             # A PnP restart normally releases a stuck native EDSDK call. Give
@@ -1292,26 +1428,55 @@ async def _recover_camera() -> dict:
             stopped = await asyncio.to_thread(camera_device.stop, 10.0)
         if not stopped:
             log.error("Canon R8 recovery failed: EDSDK worker is still stuck")
+            if usb_succeeded is True:
+                failure_message = (
+                    "EDSDK не смог остановиться даже после подтверждённого "
+                    "USB-reset. Переключите камеру OFF/ON и нажмите кнопку ещё раз."
+                )
+            elif usb_succeeded is False:
+                failure_message = (
+                    "EDSDK не смог остановиться; USB-reset завершился ошибкой: "
+                    f"{usb_detail}. Переключите камеру OFF/ON."
+                )
+            elif usb_requested:
+                failure_message = (
+                    "EDSDK не смог остановиться; результат USB-reset не подтверждён: "
+                    f"{usb_detail}. Переключите камеру OFF/ON."
+                )
+            else:
+                failure_message = (
+                    "EDSDK не смог остановиться, а USB-reset недоступен. "
+                    "Переключите камеру OFF/ON."
+                )
             return {
                 "status": "error",
-                "message": (
-                    "EDSDK не смог остановиться даже после USB-reset. "
-                    "Переключите камеру OFF/ON и нажмите кнопку ещё раз."
-                ),
+                "message": failure_message,
                 "usb_reset": usb_requested,
+                "usb_reset_succeeded": usb_succeeded,
             }
         if _services_stopping or camera is not camera_device:
             return {
                 "status": "error",
                 "message": "Приложение уже останавливается",
                 "usb_reset": usb_requested,
+                "usb_reset_succeeded": usb_succeeded,
             }
 
         camera_device.start()
-        if usb_requested:
+        if usb_succeeded is True:
             message = (
-                "Команда USB-reset отправлена, EDSDK перезапущен; "
+                "USB-reset подтверждён, EDSDK перезапущен; "
                 "поиск Canon R8 идёт автоматически"
+            )
+        elif usb_succeeded is False:
+            message = (
+                "EDSDK перезапущен; USB-reset завершился ошибкой: "
+                f"{usb_detail}. Поиск камеры продолжается"
+            )
+        elif usb_requested:
+            message = (
+                "EDSDK перезапущен; результат USB-reset не подтверждён: "
+                f"{usb_detail}. Поиск камеры продолжается"
             )
         else:
             message = f"EDSDK перезапущен; поиск камеры идёт. USB-reset не выполнен: {usb_detail}"
@@ -1320,6 +1485,7 @@ async def _recover_camera() -> dict:
             "status": "ok",
             "message": message,
             "usb_reset": usb_requested,
+            "usb_reset_succeeded": usb_succeeded,
         }
 
 
@@ -1943,10 +2109,17 @@ async def _shutdown_services() -> None:
         if not camera_stopped:
             log.warning(
                 "Camera shutdown was incomplete; requesting Canon R8 USB reset")
+            await asyncio.to_thread(
+                _log_camera_pnp_snapshot, "shutdown-before-reset")
             usb_requested, usb_detail = await asyncio.to_thread(
                 _request_camera_usb_restart)
             await asyncio.sleep(
                 CAMERA_USB_RESET_WAIT_SECONDS if usb_requested else 0.5)
+            if usb_requested:
+                _, usb_detail = await asyncio.to_thread(
+                    _wait_camera_usb_restart_result)
+            await asyncio.to_thread(
+                _log_camera_pnp_snapshot, "shutdown-after-reset")
             camera_stopped = await asyncio.to_thread(camera.stop, 10.0)
             if not usb_requested:
                 log.warning("Camera shutdown USB reset unavailable: %s", usb_detail)

@@ -211,7 +211,7 @@ class DiskUpdateStatusTests(unittest.TestCase):
         self.assertEqual(request_link.call_count, 5)
         self.assertEqual(
             [call.args[0] for call in sleep.call_args_list],
-            [2.0, 4.0, 8.0, 16.0],
+            [2.0, 3.0, 3.0, 3.0],
         )
 
     def test_loading_screen_reports_the_next_status_attempt(self):
@@ -423,7 +423,7 @@ class DiskUpdateDownloadTests(unittest.TestCase):
         sleep.assert_not_called()
         error.close()
 
-    def test_transient_connection_uses_five_attempts_and_exponential_backoff(self):
+    def test_transient_connection_uses_five_attempts_with_short_delays(self):
         status = {
             "path": "/photobooth_system/updates/artifacts/test-full.zip",
             "size": 10,
@@ -441,7 +441,7 @@ class DiskUpdateDownloadTests(unittest.TestCase):
         self.assertEqual(request_link.call_count, 5)
         self.assertEqual(
             [call.args[0] for call in sleep.call_args_list],
-            [2.0, 4.0, 8.0, 16.0],
+            [2.0, 3.0, 3.0, 3.0],
         )
 
     def test_formats_download_progress_for_loading_screen(self):
