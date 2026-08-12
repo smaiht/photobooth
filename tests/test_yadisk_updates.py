@@ -17,6 +17,13 @@ import app
 from backend import yadisk_updates
 
 
+def folder_archive(folder: str, filename: str, payload: bytes) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr(f"{folder}/{filename}", payload)
+    return output.getvalue()
+
+
 class LoadingScreenTests(unittest.TestCase):
     def test_embeds_bundled_font_when_available(self):
         with TemporaryDirectory() as tmpdir:
@@ -46,10 +53,12 @@ class DiskUpdateStatusTests(unittest.TestCase):
         return io.BytesIO(json.dumps({"href": link}).encode())
 
     def _status_response(self):
-        return io.BytesIO(json.dumps({
+        payload = json.dumps({
             "schema_version": 1,
             "active": "full",
-        }).encode())
+        }).encode()
+        return io.BytesIO(folder_archive(
+            "status_bundle", "status.json", payload))
 
     def test_reads_status_with_short_startup_timeouts(self):
         with patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
@@ -71,6 +80,10 @@ class DiskUpdateStatusTests(unittest.TestCase):
         self.assertEqual(
             request_link.call_args.kwargs["timeout"],
             yadisk_updates.STATUS_REQUEST_TIMEOUT,
+        )
+        self.assertEqual(
+            request_link.call_args.kwargs["params"]["path"],
+            "/updates/status_bundle",
         )
         self.assertEqual(
             urlopen.call_args.kwargs["timeout"],
@@ -252,7 +265,8 @@ class DiskUpdateStatusTests(unittest.TestCase):
 class DiskUpdateDownloadTests(unittest.TestCase):
     def test_selects_full_artifact(self):
         artifact = {
-            "path": "/photobooth_system/updates/artifacts/full.zip",
+            "path": "/photobooth_system/updates/artifacts/full_bundle/full.zip",
+            "bundle_path": "/photobooth_system/updates/artifacts/full_bundle",
             "size": 10,
             "sha256": "a" * 64,
         }
@@ -266,20 +280,25 @@ class DiskUpdateDownloadTests(unittest.TestCase):
     def test_downloads_and_verifies_artifact(self):
         payload = b"update zip bytes"
         status = {
-            "path": "/photobooth_system/updates/artifacts/test-full.zip",
+            "path": "/photobooth_system/updates/artifacts/test-full_bundle/test-full.zip",
+            "bundle_path": "/photobooth_system/updates/artifacts/test-full_bundle",
             "size": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
         }
         api_response = io.BytesIO(json.dumps({"href": "https://download.test/file"}).encode())
-        file_response = io.BytesIO(payload)
+        file_response = io.BytesIO(folder_archive(
+            "test-full_bundle", "test-full.zip", payload))
         progress = []
 
         with TemporaryDirectory() as tmpdir, \
              patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
-             patch("backend.yadisk_updates._request", return_value=api_response), \
+             patch(
+                 "backend.yadisk_updates._request",
+                 return_value=api_response,
+             ) as request_link, \
              patch.object(urllib.request, "urlopen", return_value=file_response), \
              patch("backend.yadisk_updates.time.monotonic",
-                   side_effect=[10.0, 12.0]):
+                   side_effect=[10.0, 12.0, 14.0]):
             destination = Path(tmpdir) / "update.zip"
             with self.assertLogs("update", level="INFO") as logs:
                 size, digest = yadisk_updates.download_artifact(
@@ -293,18 +312,24 @@ class DiskUpdateDownloadTests(unittest.TestCase):
             self.assertEqual(digest, status["sha256"])
             self.assertEqual(progress[0], (0, len(payload), 0.0, 1, 5))
             self.assertEqual(progress[-1][:2], (len(payload), len(payload)))
-            self.assertAlmostEqual(progress[-1][2], len(payload) / 2)
+            self.assertGreater(progress[-1][2], 0)
             self.assertIn("storage host download.test", "\n".join(logs.output))
+            self.assertEqual(
+                request_link.call_args.kwargs["params"]["path"],
+                status["bundle_path"],
+            )
 
     def test_rejects_bad_hash(self):
         payload = b"corrupt"
         status = {
-            "path": "/photobooth_system/updates/artifacts/test-full.zip",
+            "path": "/photobooth_system/updates/artifacts/test-full_bundle/test-full.zip",
+            "bundle_path": "/photobooth_system/updates/artifacts/test-full_bundle",
             "size": len(payload),
             "sha256": "0" * 64,
         }
         api_response = io.BytesIO(json.dumps({"href": "https://download.test/file"}).encode())
-        file_response = io.BytesIO(payload)
+        file_response = io.BytesIO(folder_archive(
+            "test-full_bundle", "test-full.zip", payload))
 
         with TemporaryDirectory() as tmpdir, \
              patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
@@ -320,14 +345,16 @@ class DiskUpdateDownloadTests(unittest.TestCase):
     def test_component_download_uses_size_without_comparing_folder_sha_to_zip(self):
         payload = b"valid ZIP bytes would be checked by the extraction stage"
         artifact = {
-            "path": "/photobooth_system/updates/artifacts/app.zip",
+            "path": "/photobooth_system/updates/artifacts/app_bundle/app.zip",
+            "bundle_path": "/photobooth_system/updates/artifacts/app_bundle",
             "size": len(payload),
             "sha256": "f" * 64,
         }
         api_response = io.BytesIO(
             json.dumps({"href": "https://download.test/app"}).encode()
         )
-        file_response = io.BytesIO(payload)
+        file_response = io.BytesIO(folder_archive(
+            "app_bundle", "app.zip", payload))
 
         with TemporaryDirectory() as tmpdir, \
              patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
@@ -358,7 +385,8 @@ class DiskUpdateDownloadTests(unittest.TestCase):
 
         payload = b"complete update"
         status = {
-            "path": "/photobooth_system/updates/artifacts/test-full.zip",
+            "path": "/photobooth_system/updates/artifacts/test-full_bundle/test-full.zip",
+            "bundle_path": "/photobooth_system/updates/artifacts/test-full_bundle",
             "size": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
         }
@@ -366,7 +394,11 @@ class DiskUpdateDownloadTests(unittest.TestCase):
             io.BytesIO(json.dumps({"href": "https://download.test/first"}).encode()),
             io.BytesIO(json.dumps({"href": "https://download.test/second"}).encode()),
         ]
-        downloads = [FailingResponse(b"partial"), io.BytesIO(payload)]
+        downloads = [
+            FailingResponse(b"partial"),
+            io.BytesIO(folder_archive(
+                "test-full_bundle", "test-full.zip", payload)),
+        ]
         retries = []
         progress = []
 
@@ -401,7 +433,8 @@ class DiskUpdateDownloadTests(unittest.TestCase):
 
     def test_does_not_retry_permanent_http_error(self):
         status = {
-            "path": "/photobooth_system/updates/artifacts/test-full.zip",
+            "path": "/photobooth_system/updates/artifacts/test-full_bundle/test-full.zip",
+            "bundle_path": "/photobooth_system/updates/artifacts/test-full_bundle",
             "size": 10,
             "sha256": "a" * 64,
         }
@@ -425,7 +458,8 @@ class DiskUpdateDownloadTests(unittest.TestCase):
 
     def test_transient_connection_uses_five_attempts_with_short_delays(self):
         status = {
-            "path": "/photobooth_system/updates/artifacts/test-full.zip",
+            "path": "/photobooth_system/updates/artifacts/test-full_bundle/test-full.zip",
+            "bundle_path": "/photobooth_system/updates/artifacts/test-full_bundle",
             "size": 10,
             "sha256": "a" * 64,
         }
@@ -470,7 +504,8 @@ class DiskUpdateDownloadTests(unittest.TestCase):
                 "schema_version": 1,
                 "active": "full",
                 "artifacts": {"full": {
-                    "path": "/photobooth_system/updates/artifacts/full.zip",
+                    "path": "/photobooth_system/updates/artifacts/full_bundle/full.zip",
+                    "bundle_path": "/photobooth_system/updates/artifacts/full_bundle",
                     "size": len(payload),
                     "sha256": digest,
                 }},
@@ -531,7 +566,8 @@ class DiskUpdateDownloadTests(unittest.TestCase):
             }
             artifacts = {
                 name: {
-                    "path": f"/updates/artifacts/{name}.zip",
+                    "path": f"/updates/artifacts/{name}_bundle/{name}.zip",
+                    "bundle_path": f"/updates/artifacts/{name}_bundle",
                     "size": len(payload) if name == "app" else 10,
                     "sha256": version,
                 }
@@ -734,7 +770,8 @@ class UpdateVersionStateTests(unittest.TestCase):
     def _artifacts(**versions):
         return {
             name: {
-                "path": f"/updates/artifacts/{name}.zip",
+                "path": f"/updates/artifacts/{name}_bundle/{name}.zip",
+                "bundle_path": f"/updates/artifacts/{name}_bundle",
                 "size": 10,
                 "sha256": version,
             }

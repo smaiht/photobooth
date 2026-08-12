@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import http.client
+import io
 import json
 import logging
 import os
@@ -12,11 +13,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 API = "https://cloud-api.yandex.net/v1/disk"
 MAX_UPDATE_SIZE = 2 * 1024 * 1024 * 1024
+MAX_FOLDER_ARCHIVE_OVERHEAD = 64 * 1024 * 1024
+MAX_STATUS_ARCHIVE_SIZE = 2 * 1024 * 1024
+MAX_STATUS_SIZE = 1024 * 1024
 # Show sub-MiB progress; app.py throttles UI updates separately.
 DOWNLOAD_CHUNK_SIZE = 256 * 1024
 DOWNLOAD_TIMEOUT = 60
@@ -41,7 +46,7 @@ class StatusNotFound(FileNotFoundError):
 
 
 class StatusStorageLinkError(ConnectionError):
-    """A newly issued temporary storage link could not serve status.json."""
+    """A temporary folder download could not serve status.json."""
 
 
 def normalize_folder(folder: str) -> str:
@@ -73,7 +78,7 @@ def _read_status_once(root: str, token: str) -> dict:
     # less reliable than resolving the path again through the API.
     try:
         link = _download_link(
-            f"{root}/status.json",
+            f"{root}/status_bundle",
             token,
             timeout=STATUS_REQUEST_TIMEOUT,
         )
@@ -88,7 +93,7 @@ def _read_status_once(root: str, token: str) -> dict:
             request,
             timeout=STATUS_REQUEST_TIMEOUT,
         ) as response:
-            status = json.loads(response.read())
+            payload = response.read(MAX_STATUS_ARCHIVE_SIZE + 1)
     except urllib.error.HTTPError as exc:
         # A 403/404 from cloud-api means a permanent token/path problem, but
         # the same response from the freshly issued temporary storage URL can
@@ -98,9 +103,58 @@ def _read_status_once(root: str, token: str) -> dict:
                 f"temporary status link returned HTTP {exc.code}"
             ) from exc
         raise
+    if len(payload) > MAX_STATUS_ARCHIVE_SIZE:
+        raise StatusStorageLinkError("status folder archive is too large")
+    try:
+        status_bytes = _extract_folder_member_bytes(
+            payload,
+            folder_name="status_bundle",
+            filename="status.json",
+            max_size=MAX_STATUS_SIZE,
+        )
+    except (ValueError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise StatusStorageLinkError(
+            f"invalid status folder archive: {exc}") from exc
+    status = json.loads(status_bytes)
     if not isinstance(status, dict):
         raise ValueError("status.json root must be an object")
     return status
+
+
+def _safe_folder_archive_members(
+    archive: zipfile.ZipFile,
+) -> list[zipfile.ZipInfo]:
+    files = []
+    for member in archive.infolist():
+        name = member.filename
+        if "\\" in name or name.startswith("/"):
+            raise ValueError("unsafe folder archive path")
+        parts = name.rstrip("/").split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise ValueError("unsafe folder archive path")
+        if member.is_dir():
+            continue
+        if len(parts) != 2:
+            raise ValueError("unexpected folder archive layout")
+        files.append(member)
+    return files
+
+
+def _extract_folder_member_bytes(
+    payload: bytes,
+    *,
+    folder_name: str,
+    filename: str,
+    max_size: int,
+) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        files = _safe_folder_archive_members(archive)
+        expected = f"{folder_name}/{filename}"
+        if len(files) != 1 or files[0].filename != expected:
+            raise ValueError("folder archive does not contain the expected file")
+        if files[0].file_size > max_size:
+            raise ValueError("folder archive member is too large")
+        return archive.read(files[0])
 
 
 def read_status(
@@ -205,11 +259,12 @@ def _download_artifact_once(
     verify_sha256: bool,
 ) -> tuple[int, str]:
     path = artifact["path"]
+    bundle_path = artifact["bundle_path"]
     size = artifact["size"]
     expected_sha = artifact["sha256"]
     if progress:
         progress(0, size, 0.0, attempt, attempts)
-    link = _download_link(path, token)
+    link = _download_link(bundle_path, token)
     storage_host = urllib.parse.urlsplit(link).hostname or "unknown"
     log.info(
         "Disk update: storage host %s (attempt %d/%d)",
@@ -217,38 +272,82 @@ def _download_artifact_once(
         attempt,
         attempts,
     )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    folder_archive = destination.with_name(destination.name + ".folder.zip")
+    folder_archive.unlink(missing_ok=True)
     request = urllib.request.Request(
         link, headers={"User-Agent": "photobooth-update/1"})
-    digest = hashlib.sha256()
-    total = 0
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    archive_total = 0
+    archive_limit = min(
+        size + MAX_FOLDER_ARCHIVE_OVERHEAD,
+        MAX_UPDATE_SIZE + MAX_FOLDER_ARCHIVE_OVERHEAD,
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
+            with folder_archive.open("wb") as output:
+                while True:
+                    chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    archive_total += len(chunk)
+                    if archive_total > archive_limit:
+                        raise ArtifactIntegrityError(
+                            "update folder archive exceeds maximum size")
+                    output.write(chunk)
+                    if progress:
+                        elapsed = max(time.monotonic() - started, 0.001)
+                        progress(
+                            min(archive_total, size),
+                            size,
+                            archive_total / elapsed,
+                            attempt,
+                            attempts,
+                        )
 
-    with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
-        started = time.monotonic()
-        with destination.open("wb") as output:
-            while True:
-                chunk = response.read(DOWNLOAD_CHUNK_SIZE)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > MAX_UPDATE_SIZE:
+        bundle_name = bundle_path.rsplit("/", 1)[-1]
+        artifact_name = path.rsplit("/", 1)[-1]
+        expected_member = f"{bundle_name}/{artifact_name}"
+        digest = hashlib.sha256()
+        total = 0
+        try:
+            with zipfile.ZipFile(folder_archive) as archive:
+                files = _safe_folder_archive_members(archive)
+                if len(files) != 1 or files[0].filename != expected_member:
                     raise ArtifactIntegrityError(
-                        "update artifact exceeds maximum size")
-                if total > size:
+                        "update folder archive does not contain the expected file")
+                member = files[0]
+                if member.file_size != size:
                     raise ArtifactIntegrityError(
-                        "update artifact exceeds declared size")
-                digest.update(chunk)
-                output.write(chunk)
-                if progress:
-                    elapsed = max(time.monotonic() - started, 0.001)
-                    progress(total, size, total / elapsed, attempt, attempts)
+                        "update artifact has the wrong declared size")
+                with archive.open(member) as source, destination.open("wb") as output:
+                    while True:
+                        chunk = source.read(DOWNLOAD_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > size:
+                            raise ArtifactIntegrityError(
+                                "update artifact exceeds declared size")
+                        digest.update(chunk)
+                        output.write(chunk)
+        except (zipfile.BadZipFile, RuntimeError, ValueError) as exc:
+            if isinstance(exc, ArtifactIntegrityError):
+                raise
+            raise ArtifactIntegrityError(
+                f"invalid update folder archive: {exc}") from exc
 
-    actual_sha = digest.hexdigest()
-    if total != size or (verify_sha256 and actual_sha != expected_sha):
-        raise ArtifactIntegrityError(
-            f"update checksum mismatch: size {total}/{size}, "
-            f"sha {actual_sha}/{expected_sha}")
-    return total, actual_sha
+        actual_sha = digest.hexdigest()
+        if total != size or (verify_sha256 and actual_sha != expected_sha):
+            raise ArtifactIntegrityError(
+                f"update checksum mismatch: size {total}/{size}, "
+                f"sha {actual_sha}/{expected_sha}")
+        if progress:
+            elapsed = max(time.monotonic() - started, 0.001)
+            progress(total, size, total / elapsed, attempt, attempts)
+        return total, actual_sha
+    finally:
+        folder_archive.unlink(missing_ok=True)
 
 
 def download_artifact(
@@ -270,11 +369,17 @@ def download_artifact(
     if not token:
         raise RuntimeError("YADISK_TOKEN is not set")
     path = artifact.get("path")
+    bundle_path = artifact.get("bundle_path")
     size = artifact.get("size")
     expected_sha = artifact.get("sha256")
     if (not isinstance(path, str) or not path.startswith("/")
             or ".." in path.split("/") or not path.endswith(".zip")):
         raise ValueError("invalid update artifact path")
+    if (not isinstance(bundle_path, str) or not bundle_path.startswith("/")
+            or ".." in bundle_path.split("/")
+            or bundle_path.endswith("/")
+            or path.rsplit("/", 1)[0] != bundle_path):
+        raise ValueError("invalid update artifact bundle path")
     if not isinstance(size, int) or size < 1 or size > MAX_UPDATE_SIZE:
         raise ValueError("invalid update artifact size")
     if not isinstance(expected_sha, str) or len(expected_sha) != 64:

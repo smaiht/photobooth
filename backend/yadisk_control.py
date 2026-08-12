@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import os
 import re
 import uuid
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -29,6 +31,11 @@ PAGE_SIZE = 100
 MAX_LOG_ARTIFACT_SIZE = 2 * 1024 * 1024
 MAX_CONFIG_EXPORT_SIZE = 512 * 1024
 MAX_PRINT_ARTIFACT_SIZE = 20 * 1024 * 1024
+MAX_PRINT_INFO_SIZE = 512 * 1024
+MAX_PRINT_FOLDER_ARCHIVE_SIZE = 22 * 1024 * 1024
+MAX_COMMAND_FILE_SIZE = 1024 * 1024
+MAX_COMMAND_ARCHIVE_SIZE = 32 * 1024 * 1024
+MAX_COMMAND_BATCH_SIZE = 64 * 1024 * 1024
 COMMAND_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 # An administrator notice is not a reply to a command, so it carries its own
 # name pattern and a hard cap on how many may wait in to_vps.
@@ -37,9 +44,9 @@ MAX_BOOTH_NOTICES = 20
 BOOTH_NOTICE_KIND_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 BOOTH_NOTICE_NAME_RE = re.compile(
     r"^notice_[0-9]{8}T[0-9]{6}Z_[a-f0-9]{32}\.json$")
-PRINT_ARTIFACT_NAME_RE = re.compile(
-    r"^[0-9]{1,20}_[0-9]{8}T[0-9]{6}Z_[a-f0-9]{32}"
-    r"\.[a-z0-9]{1,10}$")
+PRINT_JOB_BASENAME_RE = re.compile(
+    r"^[0-9]{1,20}_[0-9]{8}T[0-9]{6}Z_[a-f0-9]{32}$")
+PRINT_ARTIFACT_SUFFIX_RE = re.compile(r"^\.[a-z0-9]{1,10}$")
 REPLY_PROVIDERS = frozenset({"telegram", "vk"})
 
 _session: aiohttp.ClientSession | None = None
@@ -201,7 +208,10 @@ async def _list_commands() -> list[dict]:
             "limit": PAGE_SIZE,
             "offset": offset,
             "sort": "name",
-            "fields": "_embedded.total,_embedded.items.name,_embedded.items.path,_embedded.items.type",
+            "fields": (
+                "_embedded.total,_embedded.items.name,_embedded.items.path,"
+                "_embedded.items.type,_embedded.items.size"
+            ),
         }
         async with _session.get(f"{API}/resources", params=params) as response:
             if response.status != 200:
@@ -225,10 +235,75 @@ async def _download_bytes(remote_path: str, max_size: int = 1024 * 1024) -> byte
     async with _transfer_session.get(href) as response:
         if response.status != 200:
             raise RuntimeError(f"download control file: {response.status} {await response.text()}")
-        data = await response.read()
-    if len(data) > max_size:
-        raise ValueError("control file is too large")
-    return data
+        content_length = response.content_length
+        if content_length is not None and content_length > max_size:
+            raise ValueError("control file is too large")
+        chunks = bytearray()
+        async for chunk in response.content.iter_chunked(256 * 1024):
+            chunks.extend(chunk)
+            if len(chunks) > max_size:
+                raise ValueError("control file is too large")
+    return bytes(chunks)
+
+
+def _extract_command_archive(
+    payload: bytes,
+    items: list[dict],
+) -> tuple[dict[str, bytes], set[str]]:
+    """Return the listed command bodies from a Yandex folder ZIP.
+
+    Yandex wraps a downloaded folder in one top-level directory named after
+    the folder.  Only files observed by the preceding directory listing are
+    accepted, so a command created during the download waits for the next
+    poll.  Oversized commands are reported separately and can be deleted
+    without blocking valid commands behind them.
+    """
+    expected = {str(item.get("name", "")) for item in items}
+    bodies: dict[str, bytes] = {}
+    invalid: set[str] = set()
+    total_size = 0
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            for member in archive.infolist():
+                name = member.filename
+                if "\\" in name or name.startswith("/"):
+                    raise ValueError("unsafe command folder archive path")
+                parts = name.rstrip("/").split("/")
+                if any(part in ("", ".", "..") for part in parts):
+                    raise ValueError("unsafe command folder archive path")
+                if member.is_dir():
+                    continue
+                if len(parts) != 2 or parts[0] != "to_booth":
+                    # Unrelated files or manually-created subfolders are not
+                    # commands and must not be able to stall the queue.
+                    continue
+                filename = parts[1]
+                if filename not in expected:
+                    # The file appeared after the listing and belongs to the
+                    # next batch.  It is intentionally left untouched.
+                    continue
+                if filename in bodies or filename in invalid:
+                    raise ValueError(f"duplicate command in folder archive: {filename}")
+                if member.file_size > MAX_COMMAND_FILE_SIZE:
+                    invalid.add(filename)
+                    continue
+                total_size += member.file_size
+                if total_size > MAX_COMMAND_BATCH_SIZE:
+                    raise ValueError("command folder archive expands beyond the limit")
+                bodies[filename] = archive.read(member)
+    except (zipfile.BadZipFile, RuntimeError) as exc:
+        raise ValueError(f"invalid command folder archive: {exc}") from exc
+    return bodies, invalid
+
+
+async def _download_command_batch(
+    items: list[dict],
+) -> tuple[dict[str, bytes], set[str]]:
+    archive = await _download_bytes(
+        f"{_root}/to_booth",
+        MAX_COMMAND_ARCHIVE_SIZE,
+    )
+    return _extract_command_archive(archive, items)
 
 
 async def _resource_matches(path: str, payload: bytes) -> bool:
@@ -369,7 +444,7 @@ async def publish_booth_notice(kind: str, title: str, text: str) -> str:
 def _validate_print_artifact_path(
     remote_path: str,
     event_folder: str,
-) -> str:
+) -> tuple[str, str, str]:
     event_name = str(event_folder or "").strip().strip("/")
     if (not event_name or event_name in (".", "..")
             or "/" in event_name or "\\" in event_name
@@ -377,12 +452,55 @@ def _validate_print_artifact_path(
             or len(event_name) > 160):
         raise ValueError("invalid print artifact event")
     prefix = f"/{event_name}_by_sessions/0000_print_jobs/"
-    if (not isinstance(remote_path, str)
-            or not remote_path.startswith(prefix)
-            or "/" in remote_path[len(prefix):]
-            or not PRINT_ARTIFACT_NAME_RE.fullmatch(remote_path[len(prefix):])):
+    if not isinstance(remote_path, str) or not remote_path.startswith(prefix):
         raise ValueError("invalid print artifact path")
-    return remote_path
+    relative = remote_path[len(prefix):]
+    parts = relative.split("/")
+    if len(parts) != 2:
+        raise ValueError("invalid print artifact path")
+    folder_name, filename = parts
+    if (not PRINT_JOB_BASENAME_RE.fullmatch(folder_name)
+            or not filename.startswith(folder_name)
+            or not PRINT_ARTIFACT_SUFFIX_RE.fullmatch(
+                filename[len(folder_name):])
+            or filename == f"{folder_name}.txt"):
+        raise ValueError("invalid print artifact path")
+    return remote_path, f"{prefix}{folder_name}", filename
+
+
+def _extract_print_artifact_archive(
+    payload: bytes,
+    folder_name: str,
+    filename: str,
+) -> bytes:
+    expected_image = f"{folder_name}/{filename}"
+    expected_info = f"{folder_name}/{folder_name}.txt"
+    files: dict[str, zipfile.ZipInfo] = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            for member in archive.infolist():
+                name = member.filename
+                if "\\" in name or name.startswith("/"):
+                    raise ValueError("unsafe print folder archive path")
+                parts = name.rstrip("/").split("/")
+                if any(part in ("", ".", "..") for part in parts):
+                    raise ValueError("unsafe print folder archive path")
+                if member.is_dir():
+                    continue
+                if len(parts) != 2 or parts[0] != folder_name:
+                    raise ValueError("unexpected print folder archive layout")
+                if name in files:
+                    raise ValueError("duplicate print folder archive member")
+                files[name] = member
+            if set(files) != {expected_image, expected_info}:
+                raise ValueError("print folder archive is incomplete")
+            if files[expected_image].file_size > MAX_PRINT_ARTIFACT_SIZE:
+                raise ValueError("print artifact is too large")
+            if files[expected_info].file_size > MAX_PRINT_INFO_SIZE:
+                raise ValueError("print metadata is too large")
+            return archive.read(files[expected_image])
+    except (zipfile.BadZipFile, RuntimeError) as exc:
+        raise ValueError(f"invalid print folder archive: {exc}") from exc
 
 
 async def download_print_artifact(
@@ -391,10 +509,14 @@ async def download_print_artifact(
 ) -> bytes:
     if not await _connect():
         raise RuntimeError("Yandex.Disk control is unavailable")
-    return await _download_bytes(
-        _validate_print_artifact_path(remote_path, event_folder),
-        MAX_PRINT_ARTIFACT_SIZE,
+    _, folder_path, filename = _validate_print_artifact_path(
+        remote_path, event_folder)
+    folder_name = folder_path.rsplit("/", 1)[-1]
+    archive = await _download_bytes(
+        folder_path,
+        MAX_PRINT_FOLDER_ARCHIVE_SIZE,
     )
+    return _extract_print_artifact_archive(archive, folder_name, filename)
 
 
 async def _wait_operation(href: str) -> bool:
@@ -463,22 +585,9 @@ def _command_fingerprint(command: dict) -> str:
 async def _process_command(
     item: dict,
     handler: Callable[[dict], Awaitable[dict]],
+    body: bytes,
 ) -> bool:
     filename = item["name"]
-    remote_path = str(item.get("path", "")).removeprefix("disk:")
-    try:
-        body = await _download_bytes(remote_path)
-    except ValueError as exc:
-        # A downloaded artifact that violates the size limit is permanently
-        # invalid and must not block the queue forever.
-        log.warning(f"Control: invalid command {filename}: {exc}")
-        return await _delete_command(filename)
-    except Exception as exc:
-        # Network/download failures are transient. Keep the command in
-        # to_booth so the next polling cycle retries it.
-        log.warning(f"Control: command download failed {filename}: {exc}")
-        return False
-
     try:
         command = validate_command(
             json.loads(body.decode("utf-8")), filename)
@@ -557,12 +666,59 @@ async def control_init(folder: str) -> bool:
     return await _connect()
 
 
+async def _poll_commands_once(
+    handler: Callable[[dict], Awaitable[dict]],
+) -> None:
+    items = await _list_commands()
+    if not items:
+        return
+    oversized = [
+        item for item in items
+        if isinstance(item.get("size"), int)
+        and item["size"] > MAX_COMMAND_FILE_SIZE
+    ]
+    for item in oversized:
+        filename = item["name"]
+        log.warning(
+            "Control: invalid command %s: file is too large", filename)
+        if not await _delete_command(filename):
+            return
+    if oversized:
+        oversized_names = {item["name"] for item in oversized}
+        items = [item for item in items if item["name"] not in oversized_names]
+        if not items:
+            return
+    try:
+        bodies, invalid = await _download_command_batch(items)
+    except Exception as exc:
+        # A folder download is one transient network operation. Keep every
+        # command remote and retry on the next poll.
+        log.warning("Control: command folder download failed: %s", exc)
+        return
+    for item in items:
+        filename = item["name"]
+        if filename in invalid:
+            log.warning(
+                "Control: invalid command %s: file is too large", filename)
+            await _delete_command(filename)
+            continue
+        body = bodies.get(filename)
+        if body is None:
+            # A concurrent folder change can make the list and its ZIP differ.
+            # Leave the file for the next poll instead of guessing or deleting.
+            log.warning(
+                "Control: command %s missing from folder archive; will retry",
+                filename,
+            )
+            continue
+        await _process_command(item, handler, body)
+
+
 async def control_poll_loop(handler: Callable[[dict], Awaitable[dict]]) -> None:
     while True:
         try:
             if await _connect():
-                for item in await _list_commands():
-                    await _process_command(item, handler)
+                await _poll_commands_once(handler)
         except Exception as exc:
             log.warning(f"Control: poll failed: {exc}")
             await _close_sessions()

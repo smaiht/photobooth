@@ -173,7 +173,8 @@ class DeterministicReleaseTests(unittest.TestCase):
         previous = {
             "artifacts": {
                 "python": {
-                    "path": "/updates/artifacts/python.zip",
+                    "path": "/updates/artifacts/python_bundle/python.zip",
+                    "bundle_path": "/updates/artifacts/python_bundle",
                     "size": 123,
                     "sha256": "a" * 64,
                     "updated_at": "earlier",
@@ -182,10 +183,17 @@ class DeterministicReleaseTests(unittest.TestCase):
         }
 
         record = publish_release.reusable_record(
-            previous, artifact, "/updates/artifacts/python.zip",
+            previous,
+            artifact,
+            "/updates/artifacts/python_bundle/python.zip",
+            "/updates/artifacts/python_bundle",
         )
 
         self.assertEqual(record["path"], previous["artifacts"]["python"]["path"])
+        self.assertEqual(
+            record["bundle_path"],
+            previous["artifacts"]["python"]["bundle_path"],
+        )
         self.assertEqual(record["sha256"], "a" * 64)
         self.assertEqual(record["hash_type"], "folder")
         record["size"] = 999
@@ -201,6 +209,7 @@ class DeterministicReleaseTests(unittest.TestCase):
             "artifacts": {
                 "python": {
                     "path": "/updates/artifacts/python-aaaaaaaaaaaaaaaa.zip",
+                    "bundle_path": "/updates/artifacts",
                     "size": 123,
                     "sha256": "a" * 64,
                 },
@@ -208,7 +217,10 @@ class DeterministicReleaseTests(unittest.TestCase):
         }
 
         self.assertIsNone(publish_release.reusable_record(
-            previous, artifact, "/updates/artifacts/python.zip",
+            previous,
+            artifact,
+            "/updates/artifacts/python_bundle/python.zip",
+            "/updates/artifacts/python_bundle",
         ))
 
     def test_remote_import_url_is_cache_busted_for_every_attempt(self):
@@ -337,7 +349,7 @@ class YandexReleasePublicationTests(unittest.IsolatedAsyncioTestCase):
                 await publish_release.move_resource(
                     session,
                     "/updates/artifacts/.incoming-app.zip",
-                    "/updates/artifacts/app.zip",
+                    "/updates/artifacts/app_bundle/app.zip",
                     123,
                     archive_sha,
                 )

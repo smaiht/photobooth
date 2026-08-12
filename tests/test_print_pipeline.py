@@ -1304,7 +1304,11 @@ class CustomPrintCommandTests(unittest.IsolatedAsyncioTestCase):
                 "data": {
                     "job_id": "b" * 32,
                     "print_mode": "fill",
-                    "artifact_path": "/event_by_sessions/0000_print_jobs/image.png",
+                    "artifact_path": (
+                        "/event_by_sessions/0000_print_jobs/"
+                        f"123_20260812T120000Z_{'b' * 32}/"
+                        f"123_20260812T120000Z_{'b' * 32}.png"
+                    ),
                     "event_folder": "event",
                     "sender_id": 123,
                 },
@@ -1335,7 +1339,9 @@ class CustomPrintCommandTests(unittest.IsolatedAsyncioTestCase):
                     "job_id": "b" * 32,
                     "print_mode": "fill",
                     "artifact_path": (
-                        "/old_event_by_sessions/0000_print_jobs/image.png"
+                        "/old_event_by_sessions/0000_print_jobs/"
+                        f"123_20260812T120000Z_{'b' * 32}/"
+                        f"123_20260812T120000Z_{'b' * 32}.png"
                     ),
                     "event_folder": "old_event",
                 },

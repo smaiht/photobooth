@@ -1,6 +1,8 @@
+import io
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -135,10 +137,10 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
             "path": f"disk:/control/to_booth/{command_id}.json",
         }
         with patch.object(yadisk_control, "_root", "/control"), \
-             patch("backend.yadisk_control._download_bytes", AsyncMock(return_value=body)), \
              patch("backend.yadisk_control._upload_bytes", side_effect=upload), \
              patch("backend.yadisk_control._delete_command", side_effect=delete):
-            self.assertTrue(await yadisk_control._process_command(item, handler))
+            self.assertTrue(await yadisk_control._process_command(
+                item, handler, body))
             await __import__("asyncio").sleep(0)
 
         self.assertEqual(calls, ["handler", "response", "delete", "restart"])
@@ -151,13 +153,15 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
         }
         handler = AsyncMock()
         with patch(
-            "backend.yadisk_control._download_bytes",
+            "backend.yadisk_control._list_commands",
+            AsyncMock(return_value=[item]),
+        ), patch(
+            "backend.yadisk_control._download_command_batch",
             AsyncMock(side_effect=OSError("network unavailable")),
         ), patch(
             "backend.yadisk_control._delete_command", AsyncMock()
         ) as delete_command:
-            self.assertFalse(
-                await yadisk_control._process_command(item, handler))
+            await yadisk_control._poll_commands_once(handler)
 
         handler.assert_not_awaited()
         delete_command.assert_not_awaited()
@@ -191,13 +195,13 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
                 raise TimeoutError("uploader connection timeout")
 
         with patch.object(yadisk_control, "_root", "/control"), \
-             patch("backend.yadisk_control._download_bytes", AsyncMock(return_value=body)), \
              patch("backend.yadisk_control._upload_bytes", side_effect=upload), \
              patch("backend.yadisk_control._delete_command", AsyncMock(return_value=True)) as delete:
             with self.assertRaisesRegex(TimeoutError, "connection timeout"):
-                await yadisk_control._process_command(item, handler)
+                await yadisk_control._process_command(item, handler, body)
 
-            self.assertTrue(await yadisk_control._process_command(item, handler))
+            self.assertTrue(await yadisk_control._process_command(
+                item, handler, body))
 
         handler.assert_awaited_once()
         delete.assert_awaited_once_with(item["name"])
@@ -235,14 +239,14 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
         ])
 
         with patch.object(yadisk_control, "_root", "/control"), \
-             patch("backend.yadisk_control._download_bytes", AsyncMock(return_value=body)), \
              patch("backend.yadisk_control._upload_bytes", upload), \
              patch("backend.yadisk_control._delete_command", AsyncMock(return_value=True)):
             with self.assertRaises(TimeoutError):
-                await yadisk_control._process_command(item, handler)
+                await yadisk_control._process_command(item, handler, body)
             post_action.assert_not_awaited()
 
-            self.assertTrue(await yadisk_control._process_command(item, handler))
+            self.assertTrue(await yadisk_control._process_command(
+                item, handler, body))
             await __import__("asyncio").sleep(0)
 
         handler.assert_awaited_once()
@@ -255,16 +259,97 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
             "path": f"disk:/control/to_booth/{command_id}.json",
         }
         with patch(
-            "backend.yadisk_control._download_bytes",
-            AsyncMock(return_value=b"not-json"),
-        ), patch(
             "backend.yadisk_control._delete_command",
             AsyncMock(return_value=True),
         ) as delete_command:
             self.assertTrue(await yadisk_control._process_command(
-                item, AsyncMock()))
+                item, AsyncMock(), b"not-json"))
 
         delete_command.assert_awaited_once_with(item["name"])
+
+    async def test_downloads_folder_once_and_processes_listed_order(self):
+        items = [
+            {"name": f"{'a' * 32}.json"},
+            {"name": f"{'b' * 32}.json"},
+        ]
+        bodies = {
+            items[0]["name"]: b"first",
+            items[1]["name"]: b"second",
+        }
+        process = AsyncMock(return_value=True)
+        download = AsyncMock(return_value=(bodies, set()))
+        with patch(
+            "backend.yadisk_control._list_commands",
+            AsyncMock(return_value=items),
+        ), patch(
+            "backend.yadisk_control._download_command_batch", download,
+        ), patch(
+            "backend.yadisk_control._process_command", process,
+        ):
+            handler = AsyncMock()
+            await yadisk_control._poll_commands_once(handler)
+
+        download.assert_awaited_once_with(items)
+        self.assertEqual(process.await_args_list, [
+            call(items[0], handler, b"first"),
+            call(items[1], handler, b"second"),
+        ])
+
+    def test_extracts_only_listed_commands_from_folder_archive(self):
+        first = f"{'a' * 32}.json"
+        appeared_later = f"{'b' * 32}.json"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(f"to_booth/{first}", b"first")
+            archive.writestr(f"to_booth/{appeared_later}", b"later")
+            archive.writestr("to_booth/manual_notes/readme.txt", b"ignore")
+
+        bodies, invalid = yadisk_control._extract_command_archive(
+            buffer.getvalue(), [{"name": first}])
+
+        self.assertEqual(bodies, {first: b"first"})
+        self.assertEqual(invalid, set())
+
+    async def test_command_batch_download_targets_the_folder(self):
+        filename = f"{'a' * 32}.json"
+        archive_bytes = io.BytesIO()
+        with zipfile.ZipFile(archive_bytes, "w") as archive:
+            archive.writestr(f"to_booth/{filename}", b"command")
+        download = AsyncMock(return_value=archive_bytes.getvalue())
+        with patch.object(
+            yadisk_control, "_root", "/control",
+        ), patch(
+            "backend.yadisk_control._download_bytes", download,
+        ):
+            bodies, invalid = await yadisk_control._download_command_batch(
+                [{"name": filename}])
+
+        self.assertEqual(bodies, {filename: b"command"})
+        self.assertEqual(invalid, set())
+        download.assert_awaited_once_with(
+            "/control/to_booth",
+            yadisk_control.MAX_COMMAND_ARCHIVE_SIZE,
+        )
+
+    async def test_oversized_listed_command_is_deleted_before_folder_download(self):
+        item = {
+            "name": f"{'a' * 32}.json",
+            "size": yadisk_control.MAX_COMMAND_FILE_SIZE + 1,
+        }
+        delete = AsyncMock(return_value=True)
+        download = AsyncMock()
+        with patch(
+            "backend.yadisk_control._list_commands",
+            AsyncMock(return_value=[item]),
+        ), patch(
+            "backend.yadisk_control._delete_command", delete,
+        ), patch(
+            "backend.yadisk_control._download_command_batch", download,
+        ):
+            await yadisk_control._poll_commands_once(AsyncMock())
+
+        delete.assert_awaited_once_with(item["name"])
+        download.assert_not_awaited()
 
 
 class ControlConnectionSettingsTests(unittest.IsolatedAsyncioTestCase):
@@ -289,6 +374,42 @@ class ControlConnectionSettingsTests(unittest.IsolatedAsyncioTestCase):
             yadisk_control.YADISK_API_USER_AGENT,
         )
         self.assertEqual(headers["Authorization"], "OAuth secret")
+
+
+class PrintArtifactDownloadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_downloads_job_folder_and_extracts_requested_image(self):
+        job_id = "b" * 32
+        basename = f"123_20260812T120000Z_{job_id}"
+        folder_path = f"/event_by_sessions/0000_print_jobs/{basename}"
+        image_path = f"{folder_path}/{basename}.jpg"
+        archive_bytes = io.BytesIO()
+        with zipfile.ZipFile(archive_bytes, "w") as archive:
+            archive.writestr(f"{basename}/{basename}.jpg", b"image")
+            archive.writestr(f"{basename}/{basename}.txt", b"metadata")
+
+        download = AsyncMock(return_value=archive_bytes.getvalue())
+        with patch(
+            "backend.yadisk_control._connect", AsyncMock(return_value=True),
+        ), patch(
+            "backend.yadisk_control._download_bytes", download,
+        ):
+            payload = await yadisk_control.download_print_artifact(
+                image_path, "event")
+
+        self.assertEqual(payload, b"image")
+        download.assert_awaited_once_with(
+            folder_path,
+            yadisk_control.MAX_PRINT_FOLDER_ARCHIVE_SIZE,
+        )
+
+    async def test_rejects_legacy_flat_print_artifact_path(self):
+        with patch(
+            "backend.yadisk_control._connect", AsyncMock(return_value=True),
+        ), self.assertRaisesRegex(ValueError, "print artifact path"):
+            await yadisk_control.download_print_artifact(
+                "/event_by_sessions/0000_print_jobs/image.jpg",
+                "event",
+            )
 
 
 class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):

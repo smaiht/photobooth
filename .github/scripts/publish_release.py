@@ -43,6 +43,14 @@ def normalize_folder(value: str) -> str:
     return f"/{name}"
 
 
+def artifact_bundle_path(root: str, name: str) -> str:
+    return f"{root}/artifacts/{name}_bundle"
+
+
+def artifact_path(root: str, name: str) -> str:
+    return f"{artifact_bundle_path(root, name)}/{name}.zip"
+
+
 def _valid_sha256(value) -> bool:
     return (
         isinstance(value, str)
@@ -105,8 +113,16 @@ async def response_error(response: aiohttp.ClientResponse) -> str:
 
 async def ensure_directories(session: aiohttp.ClientSession, root: str) -> None:
     current = ""
-    for part in root.strip("/").split("/") + ["artifacts"]:
+    paths = []
+    for part in root.strip("/").split("/"):
         current += f"/{part}"
+        paths.append(current)
+    paths.extend([
+        f"{root}/artifacts",
+        f"{root}/status_bundle",
+        *(artifact_bundle_path(root, name) for name in ARTIFACT_FILES),
+    ])
+    for current in paths:
         async with session.put(f"{API}/resources", params={"path": current}) as response:
             if response.status not in (201, 409):
                 raise RuntimeError(
@@ -447,12 +463,12 @@ async def replace_artifacts(
             await move_resource(
                 session,
                 temporary_path,
-                f"{root}/artifacts/{name}.zip",
+                artifact_path(root, name),
                 artifact["size"],
                 artifact["archive_sha256"],
             )
             pending_cleanup.discard(temporary_path)
-            log(f"{name}: published to {root}/artifacts/{name}.zip")
+            log(f"{name}: published to {artifact_path(root, name)}")
     finally:
         await cleanup_resources(session, sorted(pending_cleanup))
 
@@ -487,6 +503,7 @@ def reusable_record(
     previous_status: dict | None,
     artifact: dict,
     expected_path: str | None = None,
+    expected_bundle_path: str | None = None,
 ) -> dict | None:
     if not isinstance(previous_status, dict):
         return None
@@ -498,12 +515,18 @@ def reusable_record(
         return None
 
     path = record.get("path")
+    bundle_path = record.get("bundle_path")
     size = record.get("size")
     if (
         not isinstance(path, str)
         or not path.startswith("/")
         or not path.endswith(".zip")
         or (expected_path is not None and path != expected_path)
+        or not isinstance(bundle_path, str)
+        or not bundle_path.startswith("/")
+        or path.rsplit("/", 1)[0] != bundle_path
+        or (expected_bundle_path is not None
+            and bundle_path != expected_bundle_path)
         or not isinstance(size, int)
         or size < 1
     ):
@@ -511,6 +534,7 @@ def reusable_record(
 
     result = {
         "path": path,
+        "bundle_path": bundle_path,
         "size": size,
         "sha256": artifact["sha256"],
         "hash_type": artifact["hash_type"],
@@ -546,7 +570,7 @@ async def publish(args) -> None:
         Path(args.metadata).resolve(),
     )
     root = normalize_folder(args.folder)
-    status_path = f"{root}/status.json"
+    status_path = f"{root}/status_bundle/status.json"
     updated_at = datetime.now(timezone.utc).isoformat()
     publish_nonce = uuid.uuid4().hex
     changed: list[str] = []
@@ -567,9 +591,13 @@ async def publish(args) -> None:
         )
 
         for name, artifact in artifacts.items():
-            artifact_path = f"{root}/artifacts/{name}.zip"
+            bundle_path = artifact_bundle_path(root, name)
+            release_path = artifact_path(root, name)
             previous = reusable_record(
-                previous_status, artifact, artifact_path,
+                previous_status,
+                artifact,
+                release_path,
+                bundle_path,
             )
             if previous and await resource_size_matches(
                 api_session, previous["path"], previous["size"],
@@ -581,7 +609,8 @@ async def publish(args) -> None:
             changed.append(name)
             changed_artifacts.append(artifact)
             status_artifacts[name] = {
-                "path": artifact_path,
+                "path": release_path,
+                "bundle_path": bundle_path,
                 "size": artifact["size"],
                 "sha256": artifact["sha256"],
                 "hash_type": artifact["hash_type"],

@@ -867,11 +867,18 @@ def _release_artifacts(status: dict) -> dict[str, dict]:
         selected[name] = artifact
     for name, artifact in selected.items():
         path = artifact.get("path")
+        bundle_path = artifact.get("bundle_path")
         size = artifact.get("size")
         sha256 = artifact.get("sha256")
         if (not isinstance(path, str) or not path.startswith("/")
                 or ".." in path.split("/") or not path.endswith(".zip")):
             raise ValueError(f"{name} update path is invalid")
+        if (not isinstance(bundle_path, str)
+                or not bundle_path.startswith("/")
+                or ".." in bundle_path.split("/")
+                or bundle_path.endswith("/")
+                or path.rsplit("/", 1)[0] != bundle_path):
+            raise ValueError(f"{name} update bundle path is invalid")
         if not isinstance(size, int) or size < 1:
             raise ValueError(f"{name} update size is invalid")
         if not _valid_update_sha(sha256):
@@ -1050,7 +1057,10 @@ def _update_from_disk() -> str | None:
         (app_dir / "config_app.json").read_text(encoding="utf-8")
     )
     folder = config.get("yadisk_updates_folder", "photobooth_system/updates")
-    log.info("Disk update: checking %s/status.json", folder.rstrip("/"))
+    log.info(
+        "Disk update: checking %s/status_bundle/status.json",
+        folder.rstrip("/"),
+    )
 
     def report_status_retry(attempt, attempts, delay, exc):
         log.warning(
