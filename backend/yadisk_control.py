@@ -173,7 +173,10 @@ async def _connect() -> bool:
         timeout=aiohttp.ClientTimeout(total=60, connect=15),
     )
     _transfer_session = aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=120, connect=20))
+        timeout=aiohttp.ClientTimeout(total=120, connect=20),
+        # Match urllib updater: honour the Windows/system proxy for CDN links.
+        trust_env=True,
+    )
     try:
         current = ""
         for part in _root.strip("/").split("/"):

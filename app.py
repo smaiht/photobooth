@@ -948,8 +948,8 @@ def _format_download_progress(
     percent = min(100, round(downloaded * 100 / max(total, 1)))
     text = (
         f"Скачивание {percent}% · "
-        f"{downloaded / 1048576:.1f}/{total / 1048576:.1f} МБ · "
-        f"{speed / 1048576:.1f} МБ/с"
+        f"{downloaded / 1048576:.2f}/{total / 1048576:.2f} МБ · "
+        f"{speed / 1048576:.2f} МБ/с"
     )
     if attempt > 1:
         text += f" · попытка {attempt}/{attempts}"
@@ -977,7 +977,7 @@ def _download_update_archive(name: str, artifact: dict, destination: Path) -> in
         percent = min(100, int(downloaded * 100 / max(total, 1)))
         if downloaded and (downloaded >= total or percent >= last_log_percent + 10):
             log.info(
-                "Disk update: %s %d%%, %.1f/%.1f MiB, %.1f MiB/s",
+                "Disk update: %s %d%%, %.2f/%.2f MiB, %.2f MiB/s",
                 name, percent, downloaded / 1048576, total / 1048576,
                 speed / 1048576,
             )
@@ -986,12 +986,12 @@ def _download_update_archive(name: str, artifact: dict, destination: Path) -> in
     def report_retry(attempt, attempts, delay, exc):
         downloaded = downloaded_by_attempt.get(attempt, 0)
         log.warning(
-            "Disk update: %s attempt %d/%d failed after %.1f MiB: %s; "
+            "Disk update: %s attempt %d/%d failed after %.2f MiB: %s; "
             "retrying in %.0fs",
             name, attempt, attempts, downloaded / 1048576, exc, delay,
         )
         _ui_progress(
-            f"{name}: сбой после {downloaded / 1048576:.1f} МБ · "
+            f"{name}: сбой после {downloaded / 1048576:.2f} МБ · "
             f"повтор {attempt + 1}/{attempts} через {delay:.0f} с"
         )
 
@@ -1005,7 +1005,7 @@ def _download_update_archive(name: str, artifact: dict, destination: Path) -> in
     )
     elapsed = max(time.monotonic() - started, 0.001)
     log.info(
-        "Disk update: %s downloaded, %.1f MiB in %.1fs (%.1f MiB/s)",
+        "Disk update: %s downloaded, %.2f MiB in %.1fs (%.2f MiB/s)",
         name, size / 1048576, elapsed, size / 1048576 / elapsed,
     )
     return size
@@ -1086,7 +1086,13 @@ def _update_from_disk() -> str | None:
         return None
 
     _ui("setStatus('Обновление')")
-    _ui_log("Нужно скачать: " + ", ".join(selected))
+    _ui_log("Компоненты:")
+    component_names = ["full"] if selected == ["full"] else _UPDATE_COMPONENTS
+    for name in component_names:
+        if name in selected:
+            _ui_log(f"↓ {name} — скачать")
+        else:
+            _ui_log(f"✓ {name} — актуально")
     pid = os.getpid()
     stage_path = app_dir / f".update_stage.{pid}"
     temp_paths: list[Path] = []
@@ -1098,7 +1104,7 @@ def _update_from_disk() -> str | None:
             temp_paths.append(destination)
             artifact = artifacts[name]
             log.info(
-                "Disk update: downloading %s %s (%.1f MiB)",
+                "Disk update: downloading %s %s (%.2f MiB)",
                 name, artifact["sha256"][:16], artifact["size"] / 1048576,
             )
             _download_update_archive(name, artifact, destination)

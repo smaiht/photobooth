@@ -17,7 +17,8 @@ from pathlib import Path
 
 API = "https://cloud-api.yandex.net/v1/disk"
 MAX_UPDATE_SIZE = 2 * 1024 * 1024 * 1024
-DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+# Show sub-MiB progress; app.py throttles UI updates separately.
+DOWNLOAD_CHUNK_SIZE = 256 * 1024
 DOWNLOAD_TIMEOUT = 60
 DOWNLOAD_RETRY_DELAYS = (2, 4, 8, 16)
 # status.json is tiny and is fetched before the booth starts. Short requests

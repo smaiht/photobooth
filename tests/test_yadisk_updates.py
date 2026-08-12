@@ -452,7 +452,7 @@ class DiskUpdateDownloadTests(unittest.TestCase):
         self.assertEqual(
             app._format_download_progress(
                 53 * 1048576, 126 * 1048576, 4.3 * 1048576, 2, 5),
-            "Скачивание 42% · 53.0/126.0 МБ · 4.3 МБ/с · попытка 2/5",
+            "Скачивание 42% · 53.00/126.00 МБ · 4.30 МБ/с · попытка 2/5",
         )
 
     def test_windows_download_is_unique_and_yields_to_existing_installer(self):
