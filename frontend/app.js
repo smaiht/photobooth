@@ -1,4 +1,5 @@
 const core = window.PhotoboothCore;
+const previewRoute = core.previewRoute(location.hash);
 
 const screens = {
     no_camera: document.getElementById("screen-no-camera"),
@@ -10,7 +11,7 @@ const screens = {
 };
 
 const previewController = window.photoboothPreview;
-const previewMode = previewController?.isActive() === true;
+const previewMode = previewRoute !== null;
 
 const liveView = document.getElementById("live-view");
 const countdownNum = document.getElementById("countdown-number");
@@ -1439,7 +1440,11 @@ function applyConfig(cfg) {
 window.addEventListener("hashchange", () => location.reload());
 
 if (previewMode) {
-    previewController.render({ applyConfig, switchScreen });
+    if (previewController) {
+        previewController.render({ applyConfig, switchScreen });
+    } else {
+        throw new Error("Preview controller failed to load");
+    }
 } else {
     fetch("/api/config").then(response => response.json()).then(applyConfig);
     connect();

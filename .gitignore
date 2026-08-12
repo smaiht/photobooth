@@ -36,6 +36,7 @@ marketing/frames/
 marketing/collages/
 
 photobooth.log*
+diagnostics/yadisk_network_*.log
 yadisk_queue.json
 cafe_unlock_state.json
 cafe_unlock_state.json.tmp

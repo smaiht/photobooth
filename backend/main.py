@@ -22,7 +22,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from .config import (
     ASSETS_DIR,
@@ -1153,26 +1153,6 @@ async def live_view():
 app.mount("/photos", StaticFiles(directory=str(PHOTOS_DIR)), name="photos")
 app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR)), name="assets")
 
-FRONTEND_FILE_HEADERS = {"Cache-Control": "no-store"}
-
-
-@app.get("/")
-async def index():
-    return FileResponse(
-        str(FRONTEND_DIR / "index.html"), headers=FRONTEND_FILE_HEADERS)
-
-
-@app.get("/style.css")
-async def style():
-    return FileResponse(
-        str(FRONTEND_DIR / "style.css"), headers=FRONTEND_FILE_HEADERS)
-
-
-@app.get("/app.js")
-async def script():
-    return FileResponse(
-        str(FRONTEND_DIR / "app.js"), headers=FRONTEND_FILE_HEADERS)
-
 
 @app.get("/api/config")
 async def get_config():
@@ -2064,3 +2044,12 @@ async def startup():
 @app.on_event("shutdown")
 async def app_shutdown():
     await _shutdown_services()
+
+
+# Keep this catch-all mount last: API, WebSocket, live view, assets and photos
+# must get the first chance to match their own routes.
+app.mount(
+    "/",
+    StaticFiles(directory=str(FRONTEND_DIR), html=True),
+    name="frontend",
+)

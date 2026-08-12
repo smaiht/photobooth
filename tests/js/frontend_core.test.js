@@ -41,6 +41,8 @@ test("preview hashes are normalized and unknown hashes stay inactive", () => {
         assert.equal(core.previewRoute(`#${hash}`), route);
     }
     assert.equal(core.previewRoute("# IDLE-LOCKED "), "idle_locked");
+    assert.equal(core.previewRoute("#idle_locked"), "idle_locked");
+    assert.equal(core.previewRoute("#/idle-locked/"), "idle_locked");
     assert.equal(core.previewRoute("#not-a-screen"), null);
     assert.equal(core.previewRoute(null), null);
 });

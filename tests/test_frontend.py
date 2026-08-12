@@ -31,6 +31,8 @@ class FrontendStaticContractTests(unittest.TestCase):
             encoding="utf-8")
         cls.app_source = (ROOT / "frontend" / "app.js").read_text(
             encoding="utf-8")
+        cls.backend_source = (ROOT / "backend" / "main.py").read_text(
+            encoding="utf-8")
         cls.markup = _MarkupInventory()
         cls.markup.feed(cls.html)
 
@@ -49,6 +51,24 @@ class FrontendStaticContractTests(unittest.TestCase):
             self.markup.scripts.index("../assets/dev/preview.js"),
         )
         self.assertLess(core_index, self.markup.scripts.index("app.js"))
+
+    def test_frontend_directory_is_mounted_after_backend_routes(self):
+        mount = 'StaticFiles(directory=str(FRONTEND_DIR), html=True)'
+        self.assertEqual(self.backend_source.count(mount), 1)
+        mount_index = self.backend_source.index(mount)
+        self.assertGreater(mount_index,
+                           self.backend_source.rindex('@app.websocket("/ws")'))
+        self.assertNotIn('@app.get("/core.js")', self.backend_source)
+        self.assertNotIn('@app.get("/app.js")', self.backend_source)
+        self.assertNotIn('@app.get("/style.css")', self.backend_source)
+
+    def test_preview_hash_prevents_backend_polling_without_indirection(self):
+        self.assertIn(
+            "const previewRoute = core.previewRoute(location.hash);",
+            self.app_source,
+        )
+        self.assertIn("const previewMode = previewRoute !== null;",
+                      self.app_source)
 
     def test_preview_assets_exist(self):
         assets = ROOT / "assets" / "dev"

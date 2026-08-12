@@ -33,7 +33,12 @@
 
     function previewRoute(hash) {
         if (typeof hash !== "string") return null;
-        const route = hash.replace(/^#/, "").trim().toLowerCase();
+        const route = hash
+            .replace(/^#/, "")
+            .trim()
+            .toLowerCase()
+            .replace(/^\/+|\/+$/g, "")
+            .replace(/[\s_]+/g, "-");
         return PREVIEW_ROUTES[route] ?? null;
     }
 
