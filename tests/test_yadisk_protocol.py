@@ -427,6 +427,25 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FrontendProtocolTests(unittest.TestCase):
+    def test_pose_prompts_stay_focused(self):
+        root = Path(__file__).resolve().parent.parent
+        config = json.loads(
+            (root / "config_app.json").read_text(encoding="utf-8"))
+        frontend_source = (
+            root / "frontend" / "app.js").read_text(encoding="utf-8")
+        frontend_html = (
+            root / "frontend" / "index.html").read_text(encoding="utf-8")
+        frontend_styles = (
+            root / "frontend" / "style.css").read_text(encoding="utf-8")
+
+        self.assertEqual(config["pose_examples_per_side"], 2)
+        self.assertEqual(frontend_html.count('class="idle-pose-row'), 3)
+        self.assertIn("shootingPosePool = shuffledCopy(poseExampleUrls)",
+                      frontend_source)
+        self.assertIn("--idle-pose-row-gap: clamp(10px, 0.75vw, 16px)",
+                      frontend_styles)
+        self.assertIn("transform: rotate(-4deg) scale(1.06)", frontend_styles)
+
     def test_frontend_uses_direct_session_link_not_vps_redirect(self):
         root = Path(__file__).resolve().parent.parent
         backend_source = (root / "backend" / "main.py").read_text(encoding="utf-8")

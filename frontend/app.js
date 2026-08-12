@@ -287,7 +287,7 @@ function configurePoseExamples(cfg) {
     const configuredCount = Math.floor(Number(cfg.pose_examples_per_side));
     poseExamplesPerSide = Number.isFinite(configuredCount)
         ? Math.max(0, configuredCount)
-        : 3;
+        : 2;
     const layoutCount = Math.max(1, poseExamplesPerSide);
     const gapVh = 0.8;
     document.documentElement.style.setProperty(
