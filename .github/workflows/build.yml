@@ -37,6 +37,10 @@ jobs:
         with:
           python-version: '3.12.10'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       # Build embedded Python with all packages
       - name: Build python/ folder
         shell: pwsh

@@ -41,7 +41,13 @@
                     </p>
                     <div class="tap-prompt">
                         <button class="idle-start-button" id="idle-start-button" type="button" tabindex="-1" disabled>
-                            НАЧАТЬ
+                            <span class="idle-start-label">НАЧАТЬ</span>
+                            <span class="idle-tap-cue" aria-hidden="true">
+                                <span class="idle-tap-ring"></span>
+                                <svg class="idle-tap-hand" viewBox="0 0 64 68" focusable="false">
+                                    <path d="M25 30V12a5 5 0 0 1 10 0v16-6a5 5 0 0 1 10 0v8-4a5 5 0 0 1 10 0v16c0 11-8 20-19 20h-2c-7 0-12-4-16-10L8 39a5 5 0 0 1 8-6l9 10Z" />
+                                </svg>
+                            </span>
                         </button>
                         <div class="tap-lock-status">(ЗАБЛОКИРОВАНО)</div>
                     </div>
@@ -184,6 +190,7 @@
     </div>
 
     <script src="../assets/qrcode.min.js"></script>
+    <script src="core.js"></script>
     <script src="../assets/dev/preview.js"></script>
     <script src="app.js"></script>
 </body>

@@ -10,10 +10,26 @@
     --live-view-margin-top: 5vh;
     --live-view-margin-bottom: 17vh;
     --pose-card-max-height: calc((100% - 0.8vh) / 2);
-    --idle-pose-size: clamp(220px, 17.5vw, 350px);
     --idle-pose-gap: clamp(20px, 1.5vw, 32px);
     --idle-pose-row-gap: clamp(10px, 0.75vw, 16px);
+    /* At 4deg, a row shifts vertically by about 3.5vw between the screen
+       centre and edge. The extra 1vh keeps the outer corners visible. */
+    --idle-pose-edge-clearance: calc(3.6vw + 1vh);
+    --idle-pose-size: min(
+        350px,
+        calc(
+            (
+                100vh
+                - var(--idle-pose-edge-clearance)
+                - var(--idle-pose-edge-clearance)
+                - var(--idle-pose-row-gap)
+                - var(--idle-pose-row-gap)
+            ) / 3
+        )
+    );
     --idle-hero-motion-duration: 54s;
+    /* The gesture still takes about 1.75s; only the empty pause is shorter. */
+    --idle-tap-cycle-duration: 3.5s;
 }
 
 * {
@@ -79,13 +95,13 @@ html, body {
 .idle-pose-field {
     position: absolute;
     z-index: 0;
-    inset: -15% -18%;
+    inset: 0 -18%;
     display: flex;
     flex-direction: column;
     justify-content: center;
     gap: var(--idle-pose-row-gap);
     overflow: hidden;
-    transform: rotate(-4deg) scale(1.06);
+    transform: rotate(-4deg);
     transform-origin: center;
     pointer-events: none;
 }
@@ -258,6 +274,7 @@ html, body {
 }
 
 .idle-start-button {
+    position: relative;
     width: min(40vw, 760px);
     padding: 3vh;
     border: 0;
@@ -269,9 +286,63 @@ html, body {
     letter-spacing: 0.07em;
 }
 
+.idle-start-button:not(:disabled) {
+    animation: idle-start-tap-response var(--idle-tap-cycle-duration) ease-in-out infinite;
+}
+
+.idle-start-label {
+    position: relative;
+    z-index: 1;
+}
+
+.idle-tap-cue {
+    position: absolute;
+    z-index: 2;
+    left: 75%;
+    top: 48%;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+}
+
+.idle-tap-hand {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: clamp(62px, 5vw, 96px);
+    height: auto;
+    overflow: visible;
+    fill: #fff;
+    stroke: #191919;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2.4;
+    filter: drop-shadow(0 0.55vh 0.45vh rgba(0, 0, 0, 0.3));
+    opacity: 0;
+    transform-origin: 46% 8%;
+    animation: idle-tap-hand var(--idle-tap-cycle-duration) cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.idle-tap-ring {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: clamp(34px, 2.8vw, 54px);
+    aspect-ratio: 1;
+    border: clamp(2px, 0.18vw, 4px) solid rgba(255, 255, 255, 0.92);
+    border-radius: 50%;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.25);
+    animation: idle-tap-ring var(--idle-tap-cycle-duration) ease-out infinite;
+}
+
 .idle-start-button:disabled {
     opacity: 0.45;
     box-shadow: none;
+}
+
+.idle-start-button:disabled .idle-tap-cue {
+    display: none;
 }
 
 .tap-lock-status {
@@ -316,10 +387,72 @@ html, body {
     to { opacity: 0; transform: scale(7); }
 }
 
+@keyframes idle-start-tap-response {
+    0%, 34%, 55%, 100% {
+        transform: scale(1);
+        box-shadow: 0 1.2vh 2.8vh rgba(0, 0, 0, 0.2);
+    }
+    40% {
+        transform: scale(0.985);
+        box-shadow: 0 0.55vh 1.4vh rgba(0, 0, 0, 0.16);
+    }
+    47% {
+        transform: scale(1.012);
+        box-shadow: 0 1.4vh 3.2vh rgba(0, 0, 0, 0.24);
+    }
+}
+
+@keyframes idle-tap-hand {
+    0%, 7% {
+        opacity: 0;
+        transform: translate(26%, 54%) rotate(-12deg) scale(0.96);
+    }
+    18% {
+        opacity: 1;
+    }
+    35%, 40% {
+        opacity: 1;
+        transform: translate(-46%, -8%) rotate(-12deg) scale(1);
+    }
+    44% {
+        opacity: 1;
+        transform: translate(-46%, -5%) rotate(-12deg) scale(0.96);
+    }
+    54% {
+        opacity: 1;
+        transform: translate(-46%, -8%) rotate(-12deg) scale(1);
+    }
+    72%, 100% {
+        opacity: 0;
+        transform: translate(22%, 50%) rotate(-12deg) scale(0.96);
+    }
+}
+
+@keyframes idle-tap-ring {
+    0%, 38% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.25);
+    }
+    40% {
+        opacity: 0.95;
+    }
+    56%, 100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(1.55);
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .idle-pose-track,
-    .idle-hero-wrap {
+    .idle-hero-wrap,
+    .idle-start-button,
+    .idle-tap-hand,
+    .idle-tap-ring {
         animation-play-state: paused !important;
+    }
+
+    .idle-tap-cue {
+        display: none;
     }
 }
 

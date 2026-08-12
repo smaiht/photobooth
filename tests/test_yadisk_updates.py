@@ -2,6 +2,7 @@ import ctypes
 import hashlib
 import io
 import json
+import ssl
 import sys
 import unittest
 import urllib.error
@@ -38,6 +39,214 @@ class LoadingScreenTests(unittest.TestCase):
         self.assertIn("'Segoe UI',Arial,sans-serif", html)
         self.assertIn("Загрузка", html)
         self.assertIn("using a system fallback", "\n".join(logs.output))
+
+
+class DiskUpdateStatusTests(unittest.TestCase):
+    def _api_response(self, link: str):
+        return io.BytesIO(json.dumps({"href": link}).encode())
+
+    def _status_response(self):
+        return io.BytesIO(json.dumps({
+            "schema_version": 1,
+            "active": "full",
+        }).encode())
+
+    def test_reads_status_with_short_startup_timeouts(self):
+        with patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch(
+                 "backend.yadisk_updates._request",
+                 return_value=self._api_response("https://storage.test/status"),
+             ) as request_link, \
+             patch.object(
+                 urllib.request,
+                 "urlopen",
+                 return_value=self._status_response(),
+             ) as urlopen:
+            status = yadisk_updates.read_status(
+                "updates",
+                retry_delays=(),
+            )
+
+        self.assertEqual(status["schema_version"], 1)
+        self.assertEqual(
+            request_link.call_args.kwargs["timeout"],
+            yadisk_updates.STATUS_REQUEST_TIMEOUT,
+        )
+        self.assertEqual(
+            urlopen.call_args.kwargs["timeout"],
+            yadisk_updates.STATUS_REQUEST_TIMEOUT,
+        )
+
+    def test_retries_api_dns_failure_then_fetches_status(self):
+        retries = []
+        api_responses = [
+            urllib.error.URLError("getaddrinfo failed"),
+            self._api_response("https://storage.test/status"),
+        ]
+        with patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch(
+                 "backend.yadisk_updates._request",
+                 side_effect=api_responses,
+             ) as request_link, \
+             patch.object(
+                 urllib.request,
+                 "urlopen",
+                 return_value=self._status_response(),
+             ) as urlopen, \
+             patch("backend.yadisk_updates.time.sleep") as sleep:
+            status = yadisk_updates.read_status(
+                "updates",
+                on_retry=lambda *values: retries.append(values),
+                retry_delays=(2,),
+            )
+
+        self.assertEqual(status["active"], "full")
+        self.assertEqual(request_link.call_count, 2)
+        urlopen.assert_called_once()
+        self.assertEqual(retries[0][:3], (1, 2, 2.0))
+        sleep.assert_called_once_with(2.0)
+
+    def test_storage_failure_requests_a_fresh_link_before_retry(self):
+        links = [
+            self._api_response("https://storage.test/first"),
+            self._api_response("https://storage.test/second"),
+        ]
+        downloads = [
+            urllib.error.URLError("connection refused"),
+            self._status_response(),
+        ]
+        with patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch(
+                 "backend.yadisk_updates._request",
+                 side_effect=links,
+             ) as request_link, \
+             patch.object(
+                 urllib.request,
+                 "urlopen",
+                 side_effect=downloads,
+             ) as urlopen, \
+             patch("backend.yadisk_updates.time.sleep"):
+            status = yadisk_updates.read_status(
+                "updates",
+                retry_delays=(0,),
+            )
+
+        self.assertEqual(status["active"], "full")
+        self.assertEqual(request_link.call_count, 2)
+        self.assertEqual(
+            [call.args[0].full_url for call in urlopen.call_args_list],
+            ["https://storage.test/first", "https://storage.test/second"],
+        )
+
+    def test_certificate_failure_is_retried_without_disabling_ssl(self):
+        certificate_error = ssl.SSLCertVerificationError(
+            1,
+            "self-signed certificate in certificate chain",
+        )
+        with patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch(
+                 "backend.yadisk_updates._request",
+                 side_effect=[
+                     urllib.error.URLError(certificate_error),
+                     self._api_response("https://storage.test/status"),
+                 ],
+             ), \
+             patch.object(
+                 urllib.request,
+                 "urlopen",
+                 return_value=self._status_response(),
+             ), \
+             patch("backend.yadisk_updates.time.sleep") as sleep:
+            status = yadisk_updates.read_status(
+                "updates",
+                retry_delays=(0,),
+            )
+
+        self.assertEqual(status["active"], "full")
+        sleep.assert_called_once_with(0.0)
+
+    def test_missing_status_and_permanent_errors_are_not_retried(self):
+        for code, expected in ((404, None), (401, "raise")):
+            error = urllib.error.HTTPError(
+                "https://cloud-api.yandex.net",
+                code,
+                "error",
+                {},
+                None,
+            )
+            with self.subTest(code=code), \
+                 patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+                 patch(
+                     "backend.yadisk_updates._request",
+                     side_effect=error,
+                 ) as request_link, \
+                 patch("backend.yadisk_updates.time.sleep") as sleep:
+                if expected == "raise":
+                    with self.assertRaises(urllib.error.HTTPError):
+                        yadisk_updates.read_status(
+                            "updates",
+                            retry_delays=(0, 0),
+                        )
+                else:
+                    self.assertIsNone(yadisk_updates.read_status(
+                        "updates",
+                        retry_delays=(0, 0),
+                    ))
+
+            request_link.assert_called_once()
+            sleep.assert_not_called()
+            error.close()
+
+    def test_exhausts_five_attempts_for_a_transient_failure(self):
+        error = urllib.error.URLError("network unavailable")
+        with patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch(
+                 "backend.yadisk_updates._request",
+                 side_effect=error,
+             ) as request_link, \
+             patch("backend.yadisk_updates.time.sleep") as sleep:
+            with self.assertRaises(urllib.error.URLError):
+                yadisk_updates.read_status("updates")
+
+        self.assertEqual(request_link.call_count, 5)
+        self.assertEqual(
+            [call.args[0] for call in sleep.call_args_list],
+            [2.0, 4.0, 8.0, 16.0],
+        )
+
+    def test_loading_screen_reports_the_next_status_attempt(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_app = root / "app.py"
+            fake_app.write_text("", encoding="utf-8")
+            (root / "config_app.json").write_text("{}", encoding="utf-8")
+
+            def read_status(_folder, *, on_retry):
+                on_retry(
+                    1,
+                    5,
+                    2.0,
+                    urllib.error.URLError("getaddrinfo failed"),
+                )
+                return None
+
+            with patch.object(app, "__file__", str(fake_app)), \
+                 patch(
+                     "backend.yadisk_updates.read_status",
+                     side_effect=read_status,
+                 ), \
+                 patch.object(app, "_ui_progress") as progress, \
+                 patch.object(app, "_ui_log"), \
+                 self.assertLogs("update", level="WARNING") as logs:
+                self.assertIsNone(app._update_from_disk())
+
+        progress.assert_called_once_with(
+            "Нет связи с Яндекс Диском · повтор 2/5 через 2 с"
+        )
+        self.assertIn(
+            "status check attempt 1/5 failed",
+            "\n".join(logs.output),
+        )
 
 
 class DiskUpdateDownloadTests(unittest.TestCase):

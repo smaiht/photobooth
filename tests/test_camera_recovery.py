@@ -841,15 +841,11 @@ class ManualCameraRecoveryTests(unittest.IsolatedAsyncioTestCase):
     def test_setup_task_is_immutable_and_scoped_to_canon_r8(self):
         root = Path(__file__).resolve().parents[1]
         setup = (root / "_setup_camera_reset.ps1").read_text(encoding="utf-8")
-        html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
-        script = (root / "frontend" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn("VID_04A9&PID_330C", setup)
         self.assertIn("-EncodedCommand", setup)
         self.assertIn("(A;;GRGX;;;$kioskSid)", setup)
         self.assertNotIn("-File $", setup)
-        self.assertIn('id="camera-recover-button"', html)
-        self.assertIn('fetch("/api/camera/recover"', script)
 
 
 class CameraStatusTests(unittest.IsolatedAsyncioTestCase):

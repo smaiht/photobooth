@@ -1,1 +1,4 @@
-use venv/ folder from here - if you want to test or run smth
+1) use venv/ folder from here - if you want to test or run smth
+
+2) не проверяй визуал  по картинкам и хромы не запускай - я сам визуал всегда чекаю. Если нужно будет - я явно попрошу об этом!
+

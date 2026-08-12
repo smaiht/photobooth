@@ -20,6 +20,11 @@ MAX_UPDATE_SIZE = 2 * 1024 * 1024 * 1024
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 DOWNLOAD_TIMEOUT = 60
 DOWNLOAD_RETRY_DELAYS = (2, 4, 8, 16)
+# status.json is tiny and is fetched before the booth starts. Short requests
+# plus backoff survive normal Windows network warm-up without holding the booth
+# on the loading screen for many minutes when the network is genuinely down.
+STATUS_REQUEST_TIMEOUT = 10
+STATUS_RETRY_DELAYS = (2, 4, 8, 16)
 
 ProgressCallback = Callable[[int, int, float, int, int], None]
 RetryCallback = Callable[[int, int, float, Exception], None]
@@ -30,6 +35,14 @@ class ArtifactIntegrityError(ValueError):
     """Downloaded bytes do not match the published artifact metadata."""
 
 
+class StatusNotFound(FileNotFoundError):
+    """The API confirms that the published status pointer does not exist."""
+
+
+class StatusStorageLinkError(ConnectionError):
+    """A newly issued temporary storage link could not serve status.json."""
+
+
 def normalize_folder(folder: str) -> str:
     name = str(folder or "").strip().strip("/")
     if not name or any(part in ("", ".", "..") for part in name.split("/")):
@@ -38,7 +51,7 @@ def normalize_folder(folder: str) -> str:
 
 
 def _request(method: str, url: str, token: str, *, params: dict | None = None,
-             data: bytes | None = None):
+             data: bytes | None = None, timeout: float = DOWNLOAD_TIMEOUT):
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(
@@ -50,34 +63,91 @@ def _request(method: str, url: str, token: str, *, params: dict | None = None,
             "User-Agent": "photobooth-update/1",
         },
     )
-    return urllib.request.urlopen(request, timeout=60)
+    return urllib.request.urlopen(request, timeout=timeout)
 
 
-def read_status(folder: str) -> dict | None:
+def _read_status_once(root: str, token: str) -> dict:
+    # Ask for a new storage URL on every attempt. Yandex download links are
+    # temporary, and retrying a link issued while the network was unhealthy is
+    # less reliable than resolving the path again through the API.
+    try:
+        link = _download_link(
+            f"{root}/status.json",
+            token,
+            timeout=STATUS_REQUEST_TIMEOUT,
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise StatusNotFound from exc
+        raise
+    request = urllib.request.Request(
+        link, headers={"User-Agent": "photobooth-update/1"})
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=STATUS_REQUEST_TIMEOUT,
+        ) as response:
+            status = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        # A 403/404 from cloud-api means a permanent token/path problem, but
+        # the same response from the freshly issued temporary storage URL can
+        # be propagation or expiry. Resolve a new link on the next attempt.
+        if exc.code in {403, 404}:
+            raise StatusStorageLinkError(
+                f"temporary status link returned HTTP {exc.code}"
+            ) from exc
+        raise
+    if not isinstance(status, dict):
+        raise ValueError("status.json root must be an object")
+    return status
+
+
+def read_status(
+    folder: str,
+    *,
+    on_retry: RetryCallback | None = None,
+    retry_delays: Sequence[float] = STATUS_RETRY_DELAYS,
+) -> dict | None:
     token = os.environ.get("YADISK_TOKEN", "").strip()
     if not token:
         return None
     root = normalize_folder(folder)
-    try:
-        with _request("GET", f"{API}/resources/download", token,
-                      params={"path": f"{root}/status.json"}) as response:
-            link = json.loads(response.read())["href"]
-        request = urllib.request.Request(
-            link, headers={"User-Agent": "photobooth-update/1"})
-        with urllib.request.urlopen(request, timeout=60) as response:
-            status = json.loads(response.read())
-        if not isinstance(status, dict):
-            raise ValueError("status.json root must be an object")
-        return status
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
+    delays = tuple(float(delay) for delay in retry_delays)
+    if any(delay < 0 for delay in delays):
+        raise ValueError("invalid status retry delay")
+    attempts = len(delays) + 1
+    for attempt in range(1, attempts + 1):
+        log.info(
+            "Disk update: status check attempt %d/%d",
+            attempt,
+            attempts,
+        )
+        try:
+            return _read_status_once(root, token)
+        except StatusNotFound:
             return None
-        raise
+        except Exception as exc:
+            error = exc
+
+        if (attempt >= attempts
+                or not _retryable_status_error(error)):
+            raise error
+        delay = delays[attempt - 1]
+        if on_retry:
+            on_retry(attempt, attempts, delay, error)
+        time.sleep(delay)
+
+    raise AssertionError("unreachable")
 
 
-def _download_link(path: str, token: str) -> str:
+def _download_link(
+    path: str,
+    token: str,
+    *,
+    timeout: float = DOWNLOAD_TIMEOUT,
+) -> str:
     with _request("GET", f"{API}/resources/download", token,
-                  params={"path": path}) as response:
+                  params={"path": path}, timeout=timeout) as response:
         payload = json.loads(response.read())
     link = payload.get("href") if isinstance(payload, dict) else None
     if not isinstance(link, str) or not link.startswith(("http://", "https://")):
@@ -85,9 +155,7 @@ def _download_link(path: str, token: str) -> str:
     return link
 
 
-def _retryable_download_error(exc: Exception) -> bool:
-    if isinstance(exc, ArtifactIntegrityError):
-        return True
+def _retryable_network_error(exc: Exception) -> bool:
     if isinstance(exc, urllib.error.HTTPError):
         return exc.code in {408, 425, 429, 500, 502, 503, 504}
     if isinstance(exc, (
@@ -103,9 +171,26 @@ def _retryable_download_error(exc: Exception) -> bool:
         # in URLError, especially on Windows.
         return exc.errno in {32, 54, 60, 101, 104, 110, 111, 113} \
             or getattr(exc, "winerror", None) in {
-                64, 10051, 10053, 10054, 10060, 10061, 10065,
+                64, 10051, 10053, 10054, 10060, 10061, 10065, 11001,
             }
     return False
+
+
+def _retryable_download_error(exc: Exception) -> bool:
+    return (
+        isinstance(exc, ArtifactIntegrityError)
+        or _retryable_network_error(exc)
+    )
+
+
+def _retryable_status_error(exc: Exception) -> bool:
+    # A cleanly truncated tiny response may surface only as invalid JSON rather
+    # than a socket exception. Fetch it again, but do not retry other schema or
+    # validation errors caused by a bad published status file.
+    return (
+        isinstance(exc, json.JSONDecodeError)
+        or _retryable_network_error(exc)
+    )
 
 
 def _download_artifact_once(

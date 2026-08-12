@@ -1,24 +1,12 @@
 (function () {
-    const routes = {
-        "no-camera": "no_camera",
-        "camera-searching": "camera_searching",
-        idle: "idle",
-        "idle-locked": "idle_locked",
-        shooting: "shooting",
-        processing: "processing",
-        template: "template",
-        "photo-choice": "photo_choice",
-        "template-multi": "template_multi",
-        done: "done",
-    };
+    const core = window.PhotoboothCore;
 
     const scriptUrl = new URL(document.currentScript.src);
     const devAssetsUrl = new URL("./", scriptUrl);
     const projectUrl = new URL("../../", scriptUrl);
 
     function currentRoute() {
-        const hash = location.hash.slice(1).trim().toLowerCase();
-        return routes[hash] ?? null;
+        return core.previewRoute(location.hash);
     }
 
     async function readJson(url) {
@@ -86,49 +74,6 @@
         return assetUrl(`photo-${number}-${variant}.svg`);
     }
 
-    function buildTemplateOptions(appConfig, templateConfig) {
-        const definitions = templateConfig.templates;
-        if (!definitions || typeof definitions !== "object") {
-            throw new Error("template config has no templates");
-        }
-        const photoCount = Math.max(
-            1,
-            Math.floor(Number(appConfig.num_photos)) || 1,
-        );
-
-        return Object.entries(definitions).map(([name, definition]) => {
-            const photoChoice = definition.photo_choice === true;
-            const option = {
-                name,
-                label: typeof definition.label === "string" && definition.label
-                    ? definition.label
-                    : name,
-                preview_url: photoChoice
-                    ? photoUrl(0, true)
-                    : assetUrl(
-                        definition.preview_split === "horizontal"
-                            ? "template-strips.svg"
-                            : "template-grid.svg",
-                    ),
-            };
-            if (photoChoice) {
-                option.photo_choice = true;
-                option.photo_previews = Array.from(
-                    { length: photoCount },
-                    (_, photoIndex) => ({
-                        photo_index: photoIndex,
-                        with_frame_url: photoUrl(photoIndex, true),
-                        without_frame_url: photoUrl(photoIndex, false),
-                        // No session originals in preview mode: the viewer
-                        // simply keeps showing the placeholder.
-                        original_url: photoUrl(photoIndex, false),
-                    }),
-                );
-            }
-            return option;
-        });
-    }
-
     function showError(error) {
         console.error("Could not open photobooth preview:", error);
         document.querySelectorAll(".screen").forEach(screen => {
@@ -189,7 +134,11 @@
                 const maxSheets = Math.floor(
                     Number(appConfig.multi_print_max_sheets));
                 api.switchScreen("template_select", {
-                    templates: buildTemplateOptions(appConfig, templateConfig),
+                    templates: core.buildPreviewTemplateOptions(
+                        appConfig,
+                        templateConfig,
+                        { assetUrl, photoUrl },
+                    ),
                     timeout: appConfig.template_select_timeout,
                     // Preview always offers the mode so its layout can be
                     // checked; the booth only shows it in the technical event.

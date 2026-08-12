@@ -1051,7 +1051,22 @@ def _update_from_disk() -> str | None:
     )
     folder = config.get("yadisk_updates_folder", "photobooth_system/updates")
     log.info("Disk update: checking %s/status.json", folder.rstrip("/"))
-    status = read_status(folder)
+
+    def report_status_retry(attempt, attempts, delay, exc):
+        log.warning(
+            "Disk update: status check attempt %d/%d failed: %s; "
+            "retrying in %.0fs",
+            attempt,
+            attempts,
+            exc,
+            delay,
+        )
+        _ui_progress(
+            "Нет связи с Яндекс Диском · "
+            f"повтор {attempt + 1}/{attempts} через {delay:.0f} с"
+        )
+
+    status = read_status(folder, on_retry=report_status_retry)
     if not status:
         log.info("Disk update: status.json not available")
         _ui_log("На Диске нет обновлений")

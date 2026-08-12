@@ -1,3 +1,5 @@
+const core = window.PhotoboothCore;
+
 const screens = {
     no_camera: document.getElementById("screen-no-camera"),
     idle: document.getElementById("screen-idle"),
@@ -89,30 +91,18 @@ let renderedPoseSignature = "";
 const PHOTO_PREVIEW_CYCLE_MS = 500;
 const IDLE_POSE_GROUP_COUNT = 3;
 
-function shuffledCopy(items) {
-    const shuffled = [...items];
-    for (let index = shuffled.length - 1; index > 0; index--) {
-        const swapIndex = Math.floor(Math.random() * (index + 1));
-        [shuffled[index], shuffled[swapIndex]] = [
-            shuffled[swapIndex],
-            shuffled[index],
-        ];
-    }
-    return shuffled;
-}
-
 function resetIdlePoseGroups() {
     idlePoseGroups = Array.from(
         { length: IDLE_POSE_GROUP_COUNT },
         () => [],
     );
-    shuffledCopy(poseExampleUrls).forEach((url, index) => {
+    core.shuffledCopy(poseExampleUrls).forEach((url, index) => {
         idlePoseGroups[index % IDLE_POSE_GROUP_COUNT].push(url);
     });
 }
 
 function resetShootingPosePool() {
-    shootingPosePool = shuffledCopy(poseExampleUrls);
+    shootingPosePool = core.shuffledCopy(poseExampleUrls);
     shootingPoseSelections.clear();
     renderedPoseSignature = "";
 }
@@ -174,39 +164,12 @@ function renderIdlePoseBackdrop() {
     });
 }
 
-function frameWord(count) {
-    const mod100 = count % 100;
-    const mod10 = count % 10;
-    if (mod100 >= 11 && mod100 <= 14) return "КАДРОВ";
-    if (mod10 === 1) return "КАДР";
-    if (mod10 >= 2 && mod10 <= 4) return "КАДРА";
-    return "КАДРОВ";
-}
-
-function secondWord(count) {
-    const mod100 = count % 100;
-    const mod10 = count % 10;
-    if (mod100 >= 11 && mod100 <= 14) return "СЕКУНД";
-    if (mod10 === 1) return "СЕКУНДА";
-    if (mod10 >= 2 && mod10 <= 4) return "СЕКУНДЫ";
-    return "СЕКУНД";
-}
-
-function sheetWord(count) {
-    const mod100 = count % 100;
-    const mod10 = count % 10;
-    if (mod100 >= 11 && mod100 <= 14) return "листов";
-    if (mod10 === 1) return "лист";
-    if (mod10 >= 2 && mod10 <= 4) return "листа";
-    return "листов";
-}
-
 // A basket keeps the printer busy well past the done screen, so the guest is
 // told how many sheets are still coming instead of leaving after the first one.
 function renderDoneTitle(data = {}) {
     const sheets = Math.floor(Number(data.print_sheets));
     doneTitle.textContent = Number.isFinite(sheets) && sheets > 1
-        ? `Печатаем ${sheets} ${sheetWord(sheets)}…`
+        ? `Печатаем ${sheets} ${core.sheetWord(sheets)}…`
         : "Идёт печать";
 }
 
@@ -220,8 +183,8 @@ function configureIdleSessionInfo(cfg) {
         ? Math.max(0, configuredSeconds)
         : 5;
     idleSessionInfo.textContent = (
-        `${photoCount} ${frameWord(photoCount)} С ТАЙМЕРОМ `
-        + `${countdownSeconds} ${secondWord(countdownSeconds)}`
+        `${photoCount} ${core.frameWord(photoCount)} С ТАЙМЕРОМ `
+        + `${countdownSeconds} ${core.secondWord(countdownSeconds)}`
     );
 }
 
@@ -445,23 +408,25 @@ function syncSessionContext(state, data = {}) {
 }
 
 function refreshQr() {
-    const visibleStates = new Set(["composing", "printing", "done", "idle"]);
-    const resultStates = new Set(["composing", "printing", "done"]);
     const url = sessionLinks.get(currentSessionId);
-    if (!config.show_qr || !url || typeof qrcode === "undefined") {
+    const presentation = core.qrPresentation(currentState, {
+        available: Boolean(config.show_qr && url
+            && typeof qrcode !== "undefined"),
+        dismissed: dismissedQrSessionId === currentSessionId,
+    });
+    if (!presentation.modal && !presentation.result) {
         hideQrModal();
         hideResultQr();
         return;
     }
 
-    if (resultStates.has(currentState)) {
+    if (presentation.result) {
         showResultQr(url);
     } else {
         hideResultQr();
     }
 
-    if (!visibleStates.has(currentState)
-            || dismissedQrSessionId === currentSessionId) {
+    if (!presentation.modal) {
         hideQrModal();
         return;
     }
@@ -559,20 +524,7 @@ function _doSwitch(state, data) {
     }
     Object.values(screens).forEach((s) => (s.hidden = true));
 
-    const map = {
-        no_camera: "no_camera",
-        camera_searching: "no_camera",
-        idle: "idle",
-        countdown: "shooting",
-        shooting: "shooting",
-        processing: "processing",
-        template_select: "template",
-        composing: "done",
-        printing: "done",
-        done: "done",
-    };
-
-    const key = map[state];
+    const key = core.screenForState(state);
     if (key && screens[key]) screens[key].hidden = false;
     setLiveView(key === "shooting");
     if (key === "done") renderDoneTitle(data);
@@ -671,10 +623,6 @@ function lockTemplateSelection() {
 // One entry per distinct sheet layout. The key matches what the backend treats
 // as one print item, so a framed and an unframed copy of the same photo are
 // separate entries and identical taps only raise a counter.
-function printItemKey(item) {
-    return `${item.template}|${item.photo_index ?? ""}|${item.with_frame}`;
-}
-
 function basketTotal() {
     let total = 0;
     printBasket.forEach((entry) => { total += entry.copies; });
@@ -682,7 +630,7 @@ function basketTotal() {
 }
 
 function basketCopies(item) {
-    return printBasket.get(printItemKey(item))?.copies ?? 0;
+    return printBasket.get(core.printItemKey(item))?.copies ?? 0;
 }
 
 function basketTemplateTotal(templateName) {
@@ -697,13 +645,16 @@ function adjustBasket(item, delta) {
     // templateSkip.disabled marks a locked-in selection: the choice is already
     // sent, so the basket must not change any more.
     if (!multiSelectActive || templateSkip.disabled) return;
-    const key = printItemKey(item);
+    const key = core.printItemKey(item);
     const current = basketCopies(item);
-    const otherSheets = basketTotal() - current;
     // The cap counts physical sheets, so it is checked against the whole
     // basket and not against one tile.
-    const next = Math.max(
-        0, Math.min(current + delta, multiPrintMaxSheets - otherSheets));
+    const next = core.nextBasketCopies(
+        current,
+        delta,
+        basketTotal(),
+        multiPrintMaxSheets,
+    );
     if (next === current) return;
     if (next === 0) {
         printBasket.delete(key);
@@ -995,15 +946,12 @@ function renderTemplateOptions(options) {
 // The frame default lives in config_app.json, so backend and frontend cannot
 // drift apart. Missing config keeps the plain photo first.
 function defaultWithFrame() {
-    return config.photo_choice_default_with_frame === true;
+    return core.defaultWithFrame(config);
 }
 
 function photoChoiceTileUrl(preview) {
     // The tile advertises the same variant the chooser opens on.
-    const url = defaultWithFrame()
-        ? preview.with_frame_url
-        : preview.without_frame_url;
-    return url ?? preview.with_frame_url;
+    return core.photoChoiceTileUrl(preview, defaultWithFrame());
 }
 
 function startPhotoPreviewCycle() {
@@ -1180,7 +1128,7 @@ let viewerIndex = 0;
 
 function showViewerFrame(index) {
     if (!viewerFrames.length) return;
-    viewerIndex = (index + viewerFrames.length) % viewerFrames.length;
+    viewerIndex = core.wrappedIndex(index, viewerFrames.length);
     const frame = viewerFrames[viewerIndex];
     // Every frame starts unzoomed, so a leftover pan cannot hide the new photo.
     resetViewerTransform();
@@ -1249,17 +1197,7 @@ function togglePhotoViewer() {
 }
 
 function configurePhotoViewer(options) {
-    const source = Array.isArray(options)
-        ? options.find((option) => option?.photo_choice === true
-            && Array.isArray(option.photo_previews)
-            && option.photo_previews.length > 0)
-        : null;
-    viewerFrames = source
-        ? source.photo_previews.map((preview) => ({
-            previewUrl: preview.without_frame_url ?? preview.with_frame_url,
-            originalUrl: preview.original_url,
-        }))
-        : [];
+    viewerFrames = core.buildViewerFrames(options);
     templateZoom.hidden = viewerFrames.length === 0;
 }
 
@@ -1300,25 +1238,16 @@ function clampViewerOffset() {
     const frame = photoViewerViewport.getBoundingClientRect();
     const width = photoViewerImage.clientWidth * viewerScale;
     const height = photoViewerImage.clientHeight * viewerScale;
-    const limitX = Math.max(0, (width - frame.width) / 2);
-    const limitY = Math.max(0, (height - frame.height) / 2);
-    viewerOffsetX = Math.min(limitX, Math.max(-limitX, viewerOffsetX));
-    viewerOffsetY = Math.min(limitY, Math.max(-limitY, viewerOffsetY));
+    viewerOffsetX = core.clampAxisOffset(viewerOffsetX, width, frame.width);
+    viewerOffsetY = core.clampAxisOffset(viewerOffsetY, height, frame.height);
 }
 
 function pointerCentroid() {
-    const points = [...viewerPointers.values()];
-    const total = points.reduce(
-        (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
-        { x: 0, y: 0 },
-    );
-    return { x: total.x / points.length, y: total.y / points.length };
+    return core.pointCentroid([...viewerPointers.values()]);
 }
 
 function pointerSpread() {
-    const [first, second] = [...viewerPointers.values()];
-    if (!second) return 0;
-    return Math.hypot(second.x - first.x, second.y - first.y);
+    return core.pointSpread([...viewerPointers.values()]);
 }
 
 function beginGesture() {
@@ -1377,12 +1306,17 @@ function endViewerPointer(event) {
     if (wasSingleTouch && viewerScale === 1 && event.type === "pointerup") {
         const travel = event.clientX - start.centroid.x;
         const drift = Math.abs(event.clientY - start.centroid.y);
-        const swipe = window.innerWidth * VIEWER_SWIPE_RATIO;
-        if (Math.abs(travel) > swipe && Math.abs(travel) > drift) {
+        const action = core.viewerReleaseAction({
+            travel,
+            drift,
+            viewportWidth: window.innerWidth,
+            swipeRatio: VIEWER_SWIPE_RATIO,
+        });
+        if (action === "next" || action === "previous") {
             // A horizontal swipe flips frames, but only while not zoomed in:
             // otherwise the same movement is a pan.
-            showViewerFrame(viewerIndex + (travel < 0 ? 1 : -1));
-        } else if (Math.abs(travel) < 10 && drift < 10) {
+            showViewerFrame(viewerIndex + (action === "next" ? 1 : -1));
+        } else if (action === "close") {
             // A plain tap anywhere over the photo area closes the viewer, so
             // the whole dark overlay behaves the same way.
             closePhotoViewer();

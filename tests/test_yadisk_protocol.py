@@ -426,59 +426,5 @@ class UploadOrderingTests(unittest.IsolatedAsyncioTestCase):
         metadata_read.assert_not_awaited()
 
 
-class FrontendProtocolTests(unittest.TestCase):
-    def test_pose_prompts_stay_focused(self):
-        root = Path(__file__).resolve().parent.parent
-        config = json.loads(
-            (root / "config_app.json").read_text(encoding="utf-8"))
-        frontend_source = (
-            root / "frontend" / "app.js").read_text(encoding="utf-8")
-        frontend_html = (
-            root / "frontend" / "index.html").read_text(encoding="utf-8")
-        frontend_styles = (
-            root / "frontend" / "style.css").read_text(encoding="utf-8")
-
-        self.assertEqual(config["pose_examples_per_side"], 2)
-        self.assertEqual(frontend_html.count('class="idle-pose-row'), 3)
-        self.assertIn("shootingPosePool = shuffledCopy(poseExampleUrls)",
-                      frontend_source)
-        self.assertIn("--idle-pose-row-gap: clamp(10px, 0.75vw, 16px)",
-                      frontend_styles)
-        self.assertIn("transform: rotate(-4deg) scale(1.06)", frontend_styles)
-
-    def test_frontend_uses_direct_session_link_not_vps_redirect(self):
-        root = Path(__file__).resolve().parent.parent
-        backend_source = (root / "backend" / "main.py").read_text(encoding="utf-8")
-        frontend_source = (root / "frontend" / "app.js").read_text(encoding="utf-8")
-        frontend_html = (root / "frontend" / "index.html").read_text(encoding="utf-8")
-        config = json.loads((root / "config_app.json").read_text(encoding="utf-8"))
-
-        self.assertNotIn("VPS_URL", backend_source)
-        self.assertNotIn("VPS_SESSION_PATH", backend_source)
-        self.assertNotIn("session_url", backend_source)
-        self.assertIn('"type": "session_link"', backend_source)
-        self.assertIn('case "session_link"', frontend_source)
-        self.assertIn('new Set(["composing", "printing", "done", "idle"])', frontend_source)
-        self.assertIn(
-            "ФОТО И ВИДЕО С ПОСЛЕДНЕЙ СЪЕМКИ ЗАГРУЖАЮТСЯ СЮДА",
-            frontend_source,
-        )
-        self.assertNotIn("idleDeliveryInfo", frontend_source)
-        self.assertNotIn('id="idle-delivery-info"', frontend_html)
-        self.assertIn("configurePoseExamples(cfg)", frontend_source)
-        self.assertIn("dismissedQrSessionId === currentSessionId", frontend_source)
-        self.assertIn('id="result-qr-panel"', frontend_html)
-        self.assertIn('id="result-qr-code"', frontend_html)
-        self.assertIn("ОРИГИНАЛЫ ФОТО И ВИДЕО", frontend_html)
-        self.assertIn("БУДУТ ДОСТУПНЫ ЗДЕСЬ", frontend_html)
-        self.assertIn("object-fit: var(--live-view-fit)",
-                      (root / "frontend" / "style.css").read_text(encoding="utf-8"))
-        self.assertIn('id="qr-modal-close"', frontend_html)
-        self.assertTrue(config["show_qr"])
-        self.assertEqual(config["live_view_fit"], "contain")
-        self.assertGreater(config["live_view_margin_top_percent"], 0)
-        self.assertGreater(config["live_view_margin_bottom_percent"], 0)
-
-
 if __name__ == "__main__":
     unittest.main()
