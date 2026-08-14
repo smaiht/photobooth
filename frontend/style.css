@@ -12,21 +12,7 @@
     --pose-card-max-height: calc((100% - 0.8vh) / 2);
     --idle-pose-gap: clamp(20px, 1.5vw, 32px);
     --idle-pose-row-gap: clamp(10px, 0.75vw, 16px);
-    /* At 4deg, a row shifts vertically by about 3.5vw between the screen
-       centre and edge. The extra 1vh keeps the outer corners visible. */
-    --idle-pose-edge-clearance: calc(3.6vw + 1vh);
-    --idle-pose-size: min(
-        350px,
-        calc(
-            (
-                100vh
-                - var(--idle-pose-edge-clearance)
-                - var(--idle-pose-edge-clearance)
-                - var(--idle-pose-row-gap)
-                - var(--idle-pose-row-gap)
-            ) / 3
-        )
-    );
+    --idle-pose-size: calc((100vh - var(--idle-pose-row-gap)) / 2);
     --idle-hero-motion-duration: 54s;
     /* The gesture still takes about 1.75s; only the empty pause is shorter. */
     --idle-tap-cycle-duration: 3.5s;
@@ -90,7 +76,7 @@ html, body {
     justify-content: center;
     gap: var(--idle-pose-row-gap);
     overflow: hidden;
-    transform: rotate(-4deg);
+    transform: rotate(0deg);
     transform-origin: center;
     pointer-events: none;
 }
@@ -184,18 +170,23 @@ html, body {
 
 .idle-hero {
     position: relative;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-areas:
+        "title prompt"
+        "info prompt";
+    grid-template-columns: auto min(28vw, 520px);
     align-items: center;
-    padding: 5vh;
+    column-gap: 4vw;
+    padding: 3.5vh 3vw;
     border: 2px solid rgba(24, 24, 24, 0.1);
     border-radius: clamp(28px, 2.8vw, 54px);
-    background: rgba(255, 255, 255, 0.96);
-    box-shadow: 0 2vh 5vh rgba(24, 24, 24, 0.17);
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 1.4vh 3.5vh rgba(24, 24, 24, 0.15);
     text-align: center;
 }
 
 .idle-hero h1 {
+    grid-area: title;
     margin: 0;
     line-height: 1.05;
 }
@@ -207,23 +198,24 @@ html, body {
 
 .idle-title-main {
     color: #181818;
-    font-size: 10vh;
+    font-size: 7vh;
     font-weight: 700;
     letter-spacing: 0.07em;
 }
 
 .idle-title-sub {
-    margin-top: 1.5vh;
+    margin-top: 1vh;
     color: #3f3c37;
-    font-size: 4.5vh;
+    font-size: 3vh;
     font-weight: 600;
     letter-spacing: 0.06em;
 }
 
 .idle-session-info {
-    margin: 1.5vh 0 3vh;
+    grid-area: info;
+    margin: 1vh 0 0;
     color: #5b5750;
-    font-size: 2.5vh;
+    font-size: 2vh;
     font-weight: 700;
     letter-spacing: 0.09em;
 }
@@ -256,6 +248,7 @@ html, body {
 }
 
 .tap-prompt {
+    grid-area: prompt;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -264,14 +257,14 @@ html, body {
 
 .idle-start-button {
     position: relative;
-    width: min(40vw, 760px);
-    padding: 3vh;
+    width: 100%;
+    padding: 2.4vh;
     border: 0;
     border-radius: 999px;
     background: #191919;
     box-shadow: 0 1.2vh 2.8vh rgba(0, 0, 0, 0.2);
     color: #fff;
-    font: 700 clamp(34px, 2.8vw, 54px) 'Comfortaa', sans-serif;
+    font: 700 clamp(32px, 2.4vw, 46px) 'Comfortaa', sans-serif;
     letter-spacing: 0.07em;
 }
 

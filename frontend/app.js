@@ -88,7 +88,7 @@ const shootingPoseSelections = new Map();
 let renderedPoseSignature = "";
 
 const PHOTO_PREVIEW_CYCLE_MS = 500;
-const IDLE_POSE_GROUP_COUNT = 3;
+const IDLE_POSE_GROUP_COUNT = 2;
 
 function resetIdlePoseGroups() {
     idlePoseGroups = Array.from(
