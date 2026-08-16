@@ -36,6 +36,7 @@ from .config import (
     load_event_config,
     preset_names,
     update_camera_config_field,
+    update_template_pack,
 )
 from .composer import (
     DEFAULT_PRINT_SIZE,
@@ -1570,6 +1571,43 @@ async def handle_disk_command(command: dict) -> dict:
             "_post_action": _do_restart,
         }
 
+    if cmd == "set_template_pack":
+        if STATE not in ("idle", "no_camera", "camera_searching"):
+            return {
+                "status": "error",
+                "message": f"Template pack не изменён: state={STATE}",
+            }
+        if _background_uploads:
+            return {
+                "status": "error",
+                "message": (
+                    "Template pack не изменён: завершается подготовка загрузки"
+                ),
+            }
+        name = data.get("name", "") if isinstance(data, dict) else ""
+        try:
+            old_name, new_name, changed = update_template_pack(name)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return {
+                "status": "error",
+                "message": f"Template pack не изменён: {exc}",
+            }
+        if changed:
+            message = (
+                f"Template pack: {old_name} → {new_name}. "
+                "Перезапуск подтверждён"
+            )
+        else:
+            message = (
+                f"Template pack уже выбран: {new_name}. "
+                "Перезапуск подтверждён"
+            )
+        return {
+            "status": "ok",
+            "message": message,
+            "_post_action": _do_restart,
+        }
+
     if cmd == "set_camera_config":
         if STATE not in ("idle", "no_camera", "camera_searching"):
             return {
@@ -1780,6 +1818,7 @@ async def handle_disk_command(command: dict) -> dict:
                 status_lines.extend(config_lines)
         status_lines.extend([
             f"Event: {event}",
+            f"Template pack: {CONFIG.get('template_pack', 'unknown')}",
             f"Upload queue: {yadisk_cloud.pending_count()}",
             f"Version: {version}",
         ])

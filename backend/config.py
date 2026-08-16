@@ -25,6 +25,7 @@ PRINT_JOBS_DIR.mkdir(exist_ok=True)
 
 CAMERA_CONFIG_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 CAMERA_PRESET_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+TEMPLATE_PACK_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 # Presets live under a service key, so "/presets ..." can never overwrite them
 # and they stay out of the public-field validation.
 PRESETS_FIELD = "_presets"
@@ -110,13 +111,70 @@ def _coerce_camera_value(field: str, raw_value: str, config: dict):
     return value
 
 
-def _write_camera_config(path: Path, config: dict) -> None:
+def _write_json_config(path: Path, config: dict) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(
         json.dumps(config, ensure_ascii=False, indent=4) + "\n",
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def update_template_pack(
+    name: str,
+    config_path: Path | None = None,
+    templates_dir: Path | None = None,
+) -> tuple[str, str, bool]:
+    """Validate a template pack and atomically select it for the next start."""
+    requested = str(name or "").strip().lower()
+    if not TEMPLATE_PACK_RE.fullmatch(requested):
+        raise ValueError("некорректное имя template pack")
+
+    path = (
+        Path(config_path)
+        if config_path is not None
+        else ROOT_DIR / "config_app.json"
+    )
+    packs_root = (
+        Path(templates_dir)
+        if templates_dir is not None
+        else path.parent / "templates"
+    )
+    pack_config_path = packs_root / requested / "config.json"
+    if not pack_config_path.is_file():
+        available = sorted(
+            candidate.parent.name for candidate in packs_root.glob("*/config.json")
+        )
+        suffix = f"; доступно: {', '.join(available)}" if available else ""
+        raise ValueError(f"неизвестный template pack: {requested}{suffix}")
+
+    pack_config = json.loads(pack_config_path.read_text(encoding="utf-8"))
+    templates = (
+        pack_config.get("templates")
+        if isinstance(pack_config, dict)
+        else None
+    )
+    if not isinstance(templates, dict) or not templates:
+        raise ValueError(f"template pack {requested} не содержит шаблонов")
+
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("config_app.json должен содержать JSON-объект")
+    old_name = config.get("template_pack")
+    if not isinstance(old_name, str) or not old_name:
+        raise ValueError("config_app.json не содержит template_pack")
+    default_template = config.get("default_template")
+    if default_template not in templates:
+        raise ValueError(
+            f"template pack {requested} не содержит default_template "
+            f"{default_template!r}"
+        )
+    if old_name == requested:
+        return old_name, requested, False
+
+    config["template_pack"] = requested
+    _write_json_config(path, config)
+    return old_name, requested, True
 
 
 def _load_camera_config(config_path: Path | None) -> tuple[Path, dict]:
@@ -173,7 +231,7 @@ def update_camera_config_field(
         return normalized_field, old_value, new_value, False
 
     config[normalized_field] = new_value
-    _write_camera_config(path, config)
+    _write_json_config(path, config)
     return normalized_field, old_value, new_value, True
 
 
@@ -265,5 +323,5 @@ def apply_camera_preset(
 
     for field, (_old, new_value) in changes.items():
         config[field] = new_value
-    _write_camera_config(path, config)
+    _write_json_config(path, config)
     return label, changes, hint

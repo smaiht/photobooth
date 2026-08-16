@@ -581,6 +581,41 @@ class RuntimeDirectoryCleanupCommandTests(unittest.IsolatedAsyncioTestCase):
         clear.assert_not_called()
 
 
+class TemplatePackCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_switches_pack_and_restarts_after_response(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "set_template_pack",
+            "data": {"name": "birthday"},
+        }
+        with patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_background_uploads", set()), \
+             patch(
+                 "backend.main.update_template_pack",
+                 return_value=("park_universal", "birthday", True),
+             ) as update:
+            result = await main.handle_disk_command(command)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("park_universal → birthday", result["message"])
+        self.assertIs(result["_post_action"], main._do_restart)
+        update.assert_called_once_with("birthday")
+
+    async def test_does_not_switch_pack_during_session(self):
+        with patch.object(main, "STATE", "countdown"), patch(
+            "backend.main.update_template_pack",
+        ) as update:
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "set_template_pack",
+                "data": {"name": "birthday"},
+            })
+
+        self.assertEqual(result["status"], "error")
+        self.assertNotIn("_post_action", result)
+        update.assert_not_called()
+
+
 class EventCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_switches_event_and_persists_config(self):
         command = {
@@ -1374,6 +1409,43 @@ class EventConfigEncodingTests(unittest.TestCase):
             config = backend_config.load_event_config()
 
         self.assertEqual(config["yadisk_folder"], "Кафе")
+
+
+class TemplatePackConfigTests(unittest.TestCase):
+    def test_validates_and_atomically_updates_app_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            config_path = root / "config_app.json"
+            templates_dir = root / "templates"
+            pack_dir = templates_dir / "summer"
+            pack_dir.mkdir(parents=True)
+            config_path.write_text(json.dumps({
+                "template_pack": "winter",
+                "default_template": "grid",
+                "other": 123,
+            }), encoding="utf-8")
+            (pack_dir / "config.json").write_text(json.dumps({
+                "templates": {"grid": {}},
+            }), encoding="utf-8")
+
+            result = backend_config.update_template_pack(
+                "summer", config_path, templates_dir,
+            )
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(result, ("winter", "summer", True))
+            self.assertEqual(saved["template_pack"], "summer")
+            self.assertEqual(saved["other"], 123)
+            self.assertEqual(
+                backend_config.update_template_pack(
+                    "summer", config_path, templates_dir,
+                ),
+                ("summer", "summer", False),
+            )
+            with self.assertRaisesRegex(ValueError, "доступно: summer"):
+                backend_config.update_template_pack(
+                    "missing", config_path, templates_dir,
+                )
 
 
 class ConfigExportTests(unittest.TestCase):
