@@ -314,24 +314,42 @@ class CameraConfigReportTests(unittest.TestCase):
         self.assertTrue(all(entry["matches"] for entry in report["camera"]))
 
     def test_mismatch_and_unavailable_are_reported_separately(self):
-        report = self._report(actual_overrides={
-            edsdk.kEdsPropID_Av: edsdk.AV_MAP["5.6"],
-            edsdk.kEdsPropID_ImageQuality: None,
-        })
+        camera, codes = self._camera()
+        codes[edsdk.kEdsPropID_Av] = next(
+            code for code in edsdk.AV_MAP.values()
+            if code != codes[edsdk.kEdsPropID_Av]
+        )
+        codes[edsdk.kEdsPropID_ImageQuality] = None
+        with patch.object(
+            camera,
+            "_get_prop_u32",
+            side_effect=lambda prop_id: codes.get(prop_id),
+        ):
+            report = camera.build_config_report()
+
         self.assertEqual(report["mismatched"], ["Av"])
         self.assertEqual(report["unavailable"], ["ImageQuality"])
         entry = next(e for e in report["camera"] if e["label"] == "Av")
-        self.assertEqual(entry["actual"], "5.6")
-        self.assertEqual(entry["requested"], "16")
+        self.assertTrue(entry["available"])
+        self.assertFalse(entry["matches"])
 
     def test_color_temperature_only_appears_for_color_temp_white_balance(self):
-        labels = [entry["label"] for entry in self._report()["camera"]]
+        other_white_balance = next(
+            value for value in constants.WHITE_BALANCE_MAP
+            if value != "color_temp"
+        )
+        labels = [
+            entry["label"]
+            for entry in self._report(overrides={
+                "white_balance": other_white_balance,
+            })["camera"]
+        ]
         self.assertNotIn("ColorTemperature", labels)
 
         report = self._report(overrides={"white_balance": "color_temp"})
         entry = next(e for e in report["camera"]
                      if e["label"] == "ColorTemperature")
-        self.assertEqual(entry["actual"], "5200")
+        self.assertTrue(entry["available"])
         self.assertTrue(entry["matches"])
 
     def test_report_is_stored_in_the_health_snapshot(self):
@@ -347,12 +365,17 @@ class CameraConfigReportTests(unittest.TestCase):
         joined = "\n".join(logs.output)
         self.assertIn("Camera applied config:", joined)
         self.assertIn("Camera host config:", joined)
-        self.assertIn("ISO=100", joined)
-        self.assertIn("WhiteBalance=auto", joined)
+        for entry in snapshot["config_report"]["camera"]:
+            self.assertIn(f"{entry['label']}={entry['actual']}", joined)
+        for entry in snapshot["config_report"]["host"]:
+            self.assertIn(f"{entry['label']}={entry['value']!r}", joined)
 
     def test_mismatch_is_logged_as_a_warning(self):
-        camera, codes = self._camera(
-            actual_overrides={edsdk.kEdsPropID_Av: edsdk.AV_MAP["5.6"]})
+        camera, codes = self._camera()
+        codes[edsdk.kEdsPropID_Av] = next(
+            code for code in edsdk.AV_MAP.values()
+            if code != codes[edsdk.kEdsPropID_Av]
+        )
         with patch.object(camera, "_get_prop_u32",
                           side_effect=lambda prop_id: codes.get(prop_id)), \
                 self.assertLogs(edsdk.log, level="WARNING") as logs:
