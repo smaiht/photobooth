@@ -1,46 +1,64 @@
 # Template inspection helpers
 
-## Photo-slot layout preview
+## Сборка фона для grid и single
 
-`generate_layout_previews.py` создаёт полноразмерную PNG-копию каждого фона и
-закрывает все фотослоты однотонными серыми прямоугольниками без рамок. Размеры
-и координаты берутся непосредственно из `photo_size_px` и
-`print_layout.photos`, поэтому картинка показывает области, которые займут
-реальные фотографии. Если в `print_layout.foreground` настроен прозрачный
-верхний слой, он накладывается поверх серых слотов — в том же порядке, что и при
-настоящей печати.
-
-Запуск для одного template pack:
+`generate_grid_background.py` масштабирует выбранную картинку ровно до
+`3688x2480` и сохраняет её как `grid_bg.png` рядом с исходником.
 
 ```bash
-python3 templates/generate_layout_previews.py park08082026
+venv/bin/python templates/generate_grid_background.py templates/birthday/source.png
+```
+
+## Сборка фона для двух полосок
+
+`generate_strip_background.py` масштабирует вертикальный исходник до
+`1240x3688`, ставит справа его зеркальную копию и поворачивает получившийся
+лист на 90 градусов против часовой стрелки. Результат `3688x2480` сохраняется
+как `strip_bg.png` рядом с исходником.
+
+```bash
+venv/bin/python templates/generate_strip_background.py templates/birthday/draft.png
+```
+
+## Ручные проверки шаблонов
+
+`generate_template_checks.py` — только ручной диагностический скрипт. Приложение
+его не вызывает. Экран выбора отдельно собирает реальные JPEG-превью с фотографиями
+в `photos/<session>/previews`; уменьшенные статичные слои кешируются рядом с
+фонами как `*_preview.jpg` и `*_preview.png`.
+
+Ручной генератор сначала создаёт layout checks с серыми фотослотами, затем прямо
+поверх них добавляет красные полупрозрачные зоны `print_trim`. Поэтому в trim
+checks тоже остаются плейсхолдеры фотографий, настроенные `foreground` и `texts`.
+Все результаты лежат отдельно в `<pack>/checks/`, исходные background-файлы не
+изменяются.
+
+Запуск для одного или нескольких pack:
+
+```bash
+venv/bin/python templates/generate_template_checks.py birthday
+venv/bin/python templates/generate_template_checks.py birthday park_universal
+```
+
+Без названий обрабатываются все pack:
+
+```bash
+venv/bin/python templates/generate_template_checks.py
 ```
 
 На Windows с embedded Python:
 
 ```bat
-python\python.exe templates\generate_layout_previews.py kvas01aug26
+python\python.exe templates\generate_template_checks.py birthday
 ```
 
-Без имени pack скрипт обрабатывает все конфигурации:
+Имена файлов сгруппированы по шаблону:
 
-```bash
-python3 templates/generate_layout_previews.py
-```
-
-Для шаблонов `grid`, `single` и `strips` рядом с исходными фонами
-появятся `grid_layout_preview.png`, `single_layout_preview.png` и
-`strips_layout_preview.png`. Исходные background-
-файлы не изменяются. Эти PNG предназначены только для ручной проверки и не
-используются приложением. Они не связаны с runtime-кешами слоёв
-`*_preview.jpg` и `*_preview.png`, которые приложение создаёт автоматически для
-экранного выбора шаблона с реальными фотографиями.
-
-Для каждого шаблона с `preview_split: "horizontal"` дополнительно создаётся
-`<template>_single_strip_layout_preview.png`: генератор берёт первую
-горизонтальную половину полного layout preview и поворачивает её по
-`preview_rotation`. Например, `strips_single_strip_layout_preview.png` имеет
-ориентацию одной готовой вертикальной полоски.
+- `layout_<template>_full.png` — полный лист с серыми фотослотами;
+- `layout_strips_1.png` и `layout_strips_2.png` — обе физические полоски;
+- `trim_<template>_full.png` — полный лист с плейсхолдерами и красным trim;
+- `trim_strips_1.png` и `trim_strips_2.png` — обе полоски с правильной внешней
+  стороной trim.
 
 Шаблон, в котором посетитель должен выбрать один из снятых кадров, помечается
 `"photo_choice": true` и обязан иметь единственный слот с `photo_index: 0`.
@@ -65,21 +83,25 @@ python3 templates/generate_layout_previews.py
     "photos": [ ... ],
     "texts": [
         {
-            "box": {"x": 2500, "y": 2180, "width": 1000, "height": 230},
-            "align": "right",
-            "_align_options": ["left", "center", "right"],
-            "valign": "middle",
-            "_valign_options": ["top", "middle", "bottom"],
+            "position": {"x": 3000, "y": 2295},
             "rotate": "none",
             "_rotate_options": ["none", "cw", "ccw"],
             "font": "Comfortaa-VariableFont_wght.ttf",
             "weight": 600,
             "_weight_comment": "Ось wght переменного шрифта, 300..700 у Comfortaa. Для статичного TTF игнорируется.",
             "color": "#ffffff",
+            "stroke_width": 8,
+            "stroke_color": "#8c3b2e",
             "line_spacing": 1.15,
             "lines": [
                 {"text": "{dd} {month_ru} {yyyy}", "size": 96, "weight": 700},
-                {"text": "парк Горького", "size": 54, "color": "#ffe9c8"}
+                {
+                    "text": "парк Горького",
+                    "size": 54,
+                    "color": "#ffe9c8",
+                    "stroke_width": 4,
+                    "stroke_color": "#00000080"
+                }
             ]
         }
     ],
@@ -87,9 +109,17 @@ python3 templates/generate_layout_previews.py
 }
 ```
 
-`font`, `weight`, `size`, `color` и `line_spacing` на уровне блока — значения по
-умолчанию; строка переопределяет только то, что ей нужно. Так путь к шрифту не
-дублируется в каждой строке и не может разъехаться.
+`font`, `weight`, `size`, `color`, `stroke_width`, `stroke_color` и
+`line_spacing` на уровне блока — значения по умолчанию; строка переопределяет
+только то, что ей нужно. Так путь к шрифту не дублируется в каждой строке и не
+может разъехаться. `stroke_width` задаёт толщину обводки в пикселях полного
+печатного растра и по умолчанию равен `0`. `stroke_color` поддерживает
+`#rrggbb` и `#rrggbbaa`; если его не указать, используется цвет самого текста.
+
+`position` — одна точка в координатах полного `print_size`. В ней автоматически
+центрируется весь многострочный блок. Ширины и высоты у блока нет: текст и
+обводка свободно рисуются вокруг точки и ограничиваются только краями самого
+печатного листа. `rotate` поворачивает весь блок вокруг этой же точки.
 
 Поддерживаются ровно два токена даты: `{dd}.{mm}.{yyyy}` даёт `08.08.2026`, а
 `{dd} {month_ru} {yyyy}` — `8 августа 2026`. Русские месяцы стоят в родительном
@@ -98,50 +128,21 @@ python3 templates/generate_layout_previews.py
 не печатает завтрашнее число, а превью и отпечаток всегда совпадают.
 
 Шрифты берутся по имени файла из `assets/fonts`; путь с `..` отклоняется.
-`box` задаётся в координатах полного `print_size`. Подпись стоит держать внутри
-`print_trim.visible_size` — у borderless-печати реально срезается до `55 px` с
-краёв. `rotate` нужен там, где повёрнуты кадры: у strips подпись с `"ccw"`
-поворачивается вместе с полоской. Вторая физическая половина листа требует
-отдельной записи в `texts`, точно так же, как дублируются восемь фотослотов.
+Подпись стоит держать внутри `print_trim.visible_size` — у borderless-печати
+реально срезается до `55 px` с краёв. `rotate` нужен там, где повёрнуты кадры: у
+strips подпись с `"ccw"` поворачивается вместе с полоской. Вторая физическая
+половина листа требует отдельной записи в `texts`, точно так же, как дублируются
+восемь фотослотов.
 
 Текст — это оформление, а не то, за что заплатил гость. Ненайденный шрифт,
 неразобранный цвет или незнакомый токен пишутся в `photobooth.log` как `ERROR`,
 и этот блок просто не рисуется: лист всё равно печатается, без подписи.
 Ошибкой конфигурации считается только структурная опечатка в паке —
-например, `texts` не список или `box` за пределами листа.
+например, `texts` не список или `position` за пределами листа.
 
-Оба скрипта проверки, `generate_layout_previews.py` и
-`generate_trim_overlays.py`, тоже рисуют этот слой, поэтому служебные PNG
-показывают подпись там же, где её увидит гость. В trim overlay видно, попадает
-ли она под физический обрез. Если у двух шаблонов один фон, но разные подписи,
-overlay сохраняется как `<фон>_<шаблон>_trim.png`, чтобы файлы не
-перезаписывали друг друга.
-
-## Print trim overlay
-
-`generate_trim_overlays.py` проходит по всем template packs с файлом
-`config.json` внутри этой папки. Для каждого background из `print_layout` он
-сначала накладывает настроенный `foreground`, если он есть, а затем создаёт
-PNG-копию с красной полупрозрачной зоной `print_trim`.
-Перед генерацией скрипт также проверяет, что `print_trim.visible_size` точно
-равен `print_size` за вычетом четырёх trim-значений.
-
-Запуск из корня проекта:
-
-```bash
-python3 templates/generate_trim_overlays.py
-```
-
-На Windows с embedded Python:
-
-```bat
-python\python.exe templates\generate_trim_overlays.py
-```
-
-Например, рядом с `grid_bg.png` и `strip_bg.png` появятся
-`grid_bg_trim.png` и `strip_bg_trim.png`. Исходные background-файлы не
-изменяются. Overlay-копии служат только для визуальной проверки и никогда не
-используются компоновщиком или принтером.
+`generate_template_checks.py` рисует этот же текстовый слой в обоих видах
+ручных проверок, поэтому layout check показывает его положение, а trim check —
+попадает ли подпись под физический обрез.
 
 Дополнительные библиотеки устанавливать не нужно: скрипт использует только
 стандартную библиотеку Python и Pillow, уже зафиксированный в

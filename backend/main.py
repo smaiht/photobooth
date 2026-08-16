@@ -701,7 +701,7 @@ async def _run_session():
     num_photos = int(CONFIG["num_photos"])
     if num_photos <= 0:
         raise ValueError("num_photos must be positive")
-    template_dir = TEMPLATES_DIR / CONFIG.get("template_pack", "default")
+    template_dir = TEMPLATES_DIR / CONFIG["template_pack"]
     tpl_config = json.loads((template_dir / "config.json").read_text(encoding="utf-8"))
     available_templates = tpl_config.get("templates", {})
     if not isinstance(available_templates, dict) or not available_templates:

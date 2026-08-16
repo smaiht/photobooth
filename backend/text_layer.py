@@ -22,8 +22,6 @@ from typing import NamedTuple
 from PIL import Image, ImageDraw, ImageFont
 
 
-ALIGN_OPTIONS = ("left", "center", "right")
-VALIGN_OPTIONS = ("top", "middle", "bottom")
 # One rotation vocabulary for photo slots, previews and text blocks. It lives
 # here so this module needs no import from composer, which imports it.
 ROTATION_TRANSPOSE = {
@@ -55,15 +53,13 @@ class TextLine(NamedTuple):
     size: int
     weight: int | None
     color: str
+    stroke_width: int
+    stroke_color: str
 
 
 class TextBlock(NamedTuple):
     x: int
     y: int
-    width: int
-    height: int
-    align: str
-    valign: str
     rotation: str
     line_spacing: float
     lines: list[TextLine]
@@ -110,28 +106,23 @@ def _validated_block(
     context: str,
     print_size: tuple[int, int],
 ) -> TextBlock:
-    box = raw.get("box")
-    if not isinstance(box, dict):
-        raise ValueError(f"{context} needs a box object")
+    position = raw.get("position")
+    if not isinstance(position, dict):
+        raise ValueError(f"{context} needs a position object")
     try:
-        values = tuple(box[name] for name in ("x", "y", "width", "height"))
+        x, y = (position[name] for name in ("x", "y"))
     except KeyError as exc:
-        raise ValueError(f"{context} box needs x, y, width and height") from exc
-    if not all(isinstance(value, int) and not isinstance(value, bool)
-               for value in values):
-        raise ValueError(f"{context} box values must be integers")
-    x, y, width, height = values
-    if x < 0 or y < 0 or width <= 0 or height <= 0:
-        raise ValueError(f"{context} box must be positive and on the sheet")
-    if x + width > print_size[0] or y + height > print_size[1]:
-        raise ValueError(f"{context} box exceeds the print size {print_size}")
+        raise ValueError(f"{context} position needs x and y") from exc
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool)
+        for value in (x, y)
+    ):
+        raise ValueError(f"{context} position values must be integers")
+    if not 0 <= x <= print_size[0] or not 0 <= y <= print_size[1]:
+        raise ValueError(
+            f"{context} position must be inside the print size {print_size}"
+        )
 
-    align = raw.get("align", "center")
-    if align not in ALIGN_OPTIONS:
-        raise ValueError(f"{context} has unsupported align {align!r}")
-    valign = raw.get("valign", "middle")
-    if valign not in VALIGN_OPTIONS:
-        raise ValueError(f"{context} has unsupported valign {valign!r}")
     rotation = raw.get("rotate", "none")
     if rotation not in ROTATION_TRANSPOSE:
         raise ValueError(f"{context} has unsupported rotate {rotation!r}")
@@ -146,6 +137,8 @@ def _validated_block(
     block_size = raw.get("size")
     block_weight = raw.get("weight")
     block_color = raw.get("color", DEFAULT_COLOR)
+    block_stroke_width = raw.get("stroke_width", 0)
+    block_stroke_color = raw.get("stroke_color")
 
     raw_lines = raw.get("lines")
     if not isinstance(raw_lines, list) or not raw_lines:
@@ -179,12 +172,22 @@ def _validated_block(
         color = raw_line.get("color", block_color)
         if not isinstance(color, str) or not color:
             raise ValueError(f"{line_context} color must be a string")
-        lines.append(TextLine(text, font, size, weight, color))
+        stroke_width = raw_line.get("stroke_width", block_stroke_width)
+        if (not isinstance(stroke_width, int) or isinstance(stroke_width, bool)
+                or stroke_width < 0):
+            raise ValueError(
+                f"{line_context} stroke_width must be a non-negative integer"
+            )
+        stroke_color = raw_line.get("stroke_color", block_stroke_color)
+        if stroke_color is None:
+            stroke_color = color
+        if not isinstance(stroke_color, str) or not stroke_color:
+            raise ValueError(f"{line_context} stroke_color must be a string")
+        lines.append(TextLine(
+            text, font, size, weight, color, stroke_width, stroke_color,
+        ))
 
-    return TextBlock(
-        x, y, width, height,
-        align, valign, rotation, float(line_spacing), lines,
-    )
+    return TextBlock(x, y, rotation, float(line_spacing), lines)
 
 
 def draw_text_blocks(
@@ -214,63 +217,103 @@ def _draw_block(
 ) -> None:
     x = round(block.x * scale)
     y = round(block.y * scale)
-    width = max(1, round((block.x + block.width) * scale) - x)
-    height = max(1, round((block.y + block.height) * scale) - y)
-    if x < 0 or y < 0 or x + width > canvas.width or y + height > canvas.height:
-        raise ValueError("box does not fit the canvas")
-
-    # A rotated block is laid out in its own upright space, then turned as a
-    # whole, so the box describes the area the text occupies on the sheet.
-    transpose = ROTATION_TRANSPOSE[block.rotation]
-    layout_size = (height, width) if transpose is not None else (width, height)
+    if not 0 <= x <= canvas.width or not 0 <= y <= canvas.height:
+        raise ValueError("position does not fit the canvas")
 
     prepared = []
     for line in block.lines:
         text = _resolve_text(line.text, values)
         font = _load_font(line.font, max(1, round(line.size * scale)), line.weight)
         color = _parse_color(line.color)
+        stroke_width = (
+            max(1, round(line.stroke_width * scale))
+            if line.stroke_width else 0
+        )
+        stroke_color = _parse_color(line.stroke_color)
         ascent, descent = font.getmetrics()
-        prepared.append((text, font, color, ascent + descent))
+        line_height = ascent + descent + stroke_width * 2
+        prepared.append((
+            text, font, color, stroke_width, stroke_color, line_height,
+        ))
 
     total_height = sum(
         round(line_height * block.line_spacing) for *_, line_height in prepared
     )
-    layer = Image.new("RGBA", layout_size, (0, 0, 0, 0))
+    cursor = -total_height // 2
+    positioned = []
+    bounds = []
+    for text, font, color, stroke_width, stroke_color, line_height in prepared:
+        slot_height = round(line_height * block.line_spacing)
+        offset = (slot_height - line_height) // 2
+        anchor_y = cursor + offset + stroke_width
+        if text:
+            bbox = font.getbbox(
+                text,
+                anchor="ma",
+                stroke_width=stroke_width,
+            )
+            positioned.append((
+                text, font, color, stroke_width, stroke_color, anchor_y,
+            ))
+            bounds.append((
+                bbox[0],
+                anchor_y + bbox[1],
+                bbox[2],
+                anchor_y + bbox[3],
+            ))
+        cursor += slot_height
+
+    if not positioned:
+        return
+
+    left = min(bbox[0] for bbox in bounds)
+    top = min(bbox[1] for bbox in bounds)
+    right = max(bbox[2] for bbox in bounds)
+    bottom = max(bbox[3] for bbox in bounds)
+    half_width = max(1, -left, right) + 1
+    half_height = max(1, -top, bottom) + 1
+
+    layer = Image.new(
+        "RGBA",
+        (half_width * 2, half_height * 2),
+        (0, 0, 0, 0),
+    )
     try:
         draw = ImageDraw.Draw(layer)
-        if block.valign == "top":
-            cursor = 0
-        elif block.valign == "bottom":
-            cursor = layout_size[1] - total_height
-        else:
-            cursor = (layout_size[1] - total_height) // 2
 
-        for text, font, color, line_height in prepared:
-            slot_height = round(line_height * block.line_spacing)
-            if text:
-                # anchor "ma" places the glyph by its ascender, so lines with
-                # different sizes still sit on a common visual baseline.
-                if block.align == "left":
-                    anchor_x, anchor = 0, "la"
-                elif block.align == "right":
-                    anchor_x, anchor = layout_size[0], "ra"
-                else:
-                    anchor_x, anchor = layout_size[0] // 2, "ma"
-                offset = (slot_height - line_height) // 2
+        # Paint every outline first, so a later line's thick stroke can never
+        # cover the face of an earlier line.
+        for text, font, _, stroke_width, stroke_color, anchor_y in positioned:
+            if stroke_width:
                 draw.text(
-                    (anchor_x, cursor + offset),
+                    (half_width, half_height + anchor_y),
                     text,
                     font=font,
-                    fill=color,
-                    anchor=anchor,
+                    fill=stroke_color,
+                    anchor="ma",
+                    stroke_width=stroke_width,
+                    stroke_fill=stroke_color,
                 )
-            cursor += slot_height
 
+        for text, font, color, _, _, anchor_y in positioned:
+            draw.text(
+                (half_width, half_height + anchor_y),
+                text,
+                font=font,
+                fill=color,
+                anchor="ma",
+            )
+
+        transpose = ROTATION_TRANSPOSE[block.rotation]
         if transpose is not None:
             rotated = layer.transpose(transpose)
             layer.close()
             layer = rotated
-        canvas.paste(layer, (x, y), layer)
+        canvas.paste(
+            layer,
+            (x - layer.width // 2, y - layer.height // 2),
+            layer,
+        )
     finally:
         layer.close()
 

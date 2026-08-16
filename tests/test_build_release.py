@@ -99,7 +99,7 @@ class DeterministicReleaseTests(unittest.TestCase):
                 "assets/dots.svg": b"asset",
                 "python/python.exe": b"python",
                 "bin/ffmpeg.exe": b"ffmpeg",
-                "templates/default/config.json": b"{}",
+                "templates/pack/config.json": b"{}",
                 "EDSDK_Win/EDSDK_64/Dll/EDSDK.dll": b"edsdk",
                 "drivers/printer.zip": b"driver",
             }

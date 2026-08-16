@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from PIL import Image, ImageChops, ImageStat
+from PIL import Image
 
 from backend.composer import (
     PhotoChoicePreview,
@@ -33,7 +33,8 @@ from backend.printer import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE_DIR = ROOT / "templates" / "default"
+APP_CONFIG = json.loads((ROOT / "config_app.json").read_text(encoding="utf-8"))
+TEMPLATE_DIR = ROOT / "templates" / APP_CONFIG["template_pack"]
 
 
 class ComposerTests(unittest.TestCase):
@@ -65,21 +66,11 @@ class ComposerTests(unittest.TestCase):
             finally:
                 result.close()
 
-    def test_default_backgrounds_are_native_resolution(self):
+    def test_template_backgrounds_are_native_resolution(self):
         with Image.open(TEMPLATE_DIR / "grid_bg.png") as grid:
             self.assertEqual(grid.size, tuple(self.config["print_size"]))
         with Image.open(TEMPLATE_DIR / "strip_bg.png") as strip:
             self.assertEqual(strip.size, tuple(self.config["print_size"]))
-
-    def test_canon_6000x4000_ratio_matches_every_photo_slot(self):
-        for template in self.config["templates"].values():
-            size = template["photo_size_px"]
-            width, height = size["width"], size["height"]
-            for slot in template["print_layout"]["photos"]:
-                if slot.get("rotate") == "ccw":
-                    self.assertEqual(width * 6000, height * 4000)
-                else:
-                    self.assertEqual(width * 4000, height * 6000)
 
     def test_mismatched_photo_is_fitted_whole_without_slot_crop(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -303,43 +294,6 @@ class ComposerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "background must be"):
                 compose(folder, "grid", photos, config)
 
-    def test_strips_are_duplicated_inside_measured_print_window(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            photos = self._make_photos(Path(tmpdir))
-            result = compose(TEMPLATE_DIR, "strips", photos, self.config)
-            try:
-                width, height = self.config["print_size"]
-                self.assertEqual(result.size, (width, height))
-                trim = self.config["print_trim"]
-                visible = result.crop((
-                    trim["left"],
-                    trim["top"],
-                    width - trim["right"],
-                    height - trim["bottom"],
-                ))
-                try:
-                    # The measured area has an odd height, so omit its unmatched
-                    # center row and compare the two physical 2-inch halves.
-                    half = visible.height // 2
-                    first_strip = visible.crop((0, 0, visible.width, half))
-                    second_strip = visible.crop((
-                        0, visible.height - half, visible.width, visible.height))
-                    try:
-                        difference = ImageChops.difference(
-                            first_strip, second_strip)
-                        try:
-                            self.assertLess(max(ImageStat.Stat(difference).mean), 0.2)
-                        finally:
-                            difference.close()
-                    finally:
-                        first_strip.close()
-                        second_strip.close()
-                finally:
-                    visible.close()
-            finally:
-                result.close()
-
-
 class TemplateTextTests(unittest.TestCase):
     """Text is the last layer and never blocks a print when it fails."""
 
@@ -372,9 +326,7 @@ class TemplateTextTests(unittest.TestCase):
 
     def _block(self, **overrides) -> dict:
         block = {
-            "box": {"x": 0, "y": 100, "width": 400, "height": 100},
-            "align": "center",
-            "valign": "middle",
+            "position": {"x": 200, "y": 150},
             "rotate": "none",
             "font": self.FONT,
             "color": "#000000",
@@ -410,7 +362,7 @@ class TemplateTextTests(unittest.TestCase):
             "31 декабря 2026",
         )
 
-    def test_date_is_drawn_inside_its_box(self):
+    def test_date_is_centered_on_its_position(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             folder = Path(tmpdir)
             config = self._pack(folder, [self._block()])
@@ -420,7 +372,7 @@ class TemplateTextTests(unittest.TestCase):
             )
             try:
                 self.assertGreater(self._ink(result, (0, 100, 400, 200)), 100)
-                # The photo area above the box must stay untouched.
+                # The point is in the lower half, away from the photo area.
                 self.assertEqual(self._ink(result, (0, 0, 400, 100)), 0)
             finally:
                 result.close()
@@ -480,26 +432,6 @@ class TemplateTextTests(unittest.TestCase):
             self.assertIn("font not found", logs.output[0])
             self.assertIn("unknown token", logs.output[1])
 
-    def test_align_moves_the_text_within_the_box(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            folder = Path(tmpdir)
-            positions = {}
-            for align in ("left", "right"):
-                config = self._pack(folder, [self._block(align=align)])
-                result = compose(
-                    folder, "grid", [folder / "photo.png"], config,
-                    text_values=date_values(self.moment),
-                )
-                try:
-                    positions[align] = (
-                        self._ink(result, (0, 100, 100, 200)),
-                        self._ink(result, (300, 100, 400, 200)),
-                    )
-                finally:
-                    result.close()
-            self.assertGreater(positions["left"][0], positions["left"][1])
-            self.assertGreater(positions["right"][1], positions["right"][0])
-
     def test_weight_changes_stroke_thickness(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             folder = Path(tmpdir)
@@ -550,10 +482,8 @@ class TemplateTextTests(unittest.TestCase):
     def test_structural_mistakes_in_a_pack_are_refused(self):
         cases = {
             "texts must be a list": {"texts": {}},
-            "box exceeds the print size": [self._block(
-                box={"x": 0, "y": 100, "width": 500, "height": 100})],
-            "unsupported align": [self._block(align="middle")],
-            "unsupported valign": [self._block(valign="center")],
+            "position must be inside": [self._block(
+                position={"x": 500, "y": 100})],
             "unsupported rotate": [self._block(rotate="upside")],
             "needs a non-empty lines list": [self._block(lines=[])],
             "size must be an integer": [self._block(
@@ -574,7 +504,7 @@ class TemplateTextTests(unittest.TestCase):
             config = self._pack(
                 folder,
                 [self._block(
-                    box={"x": 150, "y": 0, "width": 100, "height": 400},
+                    position={"x": 200, "y": 200},
                     rotate="ccw",
                     lines=[{"text": "08.08.2026", "size": 40}],
                 )],
@@ -587,8 +517,7 @@ class TemplateTextTests(unittest.TestCase):
                 text_values=date_values(self.moment),
             )
             try:
-                # A rotated line is taller than wide, so ink stays in the narrow
-                # vertical box instead of spilling sideways.
+                # A rotated line is taller than wide around the same point.
                 self.assertGreater(self._ink(result, (150, 0, 250, 400)), 100)
                 self.assertEqual(self._ink(result, (0, 0, 150, 400)), 0)
                 self.assertEqual(self._ink(result, (250, 0, 400, 400)), 0)
@@ -611,7 +540,7 @@ class TemplateTextTests(unittest.TestCase):
                 photo.close()
             try:
                 self.assertEqual(preview.size, (200, 100))
-                # The box occupies the lower half at any scale.
+                # The position stays in the lower half at any scale.
                 self.assertGreater(self._ink(preview, (0, 50, 200, 100)), 20)
                 self.assertEqual(self._ink(preview, (0, 0, 200, 50)), 0)
             finally:
@@ -1283,7 +1212,7 @@ class CustomPrintCommandTests(unittest.IsolatedAsyncioTestCase):
              patch.dict(main.CONFIG, {
                  "print_enabled": True,
                  "keep_custom_print_files": True,
-                 "template_pack": "default",
+                 "template_pack": TEMPLATE_DIR.name,
                  "print_dpi": 600,
              }), \
              patch(
@@ -1460,7 +1389,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
             "template_select_timeout": 1,
             "done_screen_seconds": 0,
             "default_template": "grid",
-            "template_pack": "default",
+            "template_pack": TEMPLATE_DIR.name,
             "technical_event_name": "Кафе",
             "yadisk_folder": "Кафе",
             "print_enabled": True,

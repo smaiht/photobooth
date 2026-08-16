@@ -25,31 +25,35 @@
                 ],
                 "texts": [
                     {
-                        "position": {"x": 3545, "y": 635},
+                        "position": {"x": 3400, "y": 645},
                         "rotate": "ccw",
                         "font": "Comfortaa-VariableFont_wght.ttf",
                         "weight": 700,
-                        "color": "#8c3b2e",
-                        "line_spacing": 1.25,
+                        "color": "#fff7e6",
+                        "stroke_width": 50,
+                        "stroke_color": "#9b1458",
+                        "line_spacing": 0.5,
                         "lines": [
-                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 30},
-                            {"text": "{dd} {month_ru} {yyyy}", "size": 26, "weight": 500}
+                            {"text": "ДЕНЬ РОЖДЕНИЯ СВЕТЫ", "size": 70},
+                            {"text": "16 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
                         ]
                     },
                     {
-                        "position": {"x": 3545, "y": 1869},
+                        "position": {"x": 3400, "y": 1832},
                         "rotate": "ccw",
                         "font": "Comfortaa-VariableFont_wght.ttf",
                         "weight": 700,
-                        "color": "#8c3b2e",
-                        "line_spacing": 1.25,
+                        "color": "#fff7e6",
+                        "stroke_width": 50,
+                        "stroke_color": "#9b1458",
+                        "line_spacing": 0.5,
                         "lines": [
-                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 30},
-                            {"text": "{dd} {month_ru} {yyyy}", "size": 26, "weight": 500}
+                            {"text": "ДЕНЬ РОЖДЕНИЯ СВЕТЫ", "size": 70},
+                            {"text": "16 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
                         ]
                     }
                 ],
-                "_texts_comment": "По одной подписи на каждую физическую полоску: обе лежат на светлых плашках арта у правого края, второй блок сдвинут на 1234 px.",
+                "_texts_comment": "Подписи центрированы по видимой ширине полосок с учетом внешнего trim: 50 px справа у первой и 55 px слева у второй после поворота.",
                 "_texts_date_tokens": ["{dd}.{mm}.{yyyy}", "{dd} {month_ru} {yyyy}"]
             },
             "preview_rotation": "cw",
@@ -68,15 +72,17 @@
                 ],
                 "texts": [
                     {
-                        "position": {"x": 1840, "y": 2325},
+                        "position": {"x": 1844, "y": 2300},
                         "rotate": "none",
                         "font": "Comfortaa-VariableFont_wght.ttf",
                         "weight": 700,
-                        "color": "#8c3b2e",
-                        "line_spacing": 1.2,
+                        "color": "#fff7e6",
+                        "stroke_width": 50,
+                        "stroke_color": "#9b1458",
+                        "line_spacing": 0.5,
                         "lines": [
-                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 56},
-                            {"text": "{dd} {month_ru} {yyyy}", "size": 38, "weight": 500}
+                            {"text": "ДЕНЬ РОЖДЕНИЯ СВЕТЫ", "size": 70},
+                            {"text": "16 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
                         ]
                     }
                 ],
@@ -96,15 +102,17 @@
                 ],
                 "texts": [
                     {
-                        "position": {"x": 1840, "y": 2325},
+                        "position": {"x": 1844, "y": 2300},
                         "rotate": "none",
                         "font": "Comfortaa-VariableFont_wght.ttf",
                         "weight": 700,
-                        "color": "#8c3b2e",
-                        "line_spacing": 1.2,
+                        "color": "#fff7e6",
+                        "stroke_width": 50,
+                        "stroke_color": "#9b1458",
+                        "line_spacing": 0.5,
                         "lines": [
-                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 56},
-                            {"text": "{dd} {month_ru} {yyyy}", "size": 38, "weight": 500}
+                            {"text": "ДЕНЬ РОЖДЕНИЯ СВЕТЫ", "size": 70},
+                            {"text": "16 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
                         ]
                     }
                 ],
