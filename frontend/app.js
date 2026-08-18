@@ -507,9 +507,10 @@ function _doSwitch(state, data) {
         cameraStatusTitle.textContent = searching
             ? "ИЩЕМ КАМЕРУ…"
             : "КАМЕРА НЕДОСТУПНА";
-        cameraStatusSubtitle.textContent = searching
-            ? "Подключите камеру — поиск идёт автоматически"
-            : "Проверьте установку Canon EDSDK";
+        cameraStatusSubtitle.textContent = (
+            "Отключите фотобудку от розетки и включите снова — "
+            + "так она полностью перезапустится"
+        );
     }
 
     if (state === "countdown" || state === "shooting") {
