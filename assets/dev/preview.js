@@ -147,11 +147,7 @@
                         ? maxSheets
                         : 6,
                 });
-                if (route === "photo_choice") {
-                    document.querySelector(
-                        '.template-btn[data-photo-choice="true"]',
-                    )?.click();
-                } else if (route === "template_multi") {
+                if (route === "template_multi") {
                     document.getElementById("template-multi")?.click();
                 }
             } else if (route === "done") {

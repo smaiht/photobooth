@@ -616,6 +616,27 @@ class TemplatePackCommandTests(unittest.IsolatedAsyncioTestCase):
         update.assert_not_called()
 
 
+class AppConfigCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_updates_allowed_field_and_restarts_after_response(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "set_app_config",
+            "data": {"field": "setting", "value": "true"},
+        }
+        with patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_background_uploads", set()), \
+             patch(
+                 "backend.main.update_app_config_field",
+                 return_value=("setting", False, True, True),
+             ) as update:
+            result = await main.handle_disk_command(command)
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("false → true", result["message"])
+        self.assertIs(result["_post_action"], main._do_restart)
+        update.assert_called_once_with("setting", "true")
+
+
 class EventCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_switches_event_and_persists_config(self):
         command = {
@@ -1446,6 +1467,29 @@ class TemplatePackConfigTests(unittest.TestCase):
                 backend_config.update_template_pack(
                     "missing", config_path, templates_dir,
                 )
+
+
+class AppConfigFieldTests(unittest.TestCase):
+    def test_allowlist_controls_typed_atomic_updates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "config_app.json"
+            path.write_text(json.dumps({
+                "enabled": False,
+                "mode": "first",
+                "_mode_options": ["first", "second"],
+                "_admin_editable_fields": ["enabled", "mode"],
+            }), encoding="utf-8")
+
+            self.assertEqual(
+                backend_config.update_app_config_field("enabled", "true", path),
+                ("enabled", False, True, True),
+            )
+            self.assertEqual(
+                backend_config.update_app_config_field("mode", "SECOND", path),
+                ("mode", "first", "second", True),
+            )
+            with self.assertRaisesRegex(ValueError, "не разрешено"):
+                backend_config.update_app_config_field("other", "1", path)
 
 
 class ConfigExportTests(unittest.TestCase):

@@ -97,13 +97,6 @@
         return config?.photo_choice_default_with_frame === true;
     }
 
-    function photoChoiceTileUrl(preview, withFrame) {
-        const url = withFrame
-            ? preview.with_frame_url
-            : preview.without_frame_url;
-        return url ?? preview.with_frame_url;
-    }
-
     function buildViewerFrames(options) {
         const source = Array.isArray(options)
             ? options.find((option) => option?.photo_choice === true
@@ -220,7 +213,6 @@
         defaultWithFrame,
         frameWord,
         nextBasketCopies,
-        photoChoiceTileUrl,
         pointCentroid,
         pointSpread,
         previewRoute,

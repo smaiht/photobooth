@@ -69,7 +69,7 @@ python3 -m http.server 8000 --bind 127.0.0.1
 - `http://127.0.0.1:8000/frontend/index.html#processing` — обработка;
 - `http://127.0.0.1:8000/frontend/index.html#template` — выбор формата;
 - `http://127.0.0.1:8000/frontend/index.html#template-multi` — мультивыбор нескольких отпечатков;
-- `http://127.0.0.1:8000/frontend/index.html#photo-choice` — выбор одного фото и рамки;
+- `http://127.0.0.1:8000/frontend/index.html#photo-choice` — тот же экран выбора с постоянно открытым блоком одного фото;
 - `http://127.0.0.1:8000/frontend/index.html#done` — печать и демонстрационный QR-код;
 - `http://127.0.0.1:8000/frontend/index.html#camera-searching` — поиск камеры;
 - `http://127.0.0.1:8000/frontend/index.html#no-camera` — ошибка камеры.
@@ -662,12 +662,19 @@ VPS. Версия `session_ready` меняется независимо и ос�
   `config_camera.json`, например `/iso 200`, `/iso auto`,
   `/white_balance auto` или `/continuous_af false`. Будка проверяет тип и
   `_..._options`, атомарно сохраняет значение и после подтверждения делает
-  штатный рестарт. Во время фотосессии команда отклоняется.
+  штатный рестарт;
+- `/<поле config_app> <значение>` — та же прямая форма для полей,
+  указанных в `_admin_editable_fields` в `config_app.json`, например
+  `/photo_choice_default_with_frame true` или `/template_select_timeout 90`.
+  Тип берётся из текущего значения, а `_..._options` ограничивает варианты.
+
+Оба вида настроек меняются только вне фотосессии и после ответа будки
+вызывают штатный рестарт. `template_pack` и `yadisk_folder` остаются за
+специальными `/template` и `/event`.
 
 Help VPS явно перечисляет все публичные camera-команды и использует тот же
-список как allowlist: неизвестное имя поля не отправляется на Диск. Этот список
-намеренно дублирует публичные поля `config_camera.json`; при добавлении поля
-обновляются оба места. Будка остаётся окончательным валидатором типа и значения.
+список для их распознавания. Остальные корректные имена VPS передаёт будке,
+а она сверяет их с единственным allowlist `_admin_editable_fields`.
 
 Пресеты хранятся на будке в служебном объекте `_presets`. Help VPS сразу
 перечисляет все готовые команды `/light sun`, `/light cloudy`, `/light evening`,

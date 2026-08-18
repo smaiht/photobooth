@@ -27,7 +27,6 @@ const idlePriceBadge = document.getElementById("idle-price-badge");
 const idlePriceValue = document.getElementById("idle-price-value");
 const idleStartButton = document.getElementById("idle-start-button");
 const templateTimer = document.getElementById("template-timer");
-const templateMain = document.getElementById("template-main");
 const templateOptions = document.getElementById("template-options");
 const templateSkip = document.getElementById("template-skip");
 const templateMultiGroup = document.getElementById("template-multi-group");
@@ -67,7 +66,6 @@ let dismissedQrSessionId = "";
 let renderedTemplateSignature = "";
 let photoChoiceTemplate = null;
 let photoChoiceWithFrame = false;
-let photoPreviewCycle = null;
 // Multi-select basket. Keyed exactly like the backend keys a print item, so a
 // framed and an unframed copy of the same photo stay separate entries.
 let multiPrintAvailable = false;
@@ -87,7 +85,6 @@ let shootingPosePool = [];
 const shootingPoseSelections = new Map();
 let renderedPoseSignature = "";
 
-const PHOTO_PREVIEW_CYCLE_MS = 500;
 const IDLE_POSE_GROUP_COUNT = 2;
 
 function resetIdlePoseGroups() {
@@ -553,30 +550,6 @@ function showCountdown(value) {
 }
 
 // --- Template selection ---
-let templateMainAnimation = null;
-
-function animateTemplateMainFrom(previousTop) {
-    templateMainAnimation?.cancel();
-
-    const nextTop = templateMain.getBoundingClientRect().top;
-    const offset = previousTop - nextTop;
-    if (screens.template.hidden || Math.abs(offset) < 1) {
-        templateMainAnimation = null;
-        return;
-    }
-
-    const animation = templateMain.animate([
-        { transform: `translateY(${offset}px)` },
-        { transform: "translateY(0)" },
-    ], {
-        duration: 320,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-    });
-    templateMainAnimation = animation;
-    animation.addEventListener("finish", () => {
-        if (templateMainAnimation === animation) templateMainAnimation = null;
-    }, { once: true });
-}
 
 function lockTemplateSelection() {
     closePhotoViewer();
@@ -607,14 +580,6 @@ function basketTotal() {
 
 function basketCopies(item) {
     return printBasket.get(core.printItemKey(item))?.copies ?? 0;
-}
-
-function basketTemplateTotal(templateName) {
-    let total = 0;
-    printBasket.forEach((entry) => {
-        if (entry.template === templateName) total += entry.copies;
-    });
-    return total;
 }
 
 function adjustBasket(item, delta) {
@@ -652,13 +617,6 @@ function renderBasket() {
         const item = badge.printItem;
         if (!item) return;
         applyBadgeState(badge, basketCopies(item), full);
-    });
-    // A photo_choice tile has no counter of its own: its sheets are picked per
-    // photo inside the expanded panel, so the tile only reports their sum.
-    templateOptions.querySelectorAll(".print-total-badge").forEach((badge) => {
-        const count = basketTemplateTotal(badge.dataset.template);
-        badge.textContent = count;
-        badge.classList.toggle("empty", count === 0);
     });
     templatePrintCount.textContent = total;
     // A locked-in selection must stay locked: the once-per-second state poll
@@ -747,7 +705,6 @@ templateMulti.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (currentState !== "template_select" || templateMulti.disabled) return;
-    closePhotoChoice();
     setMultiSelect(!multiSelectActive);
 });
 
@@ -773,27 +730,6 @@ templateSkip.addEventListener("click", (event) => {
     lockTemplateSelection();
 });
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-// A stroked chevron drawn as SVG: round caps and joins read cleanly at kiosk
-// size, unlike a rotated CSS border square.
-function createChevron() {
-    const svg = document.createElementNS(SVG_NS, "svg");
-    svg.setAttribute("class", "template-caption-chevron");
-    svg.setAttribute("viewBox", "0 0 24 24");
-    svg.setAttribute("fill", "none");
-    svg.setAttribute("aria-hidden", "true");
-    svg.setAttribute("focusable", "false");
-    const path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("d", "M5 9.5 12 16l7-6.5");
-    path.setAttribute("stroke", "currentColor");
-    path.setAttribute("stroke-width", "2.6");
-    path.setAttribute("stroke-linecap", "round");
-    path.setAttribute("stroke-linejoin", "round");
-    svg.appendChild(path);
-    return svg;
-}
-
 function renderTemplateOptions(options) {
     if (!Array.isArray(options)) return;
     const signature = JSON.stringify(options.map((option) => [
@@ -815,7 +751,14 @@ function renderTemplateOptions(options) {
     renderedTemplateSignature = signature;
     resetPhotoChoice();
     templateOptions.replaceChildren();
+    const photoChoice = options.find((option) => (
+        option?.photo_choice === true
+        && typeof option.name === "string"
+        && Array.isArray(option.photo_previews)
+        && option.photo_previews.length > 0
+    ));
     options.forEach((option) => {
+        if (option?.photo_choice === true) return;
         if (!option || typeof option.name !== "string"
                 || typeof option.preview_url !== "string") return;
 
@@ -825,22 +768,10 @@ function renderTemplateOptions(options) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "template-btn";
-        const isPhotoChoice = option.photo_choice === true
-            && Array.isArray(option.photo_previews)
-            && option.photo_previews.length > 0;
-        button.dataset.photoChoice = String(isPhotoChoice);
-        if (isPhotoChoice) {
-            button.setAttribute("aria-expanded", "false");
-            button.setAttribute("aria-controls", "photo-choice-panel");
-        }
 
         const preview = document.createElement("img");
         preview.className = "template-preview";
-        // A photo_choice tile must start on the same variant the cycle and the
-        // chooser use, otherwise the first frame flips look inconsistent.
-        preview.src = isPhotoChoice
-            ? photoChoiceTileUrl(option.photo_previews[0])
-            : option.preview_url;
+        preview.src = option.preview_url;
         preview.alt = label;
         preview.draggable = false;
 
@@ -848,64 +779,20 @@ function renderTemplateOptions(options) {
         caption.className = "template-caption";
         const captionLabel = document.createElement("span");
         captionLabel.className = "template-caption-label";
-        // "1 фото" alone does not say there is anything to pick from, so the
-        // number of available frames goes straight into the name.
-        captionLabel.textContent = isPhotoChoice
-            ? `${label} из ${option.photo_previews.length}`
-            : label;
+        captionLabel.textContent = label;
         caption.appendChild(captionLabel);
-        if (isPhotoChoice) {
-            const toggle = document.createElement("span");
-            toggle.className = "template-caption-toggle";
-
-            // Two short lines keep the control on the same row as the name:
-            // only the verb changes between open and closed.
-            const toggleText = document.createElement("span");
-            toggleText.className = "template-caption-toggle-text";
-            const toggleVerb = document.createElement("span");
-            toggleVerb.className = "template-caption-toggle-verb";
-            toggleVerb.dataset.openHint = "СКРЫТЬ";
-            toggleVerb.dataset.closedHint = "РАСКРЫТЬ";
-            toggleVerb.textContent = toggleVerb.dataset.closedHint;
-            const toggleNoun = document.createElement("span");
-            toggleNoun.textContent = "ВАРИАНТЫ";
-            toggleText.append(toggleVerb, toggleNoun);
-
-            toggle.append(toggleText, createChevron());
-            caption.appendChild(toggle);
-        }
         button.append(preview, caption);
         // A badge holds its own buttons, so it must be a sibling of the tile
         // button rather than a child: nested buttons are invalid HTML.
         const tile = document.createElement("div");
         tile.className = "template-tile";
         tile.appendChild(button);
-        if (isPhotoChoice) {
-            button.photoPreviews = option.photo_previews;
-            // Its sheets are chosen per photo, so the tile only shows a total.
-            const total = document.createElement("div");
-            total.className = "print-total-badge empty";
-            total.dataset.template = option.name;
-            total.textContent = "0";
-            tile.appendChild(badgeLayer(total));
-        } else {
-            tile.appendChild(createPrintBadge({
-                template: option.name,
-                photo_index: null,
-                with_frame: true,
-            }));
-        }
+        tile.appendChild(createPrintBadge({
+            template: option.name,
+            photo_index: null,
+            with_frame: true,
+        }));
         button.addEventListener("click", () => {
-            if (isPhotoChoice) {
-                const isOpen = photoChoiceTemplate?.name === option.name
-                    && !photoChoicePanel.hidden;
-                if (isOpen) {
-                    closePhotoChoice();
-                    return;
-                }
-                openPhotoChoice(option, button);
-                return;
-            }
             // In multi-select the tile itself is inert: only its +/- change
             // the basket, so a stray tap can never print a sheet outright.
             if (multiSelectActive) return;
@@ -915,8 +802,11 @@ function renderTemplateOptions(options) {
         templateOptions.appendChild(tile);
     });
     configurePhotoViewer(options);
-    startPhotoPreviewCycle();
-    renderBasket();
+    if (photoChoice) {
+        showPhotoChoice(photoChoice);
+    } else {
+        renderBasket();
+    }
 }
 
 // The frame default lives in config_app.json, so backend and frontend cannot
@@ -925,63 +815,15 @@ function defaultWithFrame() {
     return core.defaultWithFrame(config);
 }
 
-function photoChoiceTileUrl(preview) {
-    // The tile advertises the same variant the chooser opens on.
-    return core.photoChoiceTileUrl(preview, defaultWithFrame());
-}
-
-function startPhotoPreviewCycle() {
-    clearInterval(photoPreviewCycle);
-    const buttons = [...templateOptions.querySelectorAll(
-        '.template-btn[data-photo-choice="true"]',
-    )];
-    if (!buttons.length) return;
-    let index = 0;
-    photoPreviewCycle = setInterval(() => {
-        index++;
-        buttons.forEach((button) => {
-            const previews = button.photoPreviews;
-            if (!Array.isArray(previews) || !previews.length) return;
-            const preview = previews[index % previews.length];
-            button.querySelector("img").src = photoChoiceTileUrl(preview);
-        });
-    }, PHOTO_PREVIEW_CYCLE_MS);
-}
-
-function syncTemplateHint(button) {
-    const verb = button.querySelector(".template-caption-toggle-verb");
-    if (!verb) return;
-    const expanded = button.getAttribute("aria-expanded") === "true";
-    verb.textContent = expanded ? verb.dataset.openHint : verb.dataset.closedHint;
-}
-
-function closePhotoChoice() {
-    const wasOpen = !photoChoicePanel.hidden;
-    const previousTop = wasOpen
-        ? templateMain.getBoundingClientRect().top
-        : null;
+function resetPhotoChoice() {
     photoChoiceTemplate = null;
     photoChoiceWithFrame = defaultWithFrame();
     photoChoicePanel.hidden = true;
     photoChoiceOptions.replaceChildren();
-    templateOptions.querySelectorAll(".template-btn").forEach((button) => {
-        button.classList.remove("active");
-        if (button.dataset.photoChoice === "true") {
-            button.setAttribute("aria-expanded", "false");
-            syncTemplateHint(button);
-        }
-    });
     updateFrameSegments();
-    if (previousTop !== null) animateTemplateMainFrom(previousTop);
-}
-
-function resetPhotoChoice() {
-    closePhotoChoice();
 }
 
 function resetTemplateSelection() {
-    clearInterval(photoPreviewCycle);
-    photoPreviewCycle = null;
     renderedTemplateSignature = "";
     closePhotoViewer();
     viewerFrames = [];
@@ -998,21 +840,12 @@ function resetTemplateSelection() {
     templatePrintCount.textContent = "0";
 }
 
-function openPhotoChoice(option, selectedButton) {
-    const previousTop = templateMain.getBoundingClientRect().top;
+function showPhotoChoice(option) {
     photoChoiceTemplate = option;
     photoChoiceWithFrame = defaultWithFrame();
     photoChoicePanel.hidden = false;
-    templateOptions.querySelectorAll(".template-btn").forEach((button) => {
-        button.classList.toggle("active", button === selectedButton);
-        if (button.dataset.photoChoice === "true") {
-            button.setAttribute("aria-expanded", String(button === selectedButton));
-            syncTemplateHint(button);
-        }
-    });
     updateFrameSegments();
     renderPhotoChoices();
-    animateTemplateMainFrom(previousTop);
 }
 
 function updateFrameSegments() {
@@ -1078,21 +911,6 @@ frameOff.addEventListener("click", () => {
     photoChoiceWithFrame = false;
     updateFrameSegments();
     renderPhotoChoices();
-});
-
-screens.template.addEventListener("click", (event) => {
-    if (photoChoicePanel.hidden) return;
-    const target = event.target instanceof Element ? event.target : null;
-    // The viewer sits on top of this screen, so its own clicks must not
-    // collapse the chooser underneath it.
-    if (!target || target.closest(
-        ".template-tile, .photo-choice-panel, #template-skip,"
-        + " #template-zoom, .photo-viewer, #template-multi-group,"
-        + " #template-print",
-    )) {
-        return;
-    }
-    closePhotoChoice();
 });
 
 // --- Photo viewer (magnifier) ---

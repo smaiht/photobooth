@@ -35,6 +35,7 @@ from .config import (
     apply_camera_preset,
     load_event_config,
     preset_names,
+    update_app_config_field,
     update_camera_config_field,
     update_template_pack,
 )
@@ -1568,6 +1569,46 @@ async def handle_disk_command(command: dict) -> dict:
         return {
             "status": "ok",
             "message": "Перезапуск подтверждён",
+            "_post_action": _do_restart,
+        }
+
+    if cmd == "set_app_config":
+        if STATE not in ("idle", "no_camera", "camera_searching"):
+            return {
+                "status": "error",
+                "message": f"Настройка приложения не изменена: state={STATE}",
+            }
+        if _background_uploads:
+            return {
+                "status": "error",
+                "message": (
+                    "Настройка приложения не изменена: "
+                    "завершается подготовка загрузки"
+                ),
+            }
+        if not isinstance(data, dict):
+            return {
+                "status": "error",
+                "message": "Настройка приложения не изменена: нет field/value",
+            }
+        try:
+            field, old_value, new_value, changed = update_app_config_field(
+                data.get("field", ""), data.get("value"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return {
+                "status": "error",
+                "message": f"Настройка приложения не изменена: {exc}",
+            }
+        old_text = json.dumps(old_value, ensure_ascii=False)
+        new_text = json.dumps(new_value, ensure_ascii=False)
+        message = (
+            f"Параметр приложения {field}: {old_text} → {new_text}. "
+            if changed
+            else f"Параметр приложения {field} уже равен {new_text}. "
+        )
+        return {
+            "status": "ok",
+            "message": message + "Перезапуск подтверждён",
             "_post_action": _do_restart,
         }
 

@@ -88,19 +88,10 @@ test("basket changes are clamped by zero and the total sheet limit", () => {
     assert.equal(core.nextBasketCopies(3, 1, 6, 6), 3);
 });
 
-test("photo choice honors the configured frame default and fallback", () => {
-    const preview = {
-        with_frame_url: "frame.jpg",
-        without_frame_url: "plain.jpg",
-    };
-
+test("photo choice honors the configured frame default", () => {
     assert.equal(core.defaultWithFrame({ photo_choice_default_with_frame: true }), true);
     assert.equal(core.defaultWithFrame({ photo_choice_default_with_frame: false }), false);
     assert.equal(core.defaultWithFrame({}), false);
-    assert.equal(core.photoChoiceTileUrl(preview, true), "frame.jpg");
-    assert.equal(core.photoChoiceTileUrl(preview, false), "plain.jpg");
-    assert.equal(core.photoChoiceTileUrl({ with_frame_url: "frame.jpg" }, false),
-        "frame.jpg");
 });
 
 test("viewer frames come from the first usable photo-choice template", () => {

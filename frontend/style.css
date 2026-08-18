@@ -598,7 +598,6 @@ html, body {
     flex-direction: column;
     align-items: center;
     gap: 3vh;
-    will-change: transform;
 }
 
 .template-skip-group {
@@ -723,8 +722,7 @@ html, body {
     place-items: center;
 }
 
-.print-badge,
-.print-total-badge {
+.print-badge {
     pointer-events: none;
 }
 
@@ -738,23 +736,7 @@ html, body {
     box-shadow: 0 0.4vh 1.6vh rgba(0, 0, 0, 0.28);
 }
 
-#screen-template.multi-select .print-total-badge {
-    display: grid;
-    place-items: center;
-    min-width: 4.6vw;
-    height: 4.6vw;
-    padding: 0 0.6vw;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.94);
-    box-shadow: 0 0.4vh 1.6vh rgba(0, 0, 0, 0.28);
-    color: #FF2973;
-    font-size: 2.4vw;
-    font-weight: 700;
-    line-height: 1;
-}
-
-.print-badge.empty,
-.print-total-badge.empty {
+.print-badge.empty {
     color: #999;
     opacity: 0.82;
 }
@@ -883,9 +865,6 @@ html, body {
 }
 
 .template-btn:active { transform: scale(0.98); }
-.template-btn.active {
-    color: #FF2973;
-}
 .template-btn:disabled { opacity: 0.65; }
 
 .template-preview {
@@ -896,45 +875,12 @@ html, body {
     border-radius: 0.5vw;
 }
 
-/* Name and the optional expand control share one row. */
 .template-caption {
     display: flex;
     flex-direction: row;
     align-items: center;
     justify-content: center;
     gap: 0.8vw;
-}
-
-/* Expand/collapse control: two small lines plus a chevron on the right. */
-.template-caption-toggle {
-    display: inline-flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 0.35vw;
-    color: #FF2973;
-}
-
-.template-caption-toggle-text {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    font-size: 0.85vw;
-    font-weight: 700;
-    line-height: 1.15;
-    letter-spacing: 0.04em;
-}
-
-.template-caption-chevron {
-    flex: 0 0 auto;
-    display: block;
-    width: 1.5vw;
-    height: 1.5vw;
-    transition: transform 0.2s ease;
-}
-
-/* Expanded: the tile now collapses instead of opening. */
-.template-btn[aria-expanded="true"] .template-caption-chevron {
-    transform: rotate(180deg);
 }
 
 #template-timer {

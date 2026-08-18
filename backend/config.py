@@ -23,9 +23,10 @@ PHOTOS_DIR.mkdir(exist_ok=True)
 PRINT_JOBS_DIR = ROOT_DIR / "photos_print_jobs"
 PRINT_JOBS_DIR.mkdir(exist_ok=True)
 
-CAMERA_CONFIG_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+CONFIG_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 CAMERA_PRESET_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 TEMPLATE_PACK_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+APP_EDITABLE_FIELDS = "_admin_editable_fields"
 # Presets live under a service key, so "/presets ..." can never overwrite them
 # and they stay out of the public-field validation.
 PRESETS_FIELD = "_presets"
@@ -40,7 +41,7 @@ def load_event_config() -> dict:
     return json.loads(config_path.read_text(encoding="utf-8"))
 
 
-def _coerce_camera_scalar(raw_value: str, prototype):
+def _coerce_scalar(raw_value: str, prototype):
     value = raw_value.strip()
     if isinstance(prototype, bool):
         normalized = value.casefold()
@@ -67,11 +68,26 @@ def _coerce_camera_scalar(raw_value: str, prototype):
             raise ValueError("строковое значение не может быть пустым")
         return value
     raise ValueError(
-        f"тип поля {type(prototype).__name__} нельзя менять через Telegram")
+        f"тип поля {type(prototype).__name__} нельзя менять командой")
 
 
 def _available_text(values) -> str:
     return json.dumps(list(values), ensure_ascii=False, separators=(",", ":"))
+
+
+def _coerce_option(raw_value: str, options: list):
+    for option in options:
+        try:
+            candidate = _coerce_scalar(raw_value, option)
+        except ValueError:
+            continue
+        if isinstance(option, str):
+            if candidate.casefold() == option.casefold():
+                return option
+        elif type(candidate) is type(option) and candidate == option:
+            return option
+    raise ValueError(
+        f"недопустимое значение; доступно: {_available_text(options)}")
 
 
 def _coerce_camera_value(field: str, raw_value: str, config: dict):
@@ -90,19 +106,8 @@ def _coerce_camera_value(field: str, raw_value: str, config: dict):
         return resolved[0]
     options = config.get(f"_{field}_options")
     if isinstance(options, list) and options:
-        for option in options:
-            try:
-                candidate = _coerce_camera_scalar(raw_value, option)
-            except ValueError:
-                continue
-            if isinstance(option, str):
-                if candidate.casefold() == option.casefold():
-                    return option
-            elif type(candidate) is type(option) and candidate == option:
-                return option
-        raise ValueError(
-            f"недопустимое значение; доступно: {_available_text(options)}")
-    value = _coerce_camera_scalar(raw_value, current)
+        return _coerce_option(raw_value, options)
+    value = _coerce_scalar(raw_value, current)
     # A number that merely parses is not automatically usable: focus_delay is
     # awaited by the camera worker and min_free_disk_gib gates every session.
     range_error = numeric_range_error(field, value)
@@ -193,15 +198,15 @@ def _normalized_camera_field(field: str) -> str:
     normalized = str(field or "").strip().lower()
     if normalized.startswith("_"):
         raise ValueError("служебные поля камеры нельзя изменять")
-    if not CAMERA_CONFIG_FIELD_RE.fullmatch(normalized):
+    if not CONFIG_FIELD_RE.fullmatch(normalized):
         raise ValueError("некорректное имя параметра камеры")
     return normalized
 
 
-def _raw_camera_text(raw_value) -> str:
+def _raw_config_text(raw_value) -> str:
     """Accept the shapes a messenger or a JSON preset can deliver."""
-    # Telegram always delivers a string, but a VPS build or a preset may hold a
-    # JSON number. Accept both instead of rejecting "/iso 200" on a type detail.
+    # A messenger delivers a string, but a VPS build or a preset may hold a JSON
+    # number. Accept both instead of rejecting "/iso 200" on a type detail.
     if isinstance(raw_value, bool):
         return "true" if raw_value else "false"
     if isinstance(raw_value, int):
@@ -213,6 +218,62 @@ def _raw_camera_text(raw_value) -> str:
     return raw_value
 
 
+def update_app_config_field(
+    field: str,
+    raw_value,
+    config_path: Path | None = None,
+) -> tuple[str, object, object, bool]:
+    """Update one explicitly allowed scalar in config_app.json."""
+    normalized = str(field or "").strip().lower()
+    if not CONFIG_FIELD_RE.fullmatch(normalized):
+        raise ValueError("некорректное имя параметра приложения")
+
+    path = (
+        Path(config_path)
+        if config_path is not None
+        else ROOT_DIR / "config_app.json"
+    )
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("config_app.json должен содержать JSON-объект")
+
+    editable = config.get(APP_EDITABLE_FIELDS)
+    if not isinstance(editable, list):
+        raise ValueError(f"{APP_EDITABLE_FIELDS} должен быть списком")
+    invalid = [
+        name for name in editable
+        if not isinstance(name, str)
+        or not CONFIG_FIELD_RE.fullmatch(name)
+        or name not in config
+    ]
+    if invalid:
+        raise ValueError(
+            f"{APP_EDITABLE_FIELDS} содержит неизвестное поле: {invalid[0]!r}")
+    if normalized not in editable:
+        available = ", ".join(editable) or "нет"
+        raise ValueError(
+            f"поле {normalized} не разрешено; доступно: {available}")
+    if normalized == "template_pack":
+        raise ValueError("template_pack изменяется командой /template")
+    if normalized == "yadisk_folder":
+        raise ValueError("yadisk_folder изменяется командой /event")
+
+    old_value = config[normalized]
+    raw_text = _raw_config_text(raw_value)
+    options = config.get(f"_{normalized}_options")
+    new_value = (
+        _coerce_option(raw_text, options)
+        if isinstance(options, list) and options
+        else _coerce_scalar(raw_text, old_value)
+    )
+    if type(old_value) is type(new_value) and old_value == new_value:
+        return normalized, old_value, new_value, False
+
+    config[normalized] = new_value
+    _write_json_config(path, config)
+    return normalized, old_value, new_value, True
+
+
 def update_camera_config_field(
     field: str,
     raw_value: str,
@@ -220,7 +281,7 @@ def update_camera_config_field(
 ) -> tuple[str, object, object, bool]:
     """Type-check and atomically update one public camera config field."""
     normalized_field = _normalized_camera_field(field)
-    raw_value = _raw_camera_text(raw_value)
+    raw_value = _raw_config_text(raw_value)
     path, config = _load_camera_config(config_path)
     if normalized_field not in config:
         raise ValueError(f"неизвестный параметр камеры: {normalized_field}")
@@ -311,7 +372,7 @@ def apply_camera_preset(
                 f"{normalized_field}")
         new_value = _coerce_camera_value(
             normalized_field,
-            _raw_camera_text(value),
+            _raw_config_text(value),
             config,
         )
         old_value = config[normalized_field]
