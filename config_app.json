@@ -31,7 +31,7 @@
     ],
     "_admin_editable_fields_comment": "Only these config_app fields may be changed by direct Telegram/VK admin commands. Value type follows the current field; _<field>_options is enforced when present.",
     "default_template": "grid",
-    "photo_choice_default_with_frame": false,
+    "photo_choice_default_with_frame": true,
     "_photo_choice_default_with_frame_comment": "Which variant a photo_choice template opens on: false shows the plain photo first, true shows the framed one. Also used when the guest never chooses and default_template has photo_choice.",
     "template_pack": "birthday",
     "multi_print_enabled": true,
