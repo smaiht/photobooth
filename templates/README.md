@@ -1,4 +1,32 @@
-# Template inspection helpers
+# Template tools
+
+## Проверить новые фоны
+
+Один запуск для grid и полосок. Файлы фона пакета не меняются; результат лежит
+в `templates/<pack>/checks/<имя-исходника>/`: layout, красный trim и cut без trim.
+
+```bash
+venv/bin/python templates/generate_template_checks.py wedding \
+  --grid templates/wedding/grid11.png \
+  --strip templates/wedding/strip11.png \
+  --photos marketing/samples/dimaolya/source
+```
+
+```bash
+venv/bin/python templates/generate_template_checks.py wedding \
+  --photos marketing/samples/dimaolya/source
+```
+
+Можно оставить только `--grid` или только `--strip`. Чтобы проверить несколько
+фонов, перечисли их после нужного ключа.
+Без `--photos` будут серые слоты.
+
+
+
+
+
+
+
 
 ## Сборка фона для grid и single
 
@@ -19,6 +47,16 @@ venv/bin/python templates/generate_grid_background.py templates/birthday/source.
 ```bash
 venv/bin/python templates/generate_strip_background.py templates/birthday/draft.png
 ```
+
+
+
+
+
+
+
+
+# Template inspection helpers
+
 
 ## Ручные проверки шаблонов
 
@@ -46,11 +84,6 @@ venv/bin/python templates/generate_template_checks.py birthday park_universal
 venv/bin/python templates/generate_template_checks.py
 ```
 
-На Windows с embedded Python:
-
-```bat
-python\python.exe templates\generate_template_checks.py birthday
-```
 
 Имена файлов сгруппированы по шаблону:
 

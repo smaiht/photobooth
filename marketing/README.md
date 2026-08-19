@@ -23,7 +23,7 @@ marketing/
 
 ```bash
 venv/bin/python marketing/generate_samples.py \
-    marketing/sessions/2026-08-01_09-51-31_2450f1b2657f6bc3ceed7.zip \
+    marketing/sessions/dimaolya.zip \
     --pack park_universal
 ```
 

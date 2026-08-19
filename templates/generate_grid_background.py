@@ -11,21 +11,11 @@ PRINT_SIZE = (3688, 2480)
 OUTPUT_NAME = "grid_bg.png"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Scale an image to 3688x2480 and save it as grid_bg.png "
-            "beside the source."
-        )
-    )
-    parser.add_argument("source", type=Path, help="path to the source image")
-    args = parser.parse_args()
-
-    source_path = args.source.resolve()
+def build_background(source_path: Path, output_path: Path) -> None:
+    source_path = source_path.resolve()
+    output_path = output_path.resolve()
     if not source_path.is_file():
         raise FileNotFoundError(source_path)
-
-    output_path = source_path.parent / OUTPUT_NAME
     if source_path == output_path:
         raise ValueError(f"source must not be {OUTPUT_NAME}")
 
@@ -40,6 +30,20 @@ def main() -> None:
         temporary.unlink(missing_ok=True)
         result.close()
 
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Scale an image to 3688x2480 and save it as grid_bg.png "
+            "beside the source."
+        )
+    )
+    parser.add_argument("source", type=Path, help="path to the source image")
+    args = parser.parse_args()
+
+    source_path = args.source.resolve()
+    output_path = source_path.parent / OUTPUT_NAME
+    build_background(source_path, output_path)
     print(f"{source_path} -> {output_path} ({PRINT_SIZE[0]}x{PRINT_SIZE[1]})")
 
 

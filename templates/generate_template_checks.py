@@ -18,6 +18,9 @@ from backend.text_layer import (  # noqa: E402  (path setup must run first)
     draw_text_blocks,
     validated_text_blocks,
 )
+from backend.composer import _oriented_rgb, _render_photo  # noqa: E402
+from generate_grid_background import build_background as build_grid_background
+from generate_strip_background import build_background as build_strip_background
 
 
 TEMPLATES_DIR = Path(__file__).resolve().parent
@@ -25,6 +28,7 @@ CHECKS_DIR_NAME = "checks"
 PHOTO_SLOT_COLOR = (189, 189, 189)
 TRIM_OPACITY = 0.75
 TRIM_COLOR = (255, 0, 0, round(255 * TRIM_OPACITY))
+PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
 
 
 def _config_paths(pack_names: list[str]) -> list[Path]:
@@ -121,12 +125,19 @@ def _load_image(
     size: tuple[int, int],
     mode: str,
     require_alpha: bool = False,
+    resize: bool = False,
 ) -> Image.Image:
     with Image.open(path) as source:
-        if source.size != size:
-            raise ValueError(f"{path}: expected {size}, got {source.size}")
         if require_alpha and "A" not in source.getbands():
             raise ValueError(f"{path}: foreground must have an alpha channel")
+        if source.size != size:
+            if not resize:
+                raise ValueError(f"{path}: expected {size}, got {source.size}")
+            converted = source.convert(mode)
+            try:
+                return converted.resize(size, Image.Resampling.LANCZOS)
+            finally:
+                converted.close()
         return source.convert(mode)
 
 
@@ -161,8 +172,13 @@ def _write_layout(
     size: tuple[int, int],
     text_values: dict[str, str],
     output_path: Path,
+    *,
+    background_path: Path | None = None,
+    resize_background: bool = False,
+    photo_paths: list[Path] | None = None,
 ) -> None:
-    name, template, layout, background_path, foreground_path, texts = item
+    name, template, layout, configured_background, foreground_path, texts = item
+    background_path = background_path or configured_background
     photo_size = template.get("photo_size_px")
     if not isinstance(photo_size, dict):
         raise ValueError(f"template {name!r} has no photo_size_px")
@@ -172,7 +188,8 @@ def _write_layout(
     if not isinstance(slots, list) or not slots:
         raise ValueError(f"template {name!r} has no photo slots")
 
-    preview = _load_image(background_path, size, "RGB")
+    preview = _load_image(background_path, size, "RGB", resize=resize_background)
+    rendered = {}
     try:
         draw = ImageDraw.Draw(preview)
         for index, slot in enumerate(slots):
@@ -183,12 +200,37 @@ def _write_layout(
                 raise ValueError(f"template {name!r} has invalid slot {index}") from exc
             if rectangle[2] >= size[0] or rectangle[3] >= size[1]:
                 raise ValueError(f"template {name!r} slot {index} exceeds print size")
-            draw.rectangle(rectangle, fill=PHOTO_SLOT_COLOR)
+            if not photo_paths:
+                draw.rectangle(rectangle, fill=PHOTO_SLOT_COLOR)
+                continue
+
+            try:
+                photo_index = slot["photo_index"]
+                rotation = slot["rotate"]
+                photo_path = photo_paths[photo_index % len(photo_paths)]
+            except (KeyError, TypeError) as exc:
+                raise ValueError(f"template {name!r} has invalid slot {index}") from exc
+            cache_key = (photo_path, rotation, photo_width, photo_height)
+            prepared = rendered.get(cache_key)
+            if prepared is None:
+                with Image.open(photo_path) as source:
+                    source_image = _oriented_rgb(source)
+                try:
+                    prepared = _render_photo(
+                        source_image, rotation, photo_width, photo_height
+                    )
+                finally:
+                    source_image.close()
+                rendered[cache_key] = prepared
+            photo, offset_x, offset_y = prepared
+            preview.paste(photo, (x + offset_x, y + offset_y))
         _add_foreground(preview, foreground_path, size)
         if texts:
             draw_text_blocks(preview, texts, text_values, name)
         _save_png(preview, output_path)
     finally:
+        for photo, _, _ in rendered.values():
+            photo.close()
         preview.close()
 
 
@@ -222,6 +264,17 @@ def _write_trim(
             result.close()
     finally:
         background.close()
+
+
+def _write_cut(trim_path: Path, trim, output_path: Path) -> None:
+    with Image.open(trim_path) as trim_image:
+        left, top, right, bottom = trim
+        width, height = trim_image.size
+        cut = trim_image.crop((left, top, width - right, height - bottom))
+    try:
+        _save_png(cut, output_path)
+    finally:
+        cut.close()
 
 
 def _write_strips(
@@ -268,6 +321,105 @@ def _load_packs(pack_names: list[str]):
     return packs
 
 
+def _photos(directory: Path | None) -> list[Path] | None:
+    if directory is None:
+        return None
+    directory = directory.expanduser().resolve()
+    if not directory.is_dir():
+        raise NotADirectoryError(directory)
+    paths = sorted(
+        path for path in directory.iterdir()
+        if path.is_file() and path.suffix.lower() in PHOTO_SUFFIXES
+    )
+    if not paths:
+        raise ValueError(f"no photos found in {directory}")
+    return paths
+
+
+def _item(items, name: str, config_path: Path):
+    try:
+        return next(item for item in items if item[0] == name)
+    except StopIteration as exc:
+        raise ValueError(f"{config_path}: template {name!r} not found") from exc
+
+
+def _custom_grid_checks(
+    sources: list[Path],
+    item,
+    size: tuple[int, int],
+    trim,
+    checks_dir: Path,
+    text_values: dict[str, str],
+    photo_paths: list[Path] | None,
+) -> int:
+    for raw_path in sources:
+        source_path = raw_path.expanduser().resolve()
+        if not source_path.is_file():
+            raise FileNotFoundError(source_path)
+        output_dir = checks_dir / source_path.stem
+        output_dir.mkdir(parents=True, exist_ok=True)
+        background_path = output_dir / "grid_bg.png"
+        layout_path = output_dir / "layout_grid_full.png"
+        trim_path = output_dir / "trim_grid_full.png"
+        cut_path = output_dir / "cut_grid_full.png"
+
+        build_grid_background(source_path, background_path)
+        _write_layout(
+            item, size, text_values, layout_path,
+            background_path=background_path, photo_paths=photo_paths,
+        )
+        _write_trim(layout_path, size, trim, trim_path)
+        _write_cut(trim_path, trim, cut_path)
+        print(f"{source_path} -> {output_dir / layout_path.name}")
+        print(f"{source_path} -> {output_dir / trim_path.name}")
+        print(f"{source_path} -> {output_dir / cut_path.name}")
+    return len(sources)
+
+
+def _custom_strip_checks(
+    sources: list[Path],
+    item,
+    size: tuple[int, int],
+    trim,
+    checks_dir: Path,
+    text_values: dict[str, str],
+    photo_paths: list[Path] | None,
+) -> int:
+    _, template, _, _, _, _ = item
+    for raw_path in sources:
+        source_path = raw_path.expanduser().resolve()
+        if not source_path.is_file():
+            raise FileNotFoundError(source_path)
+        output_dir = checks_dir / source_path.stem
+        output_dir.mkdir(parents=True, exist_ok=True)
+        background_path = output_dir / "strip_bg.png"
+        layout_path = output_dir / "layout_strips_full.png"
+        trim_path = output_dir / "trim_strips_full.png"
+        cut_path = output_dir / "cut_strips_full.png"
+
+        build_strip_background(source_path, background_path)
+        _write_layout(
+            item, size, text_values, layout_path,
+            background_path=background_path, photo_paths=photo_paths,
+        )
+        _write_trim(layout_path, size, trim, trim_path)
+        _write_cut(trim_path, trim, cut_path)
+        layout_strips = _write_strips(
+            layout_path, output_dir, "strips", "layout", template.get("preview_rotation")
+        )
+        trim_strips = _write_strips(
+            trim_path, output_dir, "strips", "trim", template.get("preview_rotation")
+        )
+        cut_strips = _write_strips(
+            cut_path, output_dir, "strips", "cut", template.get("preview_rotation")
+        )
+        for output_path in (
+            layout_path, trim_path, cut_path, *layout_strips, *trim_strips, *cut_strips
+        ):
+            print(f"{source_path} -> {output_dir / output_path.name}")
+    return len(sources)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -278,17 +430,43 @@ def main() -> None:
     parser.add_argument(
         "packs", nargs="*", help="template pack names; omit to process every pack"
     )
+    parser.add_argument(
+        "--photos", type=Path, metavar="DIR", help="fill custom checks with photos"
+    )
+    parser.add_argument(
+        "--grid", nargs="+", type=Path, metavar="PATH", help="grid background source(s)"
+    )
+    parser.add_argument(
+        "--strip", nargs="+", type=Path, metavar="PATH", help="vertical strip source(s)"
+    )
     args = parser.parse_args()
 
     packs = _load_packs(args.packs)
+    if args.grid or args.strip:
+        if len(packs) != 1:
+            parser.error("--grid and --strip require exactly one pack")
+        config_path, size, trim, items, checks_dir = packs[0]
+        text_values = date_values(datetime.now())
+        photo_paths = _photos(args.photos)
+        grid_count = _custom_grid_checks(
+            args.grid or [], _item(items, "grid", config_path), size, trim,
+            checks_dir, text_values, photo_paths,
+        ) if args.grid else 0
+        strip_count = _custom_strip_checks(
+            args.strip or [], _item(items, "strips", config_path), size, trim,
+            checks_dir, text_values, photo_paths,
+        ) if args.strip else 0
+        print(f"Generated checks for {grid_count} grid and {strip_count} strip background(s)")
+        return
     text_values = date_values(datetime.now())
-    layout_count = trim_count = strip_count = 0
+    photo_paths = _photos(args.photos)
+    layout_count = trim_count = cut_count = strip_count = 0
 
     for config_path, size, _trim_values, items, output_dir in packs:
         for item in items:
             name, template = item[:2]
             output_path = output_dir / f"layout_{name}_full.png"
-            _write_layout(item, size, text_values, output_path)
+            _write_layout(item, size, text_values, output_path, photo_paths=photo_paths)
             layout_count += 1
             print(f"[layout] {config_path.parent.name}:{name} -> checks/{output_path.name}")
             if template.get("preview_split") == "horizontal":
@@ -323,8 +501,25 @@ def main() -> None:
                 for strip in strips:
                     print(f"[trim]   {config_path.parent.name}:{name} -> checks/{strip.name}")
 
+            cut_path = output_dir / f"cut_{name}_full.png"
+            _write_cut(output_path, trim, cut_path)
+            cut_count += 1
+            print(f"[cut]    {config_path.parent.name}:{name} -> checks/{cut_path.name}")
+            if template.get("preview_split") == "horizontal":
+                strips = _write_strips(
+                    cut_path,
+                    output_dir,
+                    name,
+                    "cut",
+                    template.get("preview_rotation"),
+                )
+                strip_count += len(strips)
+                for strip in strips:
+                    print(f"[cut]    {config_path.parent.name}:{name} -> checks/{strip.name}")
+
     print(
-        f"Generated {layout_count} layout check(s), {trim_count} trim check(s) "
+        f"Generated {layout_count} layout check(s), {trim_count} trim check(s), "
+        f"{cut_count} cut check(s) "
         f"and {strip_count} oriented strip check(s) in checks/"
     )
 

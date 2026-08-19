@@ -203,12 +203,8 @@ def _multi_print_max_sheets() -> int:
 
 
 def _multi_print_available() -> bool:
-    """Multi-select is a technical-event tool only.
-
-    Guest events keep the plain one-tap choice: there the operator is paid per
-    session, so a basket of sheets would silently give away consumables.
-    """
-    return CONFIG.get("multi_print_enabled") is True and _is_technical_event()
+    """Return the global multi-select switch for every event mode."""
+    return CONFIG.get("multi_print_enabled") is True
 
 CLIENTS: list[WebSocket] = []
 
@@ -951,8 +947,7 @@ async def _run_session():
             return
         elif not multi_print_allowed:
             log.warning(
-                "Ignoring print basket: multi-select is not available for the "
-                "active event"
+                "Ignoring print basket: multi-select is disabled"
             )
             return
         else:

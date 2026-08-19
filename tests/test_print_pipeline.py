@@ -2115,22 +2115,10 @@ class PrintBasketTests(unittest.TestCase):
              "with_frame": False, "copies": 1},
         ])
 
-    def test_multi_select_is_limited_to_the_technical_event(self):
-        config = {
-            "multi_print_enabled": True,
-            "technical_event_name": "Кафе",
-        }
-        with patch.object(main, "CONFIG", config), \
-             patch("backend.main._active_event_name", return_value="Кафе"):
+    def test_multi_select_follows_the_global_switch(self):
+        with patch.object(main, "CONFIG", {"multi_print_enabled": True}):
             self.assertTrue(main._multi_print_available())
-        with patch.object(main, "CONFIG", config), \
-             patch("backend.main._active_event_name",
-                   return_value="Свадьба Ивановых"):
-            self.assertFalse(main._multi_print_available())
-
-        disabled = dict(config, multi_print_enabled=False)
-        with patch.object(main, "CONFIG", disabled), \
-             patch("backend.main._active_event_name", return_value="Кафе"):
+        with patch.object(main, "CONFIG", {"multi_print_enabled": False}):
             self.assertFalse(main._multi_print_available())
 
     def test_sheet_limit_falls_back_for_unusable_values(self):
@@ -2343,7 +2331,7 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
         # A partial print would charge the guest for sheets they never chose.
         self.assertEqual(result["queued"], [("print_grid.jpg", "grid")])
 
-    async def test_basket_is_refused_outside_the_technical_event(self):
+    async def test_basket_is_refused_when_multi_print_is_disabled(self):
         def choose(select):
             select("", None, None, [{"template": "grid", "copies": 2}])
             select("grid")
