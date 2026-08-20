@@ -407,6 +407,29 @@ class PrintArtifactDownloadTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reports_dnp_hardware_counter(self):
+        info = {
+            "printer_name": "DS-RX1",
+            "status": "готов к печати",
+            "total_count": 1234,
+            "media_remaining": 150,
+            "media_capacity": 700,
+        }
+        with patch(
+            "backend.printer.get_dnp_printer_info",
+            return_value=info,
+        ) as inspect:
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "printer_info",
+                "data": None,
+            })
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("Всего отпечатков: 1234", result["message"])
+        self.assertIn("Осталось отпечатков: 150 из 700", result["message"])
+        inspect.assert_called_once_with(main.CONFIG)
+
     async def test_reports_both_windows_print_queues(self):
         records = [
             {

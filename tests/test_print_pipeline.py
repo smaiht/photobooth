@@ -27,6 +27,7 @@ from backend.printer import (
     _print_driver,
     _printer_name,
     clear_windows_print_queues,
+    get_dnp_printer_info,
     get_windows_print_queues,
     prepare_custom_print,
 )
@@ -35,6 +36,44 @@ from backend.printer import (
 ROOT = Path(__file__).resolve().parents[1]
 APP_CONFIG = json.loads((ROOT / "config_app.json").read_text(encoding="utf-8"))
 TEMPLATE_DIR = ROOT / "templates" / APP_CONFIG["template_pack"]
+
+
+class DnpPrinterInfoTests(unittest.TestCase):
+    def test_reads_hardware_counter_and_loaded_media_balance(self):
+        win32print = Mock()
+        handle = object()
+        win32print.OpenPrinter.return_value = handle
+        win32print.GetPrinter.return_value = {
+            "cJobs": 0,
+            "pPortName": "USB001",
+        }
+
+        library = Mock()
+        library.CvInitialize.return_value = 1
+        library.CvGetStatus.return_value = 0x00010001
+        library.GetCounterL.return_value = 1234
+        library.GetMediaCountOffset.return_value = 50
+        library.GetMediaCounter.return_value = 200
+        library.GetInitialMediaCount.return_value = 750
+
+        with patch(
+            "backend.printer._win32print",
+            return_value=win32print,
+        ), patch(
+            "backend.printer._load_dnp_status_library",
+            return_value=library,
+        ):
+            info = get_dnp_printer_info({
+                "printer_name": "DS-RX1",
+                "printer_name_strips": "DS-RX1 Strips",
+            })
+
+        self.assertEqual(info["total_count"], 1234)
+        self.assertEqual(info["media_remaining"], 150)
+        self.assertEqual(info["media_capacity"], 700)
+        self.assertEqual(info["status"], "готов к печати")
+        library.CvInitialize.assert_called_once_with("USB001")
+        win32print.ClosePrinter.assert_called_once_with(handle)
 
 
 class ComposerTests(unittest.TestCase):

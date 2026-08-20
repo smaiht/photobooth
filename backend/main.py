@@ -1333,6 +1333,23 @@ def _print_queue_clear_message(records: list[dict]) -> tuple[str, bool]:
     return "\n".join(lines), has_error
 
 
+def _printer_info_message(info: dict) -> str:
+    lines = [
+        f"DNP ({info['printer_name']}):",
+        f"• Состояние: {info['status']}",
+        f"• Всего отпечатков: {info['total_count']}",
+    ]
+    remaining = info.get("media_remaining")
+    capacity = info.get("media_capacity")
+    if remaining is None:
+        lines.append("• Осталось отпечатков: не удалось прочитать")
+    elif capacity is None:
+        lines.append(f"• Осталось отпечатков: {remaining}")
+    else:
+        lines.append(f"• Осталось отпечатков: {remaining} из {capacity}")
+    return "\n".join(lines)
+
+
 def _clear_runtime_directory(path: Path) -> tuple[int, int]:
     """Delete only the contents of one fixed application runtime directory."""
     path.mkdir(parents=True, exist_ok=True)
@@ -1407,18 +1424,23 @@ async def handle_disk_command(command: dict) -> dict:
             ),
         }
 
-    if cmd in ("print_queue", "clear_print_queue"):
+    if cmd in ("printer_info", "print_queue", "clear_print_queue"):
         if data is not None:
             return {
                 "status": "error",
-                "message": "Команда очереди печати не принимает аргументы",
+                "message": "Команда принтера не принимает аргументы",
             }
         try:
             from .printer import (
                 clear_windows_print_queues,
+                get_dnp_printer_info,
                 get_windows_print_queues,
             )
-            if cmd == "print_queue":
+            if cmd == "printer_info":
+                info = await asyncio.to_thread(get_dnp_printer_info, CONFIG)
+                message = _printer_info_message(info)
+                has_error = False
+            elif cmd == "print_queue":
                 records = await asyncio.to_thread(
                     get_windows_print_queues,
                     CONFIG,
@@ -1435,10 +1457,14 @@ async def handle_disk_command(command: dict) -> dict:
                 "message": message,
             }
         except Exception as exc:
-            action = "просмотреть" if cmd == "print_queue" else "очистить"
+            action = {
+                "printer_info": "прочитать данные DNP",
+                "print_queue": "просмотреть очереди печати",
+                "clear_print_queue": "очистить очереди печати",
+            }[cmd]
             return {
                 "status": "error",
-                "message": f"Очереди печати не удалось {action}: {exc}",
+                "message": f"Не удалось {action}: {exc}",
             }
 
     if cmd == "print_image":

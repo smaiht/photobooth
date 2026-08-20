@@ -33,6 +33,28 @@ _printing = False
 _windows_spooler_lock = threading.Lock()
 DEFAULT_CUSTOM_PRINT_SIZE = (3688, 2480)
 MAX_CUSTOM_PRINT_PIXELS = 100_000_000
+DNP_STATUS_DLL = (
+    Path(__file__).resolve().parents[2]
+    / "drivers"
+    / "RX1-Information"
+    / "CyStat64.dll"
+)
+
+_DNP_STATUS_LABELS = {
+    0x00010001: "готов к печати",
+    0x00010002: "печатает",
+    0x00010008: "закончилась бумага",
+    0x00010010: "закончилась лента",
+    0x00010020: "охлаждается печатающая головка",
+    0x00010040: "охлаждается двигатель",
+    0x00020001: "открыта передняя крышка",
+    0x00020002: "замята бумага",
+    0x00020004: "ошибка ленты",
+    0x00020008: "не совпадает размер бумаги",
+    0x00020010: "ошибка данных",
+    0x00020020: "ошибка контейнера обрезков",
+    0x80000000: "не подключён",
+}
 
 
 def print_queue_busy() -> bool:
@@ -167,6 +189,112 @@ def get_windows_print_queues(
                         log.exception("Could not close printer handle %s", printer_name)
             records.append(record)
     return records
+
+
+def _load_dnp_status_library():
+    """Load the official 64-bit DS-RX1 status library."""
+    if os.name != "nt":
+        raise RuntimeError("Состояние DNP доступно только на Windows")
+    if not DNP_STATUS_DLL.is_file():
+        raise RuntimeError(f"Не найдена библиотека DNP: {DNP_STATUS_DLL}")
+
+    import ctypes
+
+    try:
+        library = ctypes.WinDLL(str(DNP_STATUS_DLL), use_last_error=True)
+        library.CvInitialize.argtypes = (ctypes.c_wchar_p,)
+        library.CvInitialize.restype = ctypes.c_int
+        for name in (
+            "CvGetStatus",
+            "GetCounterL",
+            "GetMediaCountOffset",
+            "GetMediaCounter",
+            "GetInitialMediaCount",
+        ):
+            function = getattr(library, name)
+            function.argtypes = (ctypes.c_int,)
+            function.restype = ctypes.c_int
+        return library
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError(f"Не удалось загрузить библиотеку DNP: {exc}") from exc
+
+
+def _dnp_status_label(status: int) -> str:
+    status &= 0xFFFFFFFF
+    known = _DNP_STATUS_LABELS.get(status)
+    if known:
+        return known
+    if status & 0x00040000:
+        return f"аппаратная ошибка (0x{status:08X})"
+    if status & 0x00080000:
+        return f"системная ошибка (0x{status:08X})"
+    return f"неизвестное состояние (0x{status:08X})"
+
+
+def get_dnp_printer_info(config: dict) -> dict:
+    """Read the DS-RX1 hardware counter and loaded-media balance."""
+    win32print = _win32print()
+    _target, printer_name = _resolved_queue_names(
+        dict(config or {}),
+        win32print,
+    )[0]
+
+    with _windows_spooler_lock:
+        handle = None
+        try:
+            handle = win32print.OpenPrinter(printer_name)
+            printer = win32print.GetPrinter(handle, 2)
+            if not isinstance(printer, dict):
+                raise RuntimeError("Windows не вернул сведения о принтере")
+            if _queue_job_count(win32print, handle):
+                raise RuntimeError(
+                    "принтер сейчас печатает; повторите команду после завершения"
+                )
+            port_name = str(printer.get("pPortName") or "").strip()
+            if not port_name:
+                raise RuntimeError("Windows не вернул порт принтера")
+        finally:
+            if handle is not None:
+                try:
+                    win32print.ClosePrinter(handle)
+                except Exception:
+                    log.exception("Could not close printer handle %s", printer_name)
+
+        library = _load_dnp_status_library()
+        port_number = int(library.CvInitialize(port_name))
+        if port_number <= 0:
+            raise RuntimeError(f"DNP не открыл порт {port_name}")
+
+        status_code = int(library.CvGetStatus(port_number)) & 0xFFFFFFFF
+        total_count = int(library.GetCounterL(port_number))
+        if total_count < 0:
+            raise RuntimeError(
+                "DNP не вернул общий счётчик: "
+                + _dnp_status_label(status_code)
+            )
+
+        # This is the same correction used by DNP's RX1-Information utility.
+        media_offset = int(library.GetMediaCountOffset(port_number))
+        if media_offset < 0:
+            media_offset = 50
+        media_count = int(library.GetMediaCounter(port_number))
+        initial_media_count = int(library.GetInitialMediaCount(port_number))
+
+    return {
+        "printer_name": printer_name,
+        "port_name": port_name,
+        "status": _dnp_status_label(status_code),
+        "status_code": status_code,
+        "total_count": total_count,
+        "media_remaining": (
+            max(0, media_count - media_offset)
+            if media_count >= 0 else None
+        ),
+        "media_capacity": (
+            initial_media_count - media_offset
+            if initial_media_count >= media_offset else None
+        ),
+    }
 
 
 def _clear_one_windows_queue(win32print, printer_name: str) -> dict:
