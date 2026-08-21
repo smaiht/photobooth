@@ -33,7 +33,7 @@
     "default_template": "grid",
     "photo_choice_default_with_frame": true,
     "_photo_choice_default_with_frame_comment": "Which variant a photo_choice template opens on: false shows the plain photo first, true shows the framed one. Also used when the guest never chooses and default_template has photo_choice.",
-    "template_pack": "birthday",
+    "template_pack": "wedding",
     "multi_print_enabled": true,
     "_multi_print_enabled_comment": "Show the multi-select button on the template screen for every event, including regular guest events and technical_event_name.",
     "multi_print_max_sheets": 6,
