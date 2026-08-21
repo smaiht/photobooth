@@ -1429,14 +1429,8 @@ if (btnSysKeyboard) btnSysKeyboard.addEventListener("click", () => triggerSystem
 if (btnSysLogoff) btnSysLogoff.addEventListener("click", () => triggerSystemAction("logoff", "Лог офф"));
 
 window.addEventListener("keydown", (e) => {
-    if (e.key === "F12" || (e.ctrlKey && e.shiftKey && (e.key === "S" || e.key === "s" || e.key === "Ы" || e.key === "ы"))) {
+    if (e.key === "Escape" && serviceModal && !serviceModal.hidden) {
         e.preventDefault();
-        if (serviceModal && !serviceModal.hidden) closeServiceModal();
-        else openServiceModal();
-    } else if (e.key === "Escape") {
-        if (serviceModal && !serviceModal.hidden) {
-            e.preventDefault();
-            closeServiceModal();
-        }
+        closeServiceModal();
     }
 });

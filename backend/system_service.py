@@ -101,14 +101,15 @@ def launch_system_action(action: str) -> dict:
             _toggle_touch_keyboard()
             return {"ok": True, "action": action}
 
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         commands = {
             "lock": ["rundll32.exe", "user32.dll,LockWorkStation"],
             "logoff": ["shutdown.exe", "/l"],
             "taskmgr": ["taskmgr.exe"],
         }
-        subprocess.Popen(commands[action], startupinfo=startupinfo)
+        subprocess.Popen(
+            commands[action],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
         return {"ok": True, "action": action}
     except (OSError, RuntimeError) as exc:
         log.exception("Failed to launch action %s", action)
@@ -164,7 +165,6 @@ def set_adapter(name: str, enabled: bool) -> dict:
         }
 
     desired = "$true" if enabled else "$false"
-    command = "Enable-NetAdapter" if enabled else "Disable-NetAdapter"
     script = f"""
     $name = {_powershell_string(name)}
     $desired = {desired}
@@ -172,7 +172,13 @@ def set_adapter(name: str, enabled: bool) -> dict:
     if ($null -eq $target) {{ throw "Адаптер не найден: $name" }}
     $current = $target.AdminStatus -eq 'Up'
     if ($current -ne $desired) {{
-        {command} -Name $target.Name -Confirm:$false
+        $admin = if ($desired) {{ 'ENABLED' }} else {{ 'DISABLED' }}
+        $output = @(& netsh.exe interface set interface "name=$($target.Name)" "admin=$admin" 2>&1)
+        if ($LASTEXITCODE -ne 0) {{
+            $detail = ($output | Out-String).Trim()
+            if (-not $detail) {{ $detail = "netsh завершился с кодом $LASTEXITCODE" }}
+            throw $detail
+        }}
     }}
     $target = Get-NetAdapter | Where-Object {{ $_.Name -eq $name }} | Select-Object -First 1
     $actual = $target.AdminStatus -eq 'Up'

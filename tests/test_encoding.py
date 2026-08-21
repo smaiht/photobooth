@@ -18,6 +18,7 @@ def _application_text_files() -> list[Path]:
         ROOT / "_sync_from_git.bat",
         ROOT / "_undo_setup.bat",
         ROOT / "script_devstart.bat",
+        ROOT / "script_devstart_gitpull.bat",
         ROOT / "script_gitpull.bat",
     }
     for directory, patterns in (
