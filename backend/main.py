@@ -49,7 +49,7 @@ from .composer import (
 from .text_layer import date_values
 from .log import read_log_snapshot
 from .video import VideoRecorder
-from . import yadisk_cloud, yadisk_control
+from . import system_service, yadisk_cloud, yadisk_control
 
 log = logging.getLogger(__name__)
 
@@ -1197,6 +1197,25 @@ async def shutdown():
     """Full stop."""
     await _shutdown_services()
     os._exit(0)
+
+
+@app.post("/api/system/action")
+def handle_system_action(payload: dict):
+    action = payload.get("action", "")
+    return system_service.launch_system_action(action)
+
+
+@app.get("/api/network/status")
+def get_network_status():
+    return system_service.list_network_adapters()
+
+
+@app.post("/api/network/set")
+def set_network(payload: dict):
+    return system_service.set_adapter(
+        payload.get("name", ""),
+        payload.get("enabled"),
+    )
 
 
 async def _do_restart():

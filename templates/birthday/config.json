@@ -34,8 +34,8 @@
                         "stroke_color": "#9b1458",
                         "line_spacing": 0.5,
                         "lines": [
-                            {"text": "ДЕНЬ РОЖДЕНИЯ СВЕТЫ", "size": 70},
-                            {"text": "16 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
+                            {"text": "ДЕНЬ РОЖДЕНИЯ", "size": 70},
+                            {"text": "22 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
                         ]
                     },
                     {
@@ -48,8 +48,8 @@
                         "stroke_color": "#9b1458",
                         "line_spacing": 0.5,
                         "lines": [
-                            {"text": "ДЕНЬ РОЖДЕНИЯ СВЕТЫ", "size": 70},
-                            {"text": "16 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
+                            {"text": "ДЕНЬ РОЖДЕНИЯ", "size": 70},
+                            {"text": "22 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
                         ]
                     }
                 ],
@@ -81,8 +81,8 @@
                         "stroke_color": "#9b1458",
                         "line_spacing": 0.5,
                         "lines": [
-                            {"text": "ДЕНЬ РОЖДЕНИЯ СВЕТЫ", "size": 70},
-                            {"text": "16 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
+                            {"text": "ДЕНЬ РОЖДЕНИЯ", "size": 70},
+                            {"text": "22 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
                         ]
                     }
                 ],
@@ -111,8 +111,8 @@
                         "stroke_color": "#9b1458",
                         "line_spacing": 0.5,
                         "lines": [
-                            {"text": "ДЕНЬ РОЖДЕНИЯ СВЕТЫ", "size": 70},
-                            {"text": "16 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
+                            {"text": "ДЕНЬ РОЖДЕНИЯ", "size": 70},
+                            {"text": "22 августа 2026", "size": 60, "weight": 600, "color": "#ffd166", "stroke_width": 50}
                         ]
                     }
                 ],

@@ -508,8 +508,9 @@ execution-state request; после выхода приложения запро
 `_setup_windows.bat` (от админа):
 1. Создаёт/проверяет `python/` (через `_ensure_python.bat`)
 2. Создаёт пользователя Photobooth с пустым бессрочным паролем
-3. Shell = `python\pythonw.exe app.py` (вместо explorer.exe)
-4. Автологин без пароля
+3. Даёт ему право включать и отключать сетевые адаптеры
+4. Shell = `python\pythonw.exe app.py` (вместо explorer.exe)
+5. Автологин без пароля
 
 Выход: Ctrl+Alt+Del → сменить пользователя.
 Откат: `_undo_setup.bat`

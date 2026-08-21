@@ -184,6 +184,26 @@
             <div id="qr-modal-text"></div>
         </div>
 
+        <!-- Service Modal -->
+        <div id="service-modal" hidden>
+            <div class="service-dialog">
+                <div class="service-header">
+                    <span class="service-title">СЕРВИС</span>
+                    <button id="service-close" type="button" aria-label="Закрыть">✕</button>
+                </div>
+                <div id="network-adapters" class="service-grid"></div>
+                <div class="service-grid">
+                    <button id="btn-sys-lock" class="service-btn" type="button">Лок</button>
+                    <button id="btn-sys-taskmgr" class="service-btn" type="button">Таск менеджер</button>
+                    <button id="btn-sys-keyboard" class="service-btn" type="button">Клава</button>
+                    <button id="btn-sys-logoff" class="service-btn service-btn-danger" type="button">Лог офф</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Service Toast -->
+        <div id="service-toast" hidden></div>
+
         <div id="flash-overlay"></div>
     </div>
 

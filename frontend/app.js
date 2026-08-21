@@ -54,6 +54,14 @@ const doneTitle = document.getElementById("done-title");
 const cameraStatusTitle = document.getElementById("camera-status-title");
 const cameraStatusSubtitle = document.getElementById("camera-status-subtitle");
 const tapLockStatus = document.querySelector(".tap-lock-status");
+const serviceModal = document.getElementById("service-modal");
+const serviceClose = document.getElementById("service-close");
+const serviceToast = document.getElementById("service-toast");
+const networkAdapters = document.getElementById("network-adapters");
+const btnSysLock = document.getElementById("btn-sys-lock");
+const btnSysTaskmgr = document.getElementById("btn-sys-taskmgr");
+const btnSysKeyboard = document.getElementById("btn-sys-keyboard");
+const btnSysLogoff = document.getElementById("btn-sys-logoff");
 
 let ws = null;
 let currentState = "idle";
@@ -1243,3 +1251,192 @@ if (previewMode) {
     fetch("/api/config").then(response => response.json()).then(applyConfig);
     connect();
 }
+
+// --- Service Menu ---
+let toastTimer = null;
+function showServiceToast(text, duration = 3000) {
+    if (!serviceToast) return;
+    serviceToast.textContent = text;
+    serviceToast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+        serviceToast.hidden = true;
+    }, duration);
+}
+
+function updateAdapterButton(button, enabled) {
+    if (!button) return;
+    button.dataset.enabled = enabled ? "true" : "false";
+    const status = button.querySelector(".service-btn-status");
+    if (!status) return;
+    status.textContent = enabled ? "ВКЛ 🟢" : "ВЫКЛ ⚪";
+    status.className = "service-btn-status " + (enabled ? "is-on" : "is-off");
+}
+
+function renderNetworkAdapters(adapters) {
+    if (!networkAdapters) return;
+    networkAdapters.replaceChildren();
+    if (!adapters.length) {
+        const empty = document.createElement("div");
+        empty.className = "service-adapters-empty";
+        empty.textContent = "Сетевых адаптеров нет";
+        networkAdapters.appendChild(empty);
+        return;
+    }
+    adapters.forEach(adapter => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "service-btn service-btn-toggle";
+        button.dataset.name = adapter.name;
+        button.title = adapter.description || adapter.name;
+
+        const label = document.createElement("span");
+        label.className = "service-btn-label";
+        label.textContent = adapter.name;
+        const status = document.createElement("span");
+        status.className = "service-btn-status";
+        button.append(label, status);
+
+        updateAdapterButton(button, adapter.enabled);
+        button.addEventListener("click", () => {
+            setNetworkAdapter(adapter.name, button.dataset.enabled !== "true");
+        });
+        networkAdapters.appendChild(button);
+    });
+}
+
+async function refreshNetworkStatus() {
+    try {
+        const res = await fetch("/api/network/status");
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            throw new Error(data.error || "Ошибка статуса");
+        }
+        renderNetworkAdapters(data.adapters || []);
+    } catch (e) {
+        if (networkAdapters) networkAdapters.replaceChildren();
+        showServiceToast(`Сеть: ${e.message || "Ошибка запроса"}`);
+    }
+}
+
+async function setNetworkAdapter(name, enabled) {
+    if (!name) {
+        showServiceToast("Имя адаптера не указано");
+        return;
+    }
+    try {
+        const res = await fetch("/api/network/set", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, enabled }),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+            const statusText = data.enabled ? "ВКЛ" : "ВЫКЛ";
+            showServiceToast(`${data.name}: ${statusText}`);
+            if (networkAdapters) {
+                for (const button of networkAdapters.querySelectorAll("button[data-name]")) {
+                    if (button.dataset.name === data.name) {
+                        updateAdapterButton(button, data.enabled);
+                        break;
+                    }
+                }
+            }
+        } else {
+            showServiceToast(`${name}: ${data.error || "Ошибка"}`);
+        }
+    } catch (e) {
+        showServiceToast(`${name}: Ошибка запроса`);
+    }
+}
+
+async function triggerSystemAction(action, title) {
+    try {
+        const res = await fetch("/api/system/action", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+            showServiceToast(`${title}: Выполнено`);
+        } else {
+            showServiceToast(`${title}: ${data.error || "Ошибка"}`);
+        }
+    } catch (e) {
+        showServiceToast(`${title}: Ошибка`);
+    }
+}
+
+function openServiceModal() {
+    if (!serviceModal) return;
+    serviceModal.hidden = false;
+    refreshNetworkStatus();
+}
+
+function closeServiceModal() {
+    if (!serviceModal) return;
+    serviceModal.hidden = true;
+}
+
+// 2 taps in the top-left corner, then 2 in the top-right corner.
+// This only observes pointer events; it never covers or blocks the real UI.
+let secretTapsLeft = 0;
+let secretTapsRight = 0;
+let secretTapTimer = null;
+const secretCornerWidth = 100;
+const secretCornerHeight = 100;
+
+function resetSecretTaps() {
+    secretTapsLeft = 0;
+    secretTapsRight = 0;
+    clearTimeout(secretTapTimer);
+    secretTapTimer = null;
+}
+
+window.addEventListener("pointerdown", (e) => {
+    if (serviceModal && !serviceModal.hidden) return;
+    const atTop = e.clientY <= secretCornerHeight;
+    const atLeft = atTop && e.clientX <= secretCornerWidth;
+    const atRight = atTop && e.clientX >= window.innerWidth - secretCornerWidth;
+
+    if (atLeft && secretTapsRight === 0) {
+        if (secretTapsLeft === 0) {
+            secretTapTimer = setTimeout(resetSecretTaps, 3500);
+        }
+        secretTapsLeft = Math.min(2, secretTapsLeft + 1);
+    } else if (atRight && secretTapsLeft >= 2) {
+        secretTapsRight++;
+        if (secretTapsRight >= 2) {
+            resetSecretTaps();
+            openServiceModal();
+        }
+    } else {
+        resetSecretTaps();
+    }
+}, { capture: true });
+
+if (serviceClose) serviceClose.addEventListener("click", closeServiceModal);
+if (serviceModal) {
+    serviceModal.addEventListener("click", (e) => {
+        if (e.target === serviceModal) closeServiceModal();
+    });
+}
+
+if (btnSysLock) btnSysLock.addEventListener("click", () => triggerSystemAction("lock", "Лок"));
+if (btnSysTaskmgr) btnSysTaskmgr.addEventListener("click", () => triggerSystemAction("taskmgr", "Таск менеджер"));
+if (btnSysKeyboard) btnSysKeyboard.addEventListener("click", () => triggerSystemAction("keyboard", "Клава"));
+if (btnSysLogoff) btnSysLogoff.addEventListener("click", () => triggerSystemAction("logoff", "Лог офф"));
+
+window.addEventListener("keydown", (e) => {
+    if (e.key === "F12" || (e.ctrlKey && e.shiftKey && (e.key === "S" || e.key === "s" || e.key === "Ы" || e.key === "ы"))) {
+        e.preventDefault();
+        if (serviceModal && !serviceModal.hidden) closeServiceModal();
+        else openServiceModal();
+    } else if (e.key === "Escape") {
+        if (serviceModal && !serviceModal.hidden) {
+            e.preventDefault();
+            closeServiceModal();
+        }
+    }
+});

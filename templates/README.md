@@ -6,14 +6,14 @@
 в `templates/<pack>/checks/<имя-исходника>/`: layout, красный trim и cut без trim.
 
 ```bash
-venv/bin/python templates/generate_template_checks.py wedding \
-  --grid templates/wedding/grid11.png \
-  --strip templates/wedding/strip11.png \
+venv/bin/python templates/generate_template_checks.py birthday \
+  --grid templates/birthday/draft.png \
+  --strip templates/birthday/strip11.png \
   --photos marketing/samples/dimaolya/source
 ```
 
 ```bash
-venv/bin/python templates/generate_template_checks.py wedding \
+venv/bin/python templates/generate_template_checks.py birthday \
   --photos marketing/samples/dimaolya/source
 ```
 
@@ -34,7 +34,7 @@ venv/bin/python templates/generate_template_checks.py wedding \
 `3688x2480` и сохраняет её как `grid_bg.png` рядом с исходником.
 
 ```bash
-venv/bin/python templates/generate_grid_background.py templates/birthday/source.png
+venv/bin/python templates/generate_grid_background.py templates/birthday/draft.png
 ```
 
 ## Сборка фона для двух полосок

@@ -1263,3 +1263,174 @@ html, body {
     flex-direction: column-reverse;
 }
 #debug-log[hidden] { display: none; }
+
+/* Service Modal */
+#service-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    animation: serviceFadeIn 0.15s ease-out;
+}
+#service-modal[hidden] {
+    display: none;
+}
+
+@keyframes serviceFadeIn {
+    from { opacity: 0; transform: scale(0.98); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.service-dialog {
+    width: min(90vw, 560px);
+    max-height: 90vh;
+    overflow-y: auto;
+    background: #1e1e24;
+    color: #fff;
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.service-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.service-title {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: #fff;
+}
+
+#service-close {
+    width: 44px;
+    height: 44px;
+    border: none;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: manipulation;
+    transition: background 0.15s;
+}
+#service-close:active {
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.service-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+#network-adapters:empty {
+    display: none;
+}
+
+.service-adapters-empty {
+    grid-column: 1 / -1;
+    padding: 12px;
+    text-align: center;
+    opacity: 0.65;
+}
+
+.service-btn {
+    appearance: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    background: #2a2a32;
+    color: #fff;
+    font-family: inherit;
+    font-size: 18px;
+    font-weight: 600;
+    padding: 18px 14px;
+    text-align: center;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, transform 0.1s, border-color 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+.service-btn:active {
+    background: #383844;
+    transform: scale(0.97);
+}
+.service-btn-toggle {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px;
+}
+
+.service-btn-label {
+    font-size: 15px;
+    opacity: 0.8;
+}
+
+.service-btn-status {
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.service-btn-status.is-on {
+    color: #00e676;
+}
+
+.service-btn-status.is-off {
+    color: #ff5252;
+}
+
+.service-btn-danger {
+    background: rgba(255, 68, 68, 0.15);
+    border-color: rgba(255, 68, 68, 0.4);
+    color: #ff5252;
+}
+.service-btn-danger:active {
+    background: rgba(255, 68, 68, 0.35);
+}
+
+/* Service Toast */
+#service-toast {
+    position: fixed;
+    top: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(20, 20, 24, 0.95);
+    color: #fff;
+    padding: 12px 24px;
+    border-radius: 30px;
+    font-size: 16px;
+    font-weight: 600;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    z-index: 100000;
+    pointer-events: none;
+    animation: toastSlideDown 0.2s ease-out;
+}
+#service-toast[hidden] {
+    display: none;
+}
+
+@keyframes toastSlideDown {
+    from { opacity: 0; transform: translate(-50%, -12px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+}
