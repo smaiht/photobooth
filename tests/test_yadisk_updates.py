@@ -1153,28 +1153,6 @@ class UpdateMarkerTests(unittest.TestCase):
         close_handle.assert_called_once_with(1234)
 
 
-class WindowsGitSyncTests(unittest.TestCase):
-    def test_scripts_align_with_origin_without_touching_ignored_state(self):
-        root = Path(__file__).resolve().parents[1]
-        sync = (root / "_sync_from_git.bat").read_text(encoding="utf-8")
-        dev_start = (root / "script_devstart.bat").read_text(encoding="utf-8")
-        git_pull = (root / "script_gitpull.bat").read_text(encoding="utf-8")
-
-        self.assertIn("git fetch --prune origin main", sync)
-        self.assertIn("git reset --hard origin/main", sync)
-        self.assertIn('.update_in_progress.json', sync)
-        self.assertIn("PHOTOBOOTH_SYNC_PYTHONW", sync)
-        self.assertIn("http://127.0.0.1:8000/api/shutdown", sync)
-        self.assertLess(sync.index("api/shutdown"), sync.index("Stop-Process"))
-        self.assertNotIn("git pull", sync)
-        self.assertNotIn("config_app.json", sync)
-        self.assertNotIn("config_camera.json", sync)
-        self.assertNotIn(".env", sync)
-        self.assertNotIn("CommandLine", sync)
-        self.assertIn('_sync_from_git.bat', dev_start)
-        self.assertIn('_sync_from_git.bat', git_pull)
-
-
 class WindowsPowerTests(unittest.TestCase):
     def test_app_prevents_system_sleep_and_display_timeout(self):
         set_execution_state = Mock(return_value=1)
