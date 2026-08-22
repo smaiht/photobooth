@@ -407,7 +407,7 @@ class PrintArtifactDownloadTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
-    async def test_reports_dnp_hardware_counter(self):
+    async def test_status_reports_dnp_and_both_windows_queues(self):
         info = {
             "printer_name": "DS-RX1",
             "status": "готов к печати",
@@ -415,22 +415,6 @@ class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
             "media_remaining": 150,
             "media_capacity": 700,
         }
-        with patch(
-            "backend.printer.get_dnp_printer_info",
-            return_value=info,
-        ) as inspect:
-            result = await main.handle_disk_command({
-                "command_id": "a" * 32,
-                "command": "printer_info",
-                "data": None,
-            })
-
-        self.assertEqual(result["status"], "ok")
-        self.assertIn("Всего отпечатков: 1234", result["message"])
-        self.assertIn("Осталось отпечатков: 150 из 700", result["message"])
-        inspect.assert_called_once_with(main.CONFIG)
-
-    async def test_reports_both_windows_print_queues(self):
         records = [
             {
                 "target": "grid",
@@ -445,23 +429,39 @@ class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
                 "error": None,
             },
         ]
-        with patch(
-            "backend.printer.get_windows_print_queues",
-            return_value=records,
-        ) as inspect:
+        config = {
+            "yadisk_folder": "event",
+            "template_pack": "birthday",
+        }
+        with patch.object(main, "camera", None), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "CONFIG", config), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="event"), \
+             patch("backend.main.yadisk_cloud.pending_count", return_value=0), \
+             patch("backend.main.preset_names", return_value=[]), \
+             patch("backend.printer.get_dnp_printer_info",
+                   return_value=info) as inspect_dnp, \
+             patch("backend.printer.get_windows_print_queues",
+                   return_value=records) as inspect_queues:
             result = await main.handle_disk_command({
                 "command_id": "a" * 32,
-                "command": "print_queue",
+                "command": "status",
                 "data": None,
             })
 
         self.assertEqual(result["status"], "ok")
+        self.assertIn("Event (booth): event", result["message"])
+        self.assertIn("Template pack: birthday", result["message"])
+        self.assertIn("Всего отпечатков: 1234", result["message"])
+        self.assertIn("Осталось отпечатков: 150 из 700", result["message"])
         self.assertIn("Grid (DS-RX1): заданий в очереди — 2", result["message"])
         self.assertIn(
             "Strips (DS-RX1 Strips): заданий в очереди — 1",
             result["message"],
         )
-        inspect.assert_called_once_with(main.CONFIG)
+        inspect_dnp.assert_called_once_with(config)
+        inspect_queues.assert_called_once_with(config)
 
     async def test_clear_reports_partial_failure_across_both_queues(self):
         records = [

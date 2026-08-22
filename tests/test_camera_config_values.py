@@ -413,11 +413,22 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
             "lens": "RF24-50mm",
         }
 
-    def test_report_text_lists_matches_mismatches_and_gaps(self):
+    async def test_report_text_lists_matches_mismatches_and_gaps(self):
         fake_camera = MagicMock()
+        fake_camera.is_connected = True
         fake_camera.status_snapshot.return_value = self.snapshot
-        with patch.object(main, "camera", fake_camera):
-            text = main._camera_config_report_text()
+        with patch.object(main, "camera", fake_camera), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "CONFIG", {
+                 "yadisk_folder": "event",
+                 "template_pack": "birthday",
+             }), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="event"), \
+             patch("backend.main.yadisk_cloud.pending_count", return_value=0), \
+             patch("backend.main._printer_status_lines", return_value=[]), \
+             patch("backend.main.preset_names", return_value=[]):
+            text = await main._status_report_text()
 
         self.assertIn("Canon EOS R8", text)
         self.assertIn("RF24-50mm", text)
@@ -437,45 +448,34 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
             "mismatched": [],
             "unavailable": [],
         }
-        fake_camera = MagicMock()
-        fake_camera.status_snapshot.return_value = {"config_report": clean}
-        with patch.object(main, "camera", fake_camera):
-            text = main._camera_config_report_text()
+        text = "\n".join(main._format_camera_config_report(clean))
         self.assertIn("без расхождений", text)
 
     async def test_notice_is_published_on_every_camera_setup(self):
-        fake_camera = MagicMock()
-        fake_camera.status_snapshot.return_value = self.snapshot
-        with patch.object(main, "camera", fake_camera), \
+        with patch("backend.main._status_report_text",
+                   AsyncMock(return_value="full status")), \
              patch("backend.main.yadisk_control.publish_booth_notice",
                    new_callable=AsyncMock) as publish:
-            await main._report_camera_config_to_admin()
+            await main._report_status_to_admin()
             # A USB reconnect reconfigures the camera and reports again.
-            await main._report_camera_config_to_admin()
+            await main._report_status_to_admin()
 
         self.assertEqual(publish.await_count, 2)
         kind, title, text = publish.await_args.args
-        self.assertEqual(kind, "camera_config")
-        self.assertIn("Камера настроена и готова", text)
+        self.assertEqual(kind, "booth_status")
+        self.assertEqual(title, "Фотобудка готова")
+        self.assertEqual(text, "full status")
 
     async def test_delivery_failure_does_not_break_the_booth(self):
-        fake_camera = MagicMock()
-        fake_camera.status_snapshot.return_value = self.snapshot
-        with patch.object(main, "camera", fake_camera), \
+        with patch("backend.main._status_report_text",
+                   AsyncMock(return_value="full status")), \
              patch("backend.main.yadisk_control.publish_booth_notice",
                    new_callable=AsyncMock,
                    side_effect=RuntimeError("disk down")) as publish:
-            await main._report_camera_config_to_admin()
-            await main._report_camera_config_to_admin()
+            await main._report_status_to_admin()
+            await main._report_status_to_admin()
 
         self.assertEqual(publish.await_count, 2)
-
-    async def test_missing_camera_does_not_publish_anything(self):
-        with patch.object(main, "camera", None), \
-             patch("backend.main.yadisk_control.publish_booth_notice",
-                   new_callable=AsyncMock) as publish:
-            await main._report_camera_config_to_admin()
-        publish.assert_not_awaited()
 
     async def test_status_command_includes_the_applied_config(self):
         fake_camera = MagicMock()
@@ -486,7 +486,9 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
              patch.object(main, "CONFIG", {"yadisk_folder": "event"}), \
              patch("backend.main.yadisk_cloud.current_event_folder",
                    return_value="event"), \
-             patch("backend.main.yadisk_cloud.pending_count", return_value=0):
+             patch("backend.main.yadisk_cloud.pending_count", return_value=0), \
+             patch("backend.main._printer_status_lines", return_value=[]), \
+             patch("backend.main.preset_names", return_value=[]):
             result = await main.handle_disk_command({
                 "command_id": "a" * 32,
                 "command": "status",

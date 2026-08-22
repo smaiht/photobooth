@@ -492,48 +492,26 @@ def on_camera_connected():
         async def show_ready():
             if not _session_running:
                 await set_state("idle")
+            await _report_status_to_admin()
 
         asyncio.run_coroutine_threadsafe(show_ready(), _event_loop)
-        asyncio.run_coroutine_threadsafe(
-            _report_camera_config_to_admin(), _event_loop)
 
 
-def _camera_config_report_text() -> str | None:
-    """Report describing what the camera actually applied after setup."""
-    snapshot_method = getattr(camera, "status_snapshot", None) if camera else None
-    if not snapshot_method:
-        return None
-    snapshot = snapshot_method()
-    lines = _format_camera_config_report(snapshot.get("config_report"))
-    if not lines:
-        return None
-    header = ["Камера настроена и готова."]
-    model = snapshot.get("product_name") or snapshot.get("model")
-    if model:
-        header.append(f"Камера: {model}")
-    if snapshot.get("lens"):
-        header.append(f"Объектив: {snapshot['lens']}")
-    return "\n".join(header + lines)
-
-
-async def _report_camera_config_to_admin() -> None:
-    """Push the applied camera config to the administrator.
+async def _report_status_to_admin() -> None:
+    """Push the full booth status to the administrator.
 
     Runs on every successful camera setup, both at launch and after a USB
-    reconnect, so the administrator always sees the configuration the camera
-    is actually running with.
+    reconnect.  The same report is returned by ``/status``.
     """
-    text = await asyncio.to_thread(_camera_config_report_text)
-    if not text:
-        return
+    text = await _status_report_text()
     try:
         await yadisk_control.publish_booth_notice(
-            "camera_config", "Конфигурация камеры", text)
+            "booth_status", "Фотобудка готова", text)
     except Exception as exc:
         # The booth must stay usable even when the notice cannot be delivered.
-        log.warning("Could not publish camera config report: %s", exc)
+        log.warning("Could not publish booth status: %s", exc)
         return
-    log.info("Camera config report published for the administrator")
+    log.info("Booth status published for the administrator")
 
 
 def _normalize_print_item(
@@ -1369,6 +1347,116 @@ def _printer_info_message(info: dict) -> str:
     return "\n".join(lines)
 
 
+def _printer_status_lines() -> list[str]:
+    """Read the DNP hardware state and both Windows print queues."""
+    from .printer import get_dnp_printer_info, get_windows_print_queues
+
+    lines: list[str] = []
+    try:
+        lines.extend(_printer_info_message(
+            get_dnp_printer_info(CONFIG)).splitlines())
+    except Exception as exc:
+        lines.append(f"DNP: ошибка — {exc}")
+
+    try:
+        records = get_windows_print_queues(CONFIG)
+        message, _has_error = _print_queue_status_message(records)
+        lines.extend(message.splitlines())
+    except Exception as exc:
+        lines.append(f"Очереди печати Windows: ошибка — {exc}")
+    return lines
+
+
+async def _status_report_text() -> str:
+    """Build the single status report used by startup notices and /status."""
+    hash_path = ROOT_DIR / ".update_hash"
+    version = "unknown"
+    if hash_path.exists():
+        raw_version = hash_path.read_text(encoding="utf-8").strip()
+        try:
+            version_state = json.loads(raw_version)
+        except ValueError:
+            version_state = None
+        if isinstance(version_state, dict):
+            version = str(version_state.get("full") or "unknown")
+        elif raw_version:
+            version = raw_version
+
+    connected = bool(camera and camera.is_connected)
+    status_lines = [
+        f"State: {STATE}",
+        f"Event (booth): {_active_event_name() or 'не задан'}",
+        f"Template pack: {CONFIG.get('template_pack', 'unknown')}",
+        f"Camera: {'online' if connected else 'offline'}",
+        f"Start locked: {'yes' if _start_locked() else 'no'}",
+        f"Unlock sessions remaining: {_cafe_unlock_sessions_remaining}",
+    ]
+
+    snapshot_method = getattr(camera, "status_snapshot", None) if camera else None
+    if snapshot_method:
+        snapshot = snapshot_method()
+        identity = snapshot.get("product_name") or snapshot.get("model")
+        if identity:
+            status_lines.append(f"Camera model: {identity}")
+        if snapshot.get("lens"):
+            status_lines.append(f"Camera lens: {snapshot['lens']}")
+        health = []
+        for label, key in (
+            ("power", "battery"),
+            ("temp", "temperature"),
+            ("AE", "ae_mode"),
+            ("auto-off", "auto_power_off"),
+        ):
+            if snapshot.get(key) is not None:
+                health.append(f"{label}={snapshot[key]}")
+        if health:
+            status_lines.append("Camera health: " + ", ".join(health))
+        disk_free = snapshot.get("disk_free_bytes")
+        if isinstance(disk_free, int):
+            status_lines.append(
+                f"Photo disk free: {disk_free / (1024 ** 3):.2f} GiB")
+        if snapshot.get("last_shutdown_timer_extension_result"):
+            status_lines.append(
+                "Camera shutdown timer extension: "
+                f"{snapshot['last_shutdown_timer_extension_result']} at "
+                f"{snapshot.get('last_shutdown_timer_extension_at') or 'unknown'}")
+        if snapshot.get("last_disconnect_reason"):
+            status_lines.append(
+                "Last camera disconnect: "
+                f"{snapshot['last_disconnect_reason']} at "
+                f"{snapshot.get('last_disconnect_at') or 'unknown'}")
+        if snapshot.get("last_cleanup_result"):
+            status_lines.append(
+                "Last camera cleanup: "
+                f"{snapshot['last_cleanup_result']} at "
+                f"{snapshot.get('last_cleanup_at') or 'unknown'}")
+        config_lines = _format_camera_config_report(
+            snapshot.get("config_report"))
+        if config_lines:
+            status_lines.append(
+                "Applied config"
+                + (f" (прочитано {snapshot.get('config_report_at')})"
+                   if snapshot.get("config_report_at") else "")
+                + ":")
+            status_lines.extend(config_lines)
+
+    status_lines.extend(await asyncio.to_thread(_printer_status_lines))
+    status_lines.extend((
+        f"Upload queue: {yadisk_cloud.pending_count()}",
+        f"Version: {version}",
+    ))
+    try:
+        presets = preset_names()
+    except (OSError, ValueError, json.JSONDecodeError):
+        presets = []
+    if presets:
+        status_lines.append(
+            "Пресеты света: "
+            + ", ".join(f"/light {name}" for name in presets)
+        )
+    return "\n".join(status_lines)
+
+
 def _clear_runtime_directory(path: Path) -> tuple[int, int]:
     """Delete only the contents of one fixed application runtime directory."""
     path.mkdir(parents=True, exist_ok=True)
@@ -1443,47 +1531,27 @@ async def handle_disk_command(command: dict) -> dict:
             ),
         }
 
-    if cmd in ("printer_info", "print_queue", "clear_print_queue"):
+    if cmd == "clear_print_queue":
         if data is not None:
             return {
                 "status": "error",
                 "message": "Команда принтера не принимает аргументы",
             }
         try:
-            from .printer import (
+            from .printer import clear_windows_print_queues
+            records = await asyncio.to_thread(
                 clear_windows_print_queues,
-                get_dnp_printer_info,
-                get_windows_print_queues,
+                CONFIG,
             )
-            if cmd == "printer_info":
-                info = await asyncio.to_thread(get_dnp_printer_info, CONFIG)
-                message = _printer_info_message(info)
-                has_error = False
-            elif cmd == "print_queue":
-                records = await asyncio.to_thread(
-                    get_windows_print_queues,
-                    CONFIG,
-                )
-                message, has_error = _print_queue_status_message(records)
-            else:
-                records = await asyncio.to_thread(
-                    clear_windows_print_queues,
-                    CONFIG,
-                )
-                message, has_error = _print_queue_clear_message(records)
+            message, has_error = _print_queue_clear_message(records)
             return {
                 "status": "error" if has_error else "ok",
                 "message": message,
             }
         except Exception as exc:
-            action = {
-                "printer_info": "прочитать данные DNP",
-                "print_queue": "просмотреть очереди печати",
-                "clear_print_queue": "очистить очереди печати",
-            }[cmd]
             return {
                 "status": "error",
-                "message": f"Не удалось {action}: {exc}",
+                "message": f"Не удалось очистить очереди печати: {exc}",
             }
 
     if cmd == "print_image":
@@ -1832,89 +1900,10 @@ async def handle_disk_command(command: dict) -> dict:
         }
 
     if cmd == "status":
-        hash_path = ROOT_DIR / ".update_hash"
-        version = "unknown"
-        if hash_path.exists():
-            raw_version = hash_path.read_text(encoding="utf-8").strip()
-            try:
-                version_state = json.loads(raw_version)
-            except ValueError:
-                version_state = None
-            if isinstance(version_state, dict):
-                version = str(version_state.get("full") or "unknown")
-            elif raw_version:
-                version = raw_version
-        connected = bool(camera and camera.is_connected)
-        event = yadisk_cloud.current_event_folder() or str(CONFIG.get("yadisk_folder", ""))
-        status_lines = [
-            f"State: {STATE}",
-            f"Camera: {'online' if connected else 'offline'}",
-            f"Start locked: {'yes' if _start_locked() else 'no'}",
-            f"Unlock sessions remaining: {_cafe_unlock_sessions_remaining}",
-        ]
-        snapshot_method = getattr(camera, "status_snapshot", None) if camera else None
-        if snapshot_method:
-            snapshot = snapshot_method()
-            identity = snapshot.get("product_name") or snapshot.get("model")
-            if identity:
-                status_lines.append(f"Camera model: {identity}")
-            health = []
-            for label, key in (
-                ("power", "battery"),
-                ("temp", "temperature"),
-                ("AE", "ae_mode"),
-                ("auto-off", "auto_power_off"),
-            ):
-                if snapshot.get(key) is not None:
-                    health.append(f"{label}={snapshot[key]}")
-            if health:
-                status_lines.append("Camera health: " + ", ".join(health))
-            disk_free = snapshot.get("disk_free_bytes")
-            if isinstance(disk_free, int):
-                status_lines.append(
-                    f"Photo disk free: {disk_free / (1024 ** 3):.2f} GiB")
-            if snapshot.get("last_shutdown_timer_extension_result"):
-                status_lines.append(
-                    "Camera shutdown timer extension: "
-                    f"{snapshot['last_shutdown_timer_extension_result']} at "
-                    f"{snapshot.get('last_shutdown_timer_extension_at') or 'unknown'}")
-            if snapshot.get("last_disconnect_reason"):
-                status_lines.append(
-                    "Last camera disconnect: "
-                    f"{snapshot['last_disconnect_reason']} at "
-                    f"{snapshot.get('last_disconnect_at') or 'unknown'}")
-            if snapshot.get("last_cleanup_result"):
-                status_lines.append(
-                    "Last camera cleanup: "
-                    f"{snapshot['last_cleanup_result']} at "
-                    f"{snapshot.get('last_cleanup_at') or 'unknown'}")
-            config_lines = _format_camera_config_report(
-                snapshot.get("config_report"))
-            if config_lines:
-                status_lines.append(
-                    "Applied config"
-                    + (f" (прочитано {snapshot.get('config_report_at')})"
-                       if snapshot.get("config_report_at") else "")
-                    + ":")
-                status_lines.extend(config_lines)
-        status_lines.extend([
-            f"Event: {event}",
-            f"Template pack: {CONFIG.get('template_pack', 'unknown')}",
-            f"Upload queue: {yadisk_cloud.pending_count()}",
-            f"Version: {version}",
-        ])
-        try:
-            presets = preset_names()
-        except (OSError, ValueError, json.JSONDecodeError):
-            presets = []
-        if presets:
-            status_lines.append(
-                "Пресеты света: "
-                + ", ".join(f"/light {name}" for name in presets)
-            )
+        event = _active_event_name()
         return {
             "status": "ok",
-            "message": "\n".join(status_lines),
+            "message": await _status_report_text(),
             "event_folder": event,
             "start_locked": _start_locked(),
             "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
