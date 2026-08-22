@@ -11,16 +11,9 @@ def _application_text_files() -> list[Path]:
         ROOT / "app.py",
         ROOT / "config_app.json",
         ROOT / "config_camera.json",
-        ROOT / "_ensure_python.bat",
-        ROOT / "_set_shell.ps1",
-        ROOT / "_setup_strips_printer.bat",
-        ROOT / "_setup_windows.bat",
-        ROOT / "_sync_from_git.bat",
-        ROOT / "_undo_setup.bat",
-        ROOT / "script_devstart.bat",
-        ROOT / "script_devstart_gitpull.bat",
-        ROOT / "script_gitpull.bat",
     }
+    files.update(ROOT.glob("*.bat"))
+    files.update(ROOT.glob("*.ps1"))
     for directory, patterns in (
         (ROOT / "backend", ("*.py",)),
         (ROOT / "assets", ("*.js", "*.md")),

@@ -9,6 +9,10 @@ reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v Defau
 reg delete "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /f >nul 2>&1
 echo [OK] Auto-login and lock screen restored
 
+:: Remove privileged network action
+schtasks /delete /tn "Photobooth Network Adapter" /f >nul 2>&1
+echo [OK] Network adapter control removed
+
 :: Delete kiosk user
 net user Photobooth /delete >nul 2>&1
 echo [OK] Photobooth user deleted

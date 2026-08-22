@@ -4,10 +4,15 @@ import json
 import logging
 import subprocess
 import sys
+import threading
+import time
+import uuid
 
 log = logging.getLogger(__name__)
 
 SYSTEM_ACTIONS = {"keyboard", "lock", "logoff", "taskmgr"}
+NETWORK_TASK_NAME = "Photobooth Network Adapter"
+_network_task_lock = threading.Lock()
 
 
 def _powershell_string(value: str) -> str:
@@ -164,31 +169,56 @@ def set_adapter(name: str, enabled: bool) -> dict:
             "mock": True,
         }
 
-    desired = "$true" if enabled else "$false"
-    script = f"""
-    $name = {_powershell_string(name)}
-    $desired = {desired}
-    $target = Get-NetAdapter | Where-Object {{ $_.Name -eq $name }} | Select-Object -First 1
-    if ($null -eq $target) {{ throw "Адаптер не найден: $name" }}
-    $current = $target.AdminStatus -eq 'Up'
-    if ($current -ne $desired) {{
-        $admin = if ($desired) {{ 'ENABLED' }} else {{ 'DISABLED' }}
-        $output = @(& netsh.exe interface set interface "name=$($target.Name)" "admin=$admin" 2>&1)
-        if ($LASTEXITCODE -ne 0) {{
-            $detail = ($output | Out-String).Trim()
-            if (-not $detail) {{ $detail = "netsh завершился с кодом $LASTEXITCODE" }}
-            throw $detail
-        }}
-    }}
-    $target = Get-NetAdapter | Where-Object {{ $_.Name -eq $name }} | Select-Object -First 1
-    $actual = $target.AdminStatus -eq 'Up'
-    if ($actual -ne $desired) {{ throw "Windows не изменила состояние адаптера: $name" }}
-    [PSCustomObject]@{{ name = $target.Name; enabled = $actual }} | ConvertTo-Json -Compress
-    """
     try:
-        result = json.loads(_run_powershell(script))
-        result["ok"] = True
-        return result
-    except (RuntimeError, json.JSONDecodeError, TypeError) as exc:
+        import winreg
+
+        with _network_task_lock:
+            request_id = uuid.uuid4().hex
+            with winreg.CreateKey(
+                    winreg.HKEY_CURRENT_USER, r"Software\Photobooth") as key:
+                request = json.dumps({
+                    "id": request_id,
+                    "name": name,
+                    "enabled": enabled,
+                }, ensure_ascii=False)
+                winreg.SetValueEx(
+                    key, "NetworkRequest", 0, winreg.REG_SZ, request)
+                winreg.SetValueEx(key, "NetworkResult", 0, winreg.REG_SZ, "")
+
+            try:
+                _run_powershell(f"""
+                $scheduler = New-Object -ComObject Schedule.Service
+                $scheduler.Connect()
+                $task = $scheduler.GetFolder('\\').GetTask({_powershell_string(NETWORK_TASK_NAME)})
+                $null = $task.Run($null)
+                """)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    "Сетевое управление не установлено: повторно запустите "
+                    f"_setup_windows.bat от администратора ({exc})"
+                ) from exc
+
+            deadline = time.monotonic() + 12
+            while time.monotonic() < deadline:
+                time.sleep(0.1)
+                with winreg.OpenKey(
+                        winreg.HKEY_CURRENT_USER,
+                        r"Software\Photobooth") as key:
+                    raw_result = winreg.QueryValueEx(
+                        key, "NetworkResult")[0]
+                    if not raw_result:
+                        continue
+                result = json.loads(raw_result)
+                if result.get("id") != request_id:
+                    continue
+                if not result.get("ok"):
+                    raise RuntimeError(result.get("error") or "Неизвестная ошибка")
+                return {
+                    "ok": True,
+                    "name": name,
+                    "enabled": bool(result.get("enabled")),
+                }
+            raise RuntimeError("Служебная задача сети не ответила за 12 секунд")
+    except (OSError, RuntimeError, json.JSONDecodeError) as exc:
         log.warning("Could not set adapter %s: %s", name, exc)
         return {"ok": False, "name": name, "error": str(exc)}
