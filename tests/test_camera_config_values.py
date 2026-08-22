@@ -435,7 +435,7 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("✓ ISO=100", text)
         self.assertIn("✗ Av=5.6 (в конфиге '16')", text)
         self.assertIn("? ImageQuality=unavailable", text)
-        self.assertIn("НЕ ПРИМЕНИЛОСЬ: Av", text)
+        self.assertIn("Не применилось: Av", text)
         self.assertIn("Камера не сообщила: ImageQuality", text)
         self.assertIn("FocusDelay=0.4", text)
 
@@ -496,9 +496,9 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
             })
 
         self.assertEqual(result["status"], "ok")
-        self.assertIn("Applied config", result["message"])
+        self.assertIn("КОНФИГУРАЦИЯ КАМЕРЫ", result["message"])
         self.assertIn("✓ ISO=100", result["message"])
-        self.assertIn("НЕ ПРИМЕНИЛОСЬ: Av", result["message"])
+        self.assertIn("Не применилось: Av", result["message"])
 
 
 class TelegramCameraFieldUpdateTests(unittest.TestCase):

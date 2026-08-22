@@ -47,6 +47,7 @@ class DnpPrinterInfoTests(unittest.TestCase):
             "cJobs": 0,
             "pPortName": "USB001",
         }
+        win32print.EnumJobs.return_value = []
 
         library = Mock()
         library.CvInitialize.return_value = 1
@@ -1024,14 +1025,16 @@ class PrinterQueueTests(unittest.TestCase):
             self.assertNotIn("do not match", messages)
 
     def test_reports_grid_and_strips_windows_job_counts(self):
-        job_counts = {
-            "DNP Cards": 3,
-            "DNP Strips": 1,
+        jobs = {
+            "DNP Cards": [{"JobId": 1}, {"JobId": 2}, {"JobId": 3}],
+            "DNP Strips": [{"JobId": 4}],
         }
         win32print = Mock()
         win32print.OpenPrinter.side_effect = lambda name: name
-        win32print.GetPrinter.side_effect = (
-            lambda handle, _level: {"cJobs": job_counts[handle]}
+        # The DNP driver can leave cJobs stale after Windows has removed a job.
+        win32print.GetPrinter.return_value = {"cJobs": 99}
+        win32print.EnumJobs.side_effect = (
+            lambda handle, *_args: jobs[handle]
         )
 
         with patch.dict(sys.modules, {"win32print": win32print}):
@@ -1054,24 +1057,25 @@ class PrinterQueueTests(unittest.TestCase):
                 "error": None,
             },
         ])
+        win32print.GetPrinter.assert_not_called()
         self.assertEqual(win32print.ClosePrinter.call_count, 2)
 
     def test_clears_both_windows_queues_and_reports_before_after(self):
-        job_counts = {
-            "DNP Cards": 3,
-            "DNP Strips": 1,
+        jobs = {
+            "DNP Cards": [{"JobId": 1}, {"JobId": 2}, {"JobId": 3}],
+            "DNP Strips": [{"JobId": 4}],
         }
         win32print = Mock()
         win32print.PRINTER_ACCESS_ADMINISTER = 4
         win32print.PRINTER_CONTROL_PURGE = 3
         win32print.OpenPrinter.side_effect = lambda name, *_args: name
-        win32print.GetPrinter.side_effect = (
-            lambda handle, _level: {"cJobs": job_counts[handle]}
+        win32print.EnumJobs.side_effect = (
+            lambda handle, *_args: jobs[handle]
         )
 
         def purge(handle, _level, _printer, command):
             self.assertEqual(command, 3)
-            job_counts[handle] = 0
+            jobs[handle] = []
 
         win32print.SetPrinter.side_effect = purge
 
@@ -1145,18 +1149,15 @@ class PrinterQueueTests(unittest.TestCase):
         self.assertEqual(win32print.SetJob.call_count, 2)
 
     def test_same_physical_queue_is_purged_only_once(self):
-        job_count = 2
+        jobs = [{"JobId": 1}, {"JobId": 2}]
         win32print = Mock()
         win32print.PRINTER_ACCESS_ADMINISTER = 4
         win32print.PRINTER_CONTROL_PURGE = 3
         win32print.OpenPrinter.side_effect = lambda name, *_args: name
-        win32print.GetPrinter.side_effect = (
-            lambda _handle, _level: {"cJobs": job_count}
-        )
+        win32print.EnumJobs.side_effect = lambda *_args: jobs
 
         def purge(*_args):
-            nonlocal job_count
-            job_count = 0
+            jobs.clear()
 
         win32print.SetPrinter.side_effect = purge
 

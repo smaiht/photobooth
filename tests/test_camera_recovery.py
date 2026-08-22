@@ -795,10 +795,10 @@ class CameraStatusTests(unittest.IsolatedAsyncioTestCase):
              patch("backend.main.yadisk_cloud.pending_count", return_value=0):
             result = await main.handle_disk_command(command)
 
-        self.assertIn("Camera model: Canon EOS R8", result["message"])
-        self.assertIn("power=AC", result["message"])
-        self.assertIn("Photo disk free: 10.00 GiB", result["message"])
-        self.assertIn("Last camera disconnect", result["message"])
+        self.assertIn("Модель: Canon EOS R8", result["message"])
+        self.assertIn("Питание: AC", result["message"])
+        self.assertIn("Диск фото: 10.00 GiB свободно", result["message"])
+        self.assertIn("Последнее отключение", result["message"])
 
 
 class SessionDisconnectTests(unittest.IsolatedAsyncioTestCase):

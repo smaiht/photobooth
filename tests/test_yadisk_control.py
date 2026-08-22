@@ -451,13 +451,13 @@ class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
             })
 
         self.assertEqual(result["status"], "ok")
-        self.assertIn("Event (booth): event", result["message"])
-        self.assertIn("Template pack: birthday", result["message"])
-        self.assertIn("Всего отпечатков: 1234", result["message"])
-        self.assertIn("Осталось отпечатков: 150 из 700", result["message"])
-        self.assertIn("Grid (DS-RX1): заданий в очереди — 2", result["message"])
+        self.assertIn("• Будка: event\n\n🖼 ШАБЛОН И СЕССИИ", result["message"])
+        self.assertIn("• Набор: birthday", result["message"])
+        self.assertIn("• Допуск: ♾ без ограничений", result["message"])
+        self.assertIn("Отпечатков: всего 1234 · остаток 150/700", result["message"])
+        self.assertIn("Grid · DS-RX1 — в очереди: 2", result["message"])
         self.assertIn(
-            "Strips (DS-RX1 Strips): заданий в очереди — 1",
+            "Strips · DS-RX1 Strips — в очереди: 1",
             result["message"],
         )
         inspect_dnp.assert_called_once_with(config)
@@ -800,7 +800,7 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("неизвестный пресет", result["message"])
         self.assertNotIn("_post_action", result)
 
-    async def test_status_lists_ready_to_copy_light_commands(self):
+    async def test_status_lists_ready_to_copy_camera_commands(self):
         with patch.object(main, "STATE", "idle"), \
              patch.object(main, "camera", None), \
              patch.object(main, "CONFIG", {"yadisk_folder": "event"}), \
@@ -808,7 +808,14 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
                    return_value="event"), \
              patch("backend.main.yadisk_cloud.pending_count", return_value=0), \
              patch("backend.main.preset_names",
-                   return_value=["sun", "indoor_dark"]):
+                   return_value=["sun", "indoor_dark"]), \
+             patch("backend.main.lens_max_aperture_hint",
+                   return_value="lens aperture hint"), \
+             patch("backend.main.camera_exposure_options", return_value={
+                 "av": ["av-option"],
+                 "tv": ["tv-option"],
+                 "iso": ["iso-option"],
+             }):
             result = await main.handle_disk_command({
                 "command_id": "a" * 32,
                 "command": "status",
@@ -816,10 +823,12 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
             })
 
         self.assertEqual(result["status"], "ok")
-        self.assertIn(
-            "Пресеты света: /light sun, /light indoor_dark",
-            result["message"],
-        )
+        self.assertIn("🎛 УПРАВЛЕНИЕ", result["message"])
+        self.assertIn("Свет: /light sun · /light indoor_dark", result["message"])
+        self.assertIn("• lens aperture hint", result["message"])
+        self.assertIn("/av: av-option", result["message"])
+        self.assertIn("/tv: tv-option", result["message"])
+        self.assertIn("/iso: iso-option", result["message"])
 
     async def test_get_config_embeds_one_text_export_in_response(self):
         command = {
@@ -1195,8 +1204,8 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["start_locked"])
         self.assertEqual(result["unlock_sessions_remaining"], 0)
-        self.assertIn("Start locked: yes", result["message"])
-        self.assertIn("Unlock sessions remaining: 0", result["message"])
+        self.assertIn("• Допуск: 🔴 закрыт", result["message"])
+        self.assertIn("Осталось сессий: 0", result["message"])
 
     async def test_set_event_rebroadcasts_idle_lock_state(self):
         command = {

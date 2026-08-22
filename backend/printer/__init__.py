@@ -90,13 +90,10 @@ def _resolved_queue_names(config: dict, win32print) -> list[tuple[str, str]]:
 
 
 def _queue_job_count(win32print, handle) -> int:
-    """Read a printer's current spooler job count."""
-    info = win32print.GetPrinter(handle, 2)
-    count = info.get("cJobs") if isinstance(info, dict) else None
-    if type(count) is int and count >= 0:
-        return count
-    # ``cJobs`` is present for normal level-2 records, but enumerating is a
-    # safe fallback for drivers which omit it.
+    """Count the jobs Windows currently exposes in the queue."""
+    # DNP's level-2 ``cJobs`` counter can remain stale after the visible job
+    # has disappeared.  EnumJobs is also what the queue UI is based on, so the
+    # administrator sees the same count here and in Windows.
     jobs = win32print.EnumJobs(handle, 0, 0x7FFFFFFF, 1)
     return len(jobs)
 
@@ -269,7 +266,7 @@ def get_dnp_printer_info(config: dict) -> dict:
         total_count = int(library.GetCounterL(port_number))
         if total_count < 0:
             raise RuntimeError(
-                "DNP не вернул общий счётчик: "
+                "счётчики недоступны — "
                 + _dnp_status_label(status_code)
             )
 

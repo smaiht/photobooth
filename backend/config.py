@@ -322,6 +322,27 @@ def preset_names(config_path: Path | None = None) -> list[str]:
     return _preset_names(config)
 
 
+def camera_exposure_options(
+    config_path: Path | None = None,
+) -> dict[str, list]:
+    """Av/Tv/ISO values advertised by the current camera config."""
+    _, config = _load_camera_config(config_path)
+    result = {}
+    for field in CAMERA_VALUE_MAPS:
+        values = config.get(f"_{field}_options")
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"_{field}_options должен быть непустым списком")
+        result[field] = list(values)
+    return result
+
+
+def lens_max_aperture_hint(config_path: Path | None = None) -> str:
+    """Operator note for the lens configured on this booth."""
+    _, config = _load_camera_config(config_path)
+    hint = config.get("_lens_max_aperture_hint")
+    return hint.strip() if isinstance(hint, str) else ""
+
+
 def apply_camera_preset(
     name: str,
     config_path: Path | None = None,

@@ -33,6 +33,8 @@ from .config import (
     ROOT_DIR,
     TEMPLATES_DIR,
     apply_camera_preset,
+    camera_exposure_options,
+    lens_max_aperture_hint,
     load_event_config,
     preset_names,
     update_app_config_field,
@@ -250,7 +252,8 @@ def _format_camera_config_report(report: dict) -> list[str]:
     lines: list[str] = []
     camera_entries = report.get("camera") or []
     if camera_entries:
-        lines.append("Камера (прочитано с камеры):")
+        applied: list[str] = []
+        issues: list[str] = []
         for entry in camera_entries:
             actual = entry.get("actual", "unavailable")
             if not entry.get("available"):
@@ -261,25 +264,35 @@ def _format_camera_config_report(report: dict) -> list[str]:
                 mark = "✓"
             else:
                 mark = "✗"
-            line = f"  {mark} {entry.get('label')}={actual}"
+            value = f"{entry.get('label')}={actual}"
             if entry.get("available") and entry.get("verifiable") \
                     and not entry.get("matches"):
-                line += f" (в конфиге {entry.get('requested')!r})"
-            lines.append(line)
+                value += f" (в конфиге {entry.get('requested')!r})"
+            if mark == "✓":
+                applied.append(value)
+            else:
+                issues.append(f"{mark} {value}")
+        for index in range(0, len(applied), 3):
+            lines.append("✓ " + " · ".join(applied[index:index + 3]))
+        lines.extend(issues)
     host_entries = report.get("host") or []
     if host_entries:
-        lines.append("Настройки приложения:")
-        lines.append("  " + ", ".join(
+        host_values = [
             f"{entry.get('label')}={entry.get('value')}"
-            for entry in host_entries))
+            for entry in host_entries
+        ]
+        for index in range(0, len(host_values), 3):
+            lines.append(
+                "• Приложение: "
+                + " · ".join(host_values[index:index + 3]))
     mismatched = report.get("mismatched") or []
     unavailable = report.get("unavailable") or []
     if mismatched:
-        lines.append("НЕ ПРИМЕНИЛОСЬ: " + ", ".join(mismatched))
+        lines.append("⚠️ Не применилось: " + ", ".join(mismatched))
     if unavailable:
-        lines.append("Камера не сообщила: " + ", ".join(unavailable))
+        lines.append("⚠️ Камера не сообщила: " + ", ".join(unavailable))
     if not mismatched and not unavailable and camera_entries:
-        lines.append("Все параметры применены камерой без расхождений.")
+        lines.append("✅ Все параметры применены без расхождений")
     return lines
 
 
@@ -1266,7 +1279,7 @@ _PRINT_QUEUE_LABELS = {
 
 
 def _print_queue_status_message(records: list[dict]) -> tuple[str, bool]:
-    lines = ["Очереди печати Windows:"]
+    lines = []
     has_error = False
     for record in records:
         target = _PRINT_QUEUE_LABELS.get(
@@ -1277,17 +1290,17 @@ def _print_queue_status_message(records: list[dict]) -> tuple[str, bool]:
         error = record.get("error")
         if error:
             has_error = True
-            lines.append(f"• {target} ({printer_name}): ошибка — {error}")
+            lines.append(f"⚠️ {target} · {printer_name}: {error}")
             continue
         jobs = record.get("jobs")
         if type(jobs) is not int or jobs < 0:
             has_error = True
             lines.append(
-                f"• {target} ({printer_name}): число заданий неизвестно"
+                f"⚠️ {target} · {printer_name}: число заданий неизвестно"
             )
         else:
             lines.append(
-                f"• {target} ({printer_name}): заданий в очереди — {jobs}"
+                f"• {target} · {printer_name} — в очереди: {jobs}"
             )
     return "\n".join(lines), has_error
 
@@ -1332,18 +1345,19 @@ def _print_queue_clear_message(records: list[dict]) -> tuple[str, bool]:
 
 def _printer_info_message(info: dict) -> str:
     lines = [
-        f"DNP ({info['printer_name']}):",
-        f"• Состояние: {info['status']}",
-        f"• Всего отпечатков: {info['total_count']}",
+        f"• DNP · {info['printer_name']}: {info['status']}",
     ]
     remaining = info.get("media_remaining")
     capacity = info.get("media_capacity")
     if remaining is None:
-        lines.append("• Осталось отпечатков: не удалось прочитать")
+        media = "остаток не удалось прочитать"
     elif capacity is None:
-        lines.append(f"• Осталось отпечатков: {remaining}")
+        media = f"остаток {remaining}"
     else:
-        lines.append(f"• Осталось отпечатков: {remaining} из {capacity}")
+        media = f"остаток {remaining}/{capacity}"
+    lines.append(
+        f"• Отпечатков: всего {info['total_count']} · {media}"
+    )
     return "\n".join(lines)
 
 
@@ -1356,14 +1370,14 @@ def _printer_status_lines() -> list[str]:
         lines.extend(_printer_info_message(
             get_dnp_printer_info(CONFIG)).splitlines())
     except Exception as exc:
-        lines.append(f"DNP: ошибка — {exc}")
+        lines.append(f"⚠️ DNP: {exc}")
 
     try:
         records = get_windows_print_queues(CONFIG)
         message, _has_error = _print_queue_status_message(records)
         lines.extend(message.splitlines())
     except Exception as exc:
-        lines.append(f"Очереди печати Windows: ошибка — {exc}")
+        lines.append(f"⚠️ Windows-очереди: {exc}")
     return lines
 
 
@@ -1382,79 +1396,128 @@ async def _status_report_text() -> str:
         elif raw_version:
             version = raw_version
 
-    connected = bool(camera and camera.is_connected)
-    status_lines = [
-        f"State: {STATE}",
-        f"Event (booth): {_active_event_name() or 'не задан'}",
-        f"Template pack: {CONFIG.get('template_pack', 'unknown')}",
-        f"Camera: {'online' if connected else 'offline'}",
-        f"Start locked: {'yes' if _start_locked() else 'no'}",
-        f"Unlock sessions remaining: {_cafe_unlock_sessions_remaining}",
+    event = _active_event_name() or "не задан"
+    technical_event = event == _technical_event_name()
+    start_locked = _start_locked()
+    event_lines = [
+        "🎪 СОБЫТИЕ",
+        f"• Будка: {event}",
     ]
+    session_lines = [
+        "🖼 ШАБЛОН И СЕССИИ",
+        f"• Набор: {CONFIG.get('template_pack', 'unknown')}",
+    ]
+    if technical_event:
+        session_lines.append(
+            f"• Допуск: {'🔴 закрыт' if start_locked else '🟢 открыт'} · "
+            f"Осталось сессий: {_cafe_unlock_sessions_remaining}"
+        )
+    else:
+        session_lines.append("• Допуск: ♾ без ограничений")
 
+    connected = bool(camera and camera.is_connected)
+    camera_lines = [
+        "📷 КАМЕРА",
+        f"• Статус: {'🟢 подключена' if connected else '🔴 не подключена'}",
+    ]
+    blocks = [event_lines, session_lines, camera_lines]
+    disk_free = None
     snapshot_method = getattr(camera, "status_snapshot", None) if camera else None
     if snapshot_method:
         snapshot = snapshot_method()
         identity = snapshot.get("product_name") or snapshot.get("model")
         if identity:
-            status_lines.append(f"Camera model: {identity}")
+            camera_lines.append(f"• Модель: {identity}")
         if snapshot.get("lens"):
-            status_lines.append(f"Camera lens: {snapshot['lens']}")
+            camera_lines.append(f"• Объектив: {snapshot['lens']}")
         health = []
         for label, key in (
-            ("power", "battery"),
-            ("temp", "temperature"),
+            ("Питание", "battery"),
+            ("Температура", "temperature"),
             ("AE", "ae_mode"),
-            ("auto-off", "auto_power_off"),
+            ("Auto-off", "auto_power_off"),
         ):
             if snapshot.get(key) is not None:
-                health.append(f"{label}={snapshot[key]}")
+                health.append(f"{label}: {snapshot[key]}")
         if health:
-            status_lines.append("Camera health: " + ", ".join(health))
+            camera_lines.append("• " + " · ".join(health))
         disk_free = snapshot.get("disk_free_bytes")
-        if isinstance(disk_free, int):
-            status_lines.append(
-                f"Photo disk free: {disk_free / (1024 ** 3):.2f} GiB")
         if snapshot.get("last_shutdown_timer_extension_result"):
-            status_lines.append(
-                "Camera shutdown timer extension: "
+            camera_lines.append(
+                "• Продление таймера камеры: "
                 f"{snapshot['last_shutdown_timer_extension_result']} at "
                 f"{snapshot.get('last_shutdown_timer_extension_at') or 'unknown'}")
         if snapshot.get("last_disconnect_reason"):
-            status_lines.append(
-                "Last camera disconnect: "
+            camera_lines.append(
+                "⚠️ Последнее отключение: "
                 f"{snapshot['last_disconnect_reason']} at "
                 f"{snapshot.get('last_disconnect_at') or 'unknown'}")
         if snapshot.get("last_cleanup_result"):
-            status_lines.append(
-                "Last camera cleanup: "
+            camera_lines.append(
+                "• Последняя очистка: "
                 f"{snapshot['last_cleanup_result']} at "
                 f"{snapshot.get('last_cleanup_at') or 'unknown'}")
         config_lines = _format_camera_config_report(
             snapshot.get("config_report"))
         if config_lines:
-            status_lines.append(
-                "Applied config"
-                + (f" (прочитано {snapshot.get('config_report_at')})"
-                   if snapshot.get("config_report_at") else "")
-                + ":")
-            status_lines.extend(config_lines)
+            config_block = ["⚙️ КОНФИГУРАЦИЯ КАМЕРЫ"]
+            report_at = snapshot.get("config_report_at")
+            if report_at:
+                try:
+                    checked_at = datetime.fromisoformat(
+                        str(report_at)).astimezone().strftime("%d.%m.%Y %H:%M")
+                except ValueError:
+                    checked_at = str(report_at)
+                config_block.append(f"• Проверено: {checked_at}")
+            config_block.extend(config_lines)
+            blocks.append(config_block)
+    print_enabled = CONFIG.get("print_enabled") is True
+    blocks.append([
+        "🖨 ПРИНТЕР",
+        f"• Печать: {'🟢 включена' if print_enabled else '🔴 выключена'}",
+        *await asyncio.to_thread(_printer_status_lines),
+    ])
+    pending_sessions = yadisk_cloud.pending_count()
+    system_lines = [
+        "☁️ СИСТЕМА",
+        f"• Состояние: {STATE}",
+        (
+            f"⚠️ Яндекс.Диск: незавершённых сессий — {pending_sessions}"
+            if pending_sessions
+            else "• Яндекс.Диск: ✅ всё отправлено"
+        ),
+    ]
+    if isinstance(disk_free, int):
+        system_lines.append(
+            f"• Диск фото: {disk_free / (1024 ** 3):.2f} GiB свободно")
+    system_lines.append(
+        f"• Версия: {version[:12] if version != 'unknown' else version}")
+    blocks.append(system_lines)
 
-    status_lines.extend(await asyncio.to_thread(_printer_status_lines))
-    status_lines.extend((
-        f"Upload queue: {yadisk_cloud.pending_count()}",
-        f"Version: {version}",
-    ))
+    control_lines = ["🎛 УПРАВЛЕНИЕ"]
     try:
         presets = preset_names()
     except (OSError, ValueError, json.JSONDecodeError):
         presets = []
     if presets:
-        status_lines.append(
-            "Пресеты света: "
-            + ", ".join(f"/light {name}" for name in presets)
-        )
-    return "\n".join(status_lines)
+        control_lines.append(
+            "• Свет: " + " · ".join(f"/light {name}" for name in presets))
+    try:
+        aperture_hint = lens_max_aperture_hint()
+    except (OSError, ValueError, json.JSONDecodeError):
+        aperture_hint = ""
+    if aperture_hint:
+        control_lines.append(f"• {aperture_hint}")
+    try:
+        exposure_options = camera_exposure_options()
+    except (OSError, ValueError, json.JSONDecodeError):
+        exposure_options = {}
+    for field, values in exposure_options.items():
+        control_lines.append(
+            f"• /{field}: " + " · ".join(str(value) for value in values))
+    if len(control_lines) > 1:
+        blocks.append(control_lines)
+    return "\n\n".join("\n".join(block) for block in blocks)
 
 
 def _clear_runtime_directory(path: Path) -> tuple[int, int]:
