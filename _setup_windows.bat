@@ -33,12 +33,6 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $groupSid = [System.Security.Principal.SecurityIdentifier]'S-1-5-32-556'; $userSid = (New-Object System.Security.Principal.NTAccount('Photobooth')).Translate([System.Security.Principal.SecurityIdentifier]); if (-not (Get-LocalGroupMember -SID $groupSid | Where-Object SID -eq $userSid)) { Add-LocalGroupMember -SID $groupSid -Member $userSid }"
-if errorlevel 1 (
-    echo ERROR: Could not grant network adapter control to the Photobooth user.
-    pause
-    exit /b 1
-)
 echo [OK]
 
 :: 2. Install the narrow elevated adapter action
