@@ -18,6 +18,15 @@ from .constants import *
 
 log = logging.getLogger(__name__)
 
+# Canon's RF24-50 can report these closed apertures even though they are not
+# offered as remote-control values by this booth.  Keep them display-only so
+# an EDSDK property descriptor can still be shown without raw hex codes.
+_AV_DISPLAY_MAP = {
+    **AV_MAP,
+    "25": 0x53,
+    "29": 0x55,
+}
+
 # ctypes type aliases matching EDSDK types
 EdsError = ctypes.c_uint32
 EdsBaseRef = ctypes.c_void_p
@@ -148,6 +157,7 @@ class Camera:
         self._failure_notified = False
         self._photo_tag = ""
         self._cfg = {}
+        self._property_options: dict[int, list[int]] = {}
         self._thread: threading.Thread | None = None
         self._thread_lock = threading.Lock()
         self._worker_cleanup_clean = True
@@ -645,6 +655,7 @@ class Camera:
             cfg = {}
             log.warning("config_camera.json not found, using defaults")
         self._cfg = cfg
+        self._property_options.clear()
 
         storage_ok, storage_error = self.storage_ready()
         if not storage_ok:
@@ -898,6 +909,8 @@ class Camera:
     def _set_prop_u32(self, prop_id: int, value: int, *, validate: bool = True):
         if validate:
             offered = self._get_property_desc(prop_id)
+            if offered is not None:
+                self._property_options[prop_id] = offered
             if offered is not None and offered and value not in offered:
                 log.warning(
                     "SetProp(0x%08X) skipped: requested=0x%X available=%s",
@@ -1098,6 +1111,14 @@ class Camera:
                 continue
             actual = self._get_prop_u32(prop_id)
             requested = self._requested_code(field, default, mapping)
+            offered_codes = self._property_options.get(prop_id)
+            offered = None
+            if field in ("av", "tv", "iso") and offered_codes is not None:
+                display_map = _AV_DISPLAY_MAP if field == "av" else mapping
+                offered = [
+                    self._name_from_map(display_map, code)
+                    for code in offered_codes
+                ]
             entries.append({
                 "label": label,
                 "field": field,
@@ -1107,6 +1128,7 @@ class Camera:
                 "verifiable": requested is not None,
                 "matches": (actual is not None and requested is not None
                             and actual == requested),
+                "offered": offered,
             })
         host = [
             {"label": label, "field": field,

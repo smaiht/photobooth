@@ -252,29 +252,56 @@ def _format_camera_config_report(report: dict) -> list[str]:
     lines: list[str] = []
     camera_entries = report.get("camera") or []
     if camera_entries:
-        applied: list[str] = []
-        issues: list[str] = []
-        for entry in camera_entries:
-            actual = entry.get("actual", "unavailable")
-            if not entry.get("available"):
-                mark = "?"
-            elif not entry.get("verifiable"):
-                mark = "•"
-            elif entry.get("matches"):
-                mark = "✓"
-            else:
-                mark = "✗"
-            value = f"{entry.get('label')}={actual}"
-            if entry.get("available") and entry.get("verifiable") \
-                    and not entry.get("matches"):
-                value += f" (в конфиге {entry.get('requested')!r})"
-            if mark == "✓":
-                applied.append(value)
-            else:
-                issues.append(f"{mark} {value}")
-        for index in range(0, len(applied), 3):
-            lines.append("✓ " + " · ".join(applied[index:index + 3]))
-        lines.extend(issues)
+        exposure_order = {"av": 0, "tv": 1, "iso": 2}
+        exposure_entries = sorted(
+            (entry for entry in camera_entries
+             if entry.get("field") in exposure_order),
+            key=lambda entry: exposure_order[entry.get("field")],
+        )
+        other_entries = [
+            entry for entry in camera_entries
+            if entry.get("field") not in exposure_order
+        ]
+
+        def append_entries(entries: list[dict]) -> None:
+            applied: list[str] = []
+
+            def flush_applied() -> None:
+                if applied:
+                    lines.append("✓ " + " · ".join(applied))
+                    applied.clear()
+
+            for entry in entries:
+                label = entry.get("label")
+                actual = entry.get("actual", "unavailable")
+                if entry.get("available") and entry.get("verifiable") \
+                        and entry.get("matches"):
+                    applied.append(f"{label}={actual}")
+                    if len(applied) == 3:
+                        flush_applied()
+                    continue
+
+                flush_applied()
+                if not entry.get("available"):
+                    lines.append(f"? {label}=unavailable")
+                elif not entry.get("verifiable"):
+                    lines.append(f"• {label}={actual}")
+                else:
+                    requested = entry.get("requested")
+                    lines.append(
+                        f"❌ {label} не применилось: "
+                        f"запрошено {requested} · фактически {actual}"
+                    )
+                    offered = entry.get("offered")
+                    if offered:
+                        lines.append(
+                            f"↳ SetProp {label}: камера разрешает сейчас — "
+                            + " · ".join(str(value) for value in offered)
+                        )
+            flush_applied()
+
+        append_entries(exposure_entries)
+        append_entries(other_entries)
     host_entries = report.get("host") or []
     if host_entries:
         host_values = [
@@ -287,8 +314,6 @@ def _format_camera_config_report(report: dict) -> list[str]:
                 + " · ".join(host_values[index:index + 3]))
     mismatched = report.get("mismatched") or []
     unavailable = report.get("unavailable") or []
-    if mismatched:
-        lines.append("⚠️ Не применилось: " + ", ".join(mismatched))
     if unavailable:
         lines.append("⚠️ Камера не сообщила: " + ", ".join(unavailable))
     if not mismatched and not unavailable and camera_entries:

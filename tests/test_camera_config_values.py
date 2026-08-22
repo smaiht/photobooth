@@ -333,6 +333,21 @@ class CameraConfigReportTests(unittest.TestCase):
         self.assertTrue(entry["available"])
         self.assertFalse(entry["matches"])
 
+    def test_exposure_options_are_decoded_from_the_camera_descriptor(self):
+        camera, codes = self._camera()
+        camera._property_options[edsdk.kEdsPropID_Av] = [
+            edsdk.AV_MAP["6.3"],
+            edsdk.AV_MAP["8.0"],
+            0x53,
+            0x55,
+        ]
+        with patch.object(camera, "_get_prop_u32",
+                          side_effect=lambda prop_id: codes.get(prop_id)):
+            report = camera.build_config_report()
+
+        entry = next(e for e in report["camera"] if e["field"] == "av")
+        self.assertEqual(entry["offered"], ["6.3", "8.0", "25", "29"])
+
     def test_color_temperature_only_appears_for_color_temp_white_balance(self):
         other_white_balance = next(
             value for value in constants.WHITE_BALANCE_MAP
@@ -396,7 +411,7 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
                  "matches": True},
                 {"label": "Av", "field": "av", "requested": "16",
                  "actual": "5.6", "available": True, "verifiable": True,
-                 "matches": False},
+                 "matches": False, "offered": ["5.6", "6.3", "8.0"]},
                 {"label": "ImageQuality", "field": "image_quality",
                  "requested": "jpeg_large_fine", "actual": "unavailable",
                  "available": False, "verifiable": True, "matches": False},
@@ -433,22 +448,38 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Canon EOS R8", text)
         self.assertIn("RF24-50mm", text)
         self.assertIn("✓ ISO=100", text)
-        self.assertIn("✗ Av=5.6 (в конфиге '16')", text)
+        self.assertIn(
+            "❌ Av не применилось: запрошено 16 · фактически 5.6",
+            text,
+        )
+        self.assertIn(
+            "SetProp Av: камера разрешает сейчас — 5.6 · 6.3 · 8.0",
+            text,
+        )
         self.assertIn("? ImageQuality=unavailable", text)
-        self.assertIn("Не применилось: Av", text)
         self.assertIn("Камера не сообщила: ImageQuality", text)
         self.assertIn("FocusDelay=0.4", text)
 
     def test_clean_report_states_that_everything_applied(self):
         clean = {
-            "camera": [{"label": "ISO", "field": "iso", "requested": 100,
-                        "actual": "100", "available": True,
-                        "verifiable": True, "matches": True}],
+            "camera": [
+                {"label": "ISO", "field": "iso", "requested": 100,
+                 "actual": "100", "available": True,
+                 "verifiable": True, "matches": True},
+                {"label": "Av", "field": "av", "requested": "8.0",
+                 "actual": "8.0", "available": True,
+                 "verifiable": True, "matches": True},
+                {"label": "Tv", "field": "tv", "requested": "1/100",
+                 "actual": "1/100", "available": True,
+                 "verifiable": True, "matches": True},
+            ],
             "host": [],
             "mismatched": [],
             "unavailable": [],
         }
-        text = "\n".join(main._format_camera_config_report(clean))
+        lines = main._format_camera_config_report(clean)
+        text = "\n".join(lines)
+        self.assertEqual(lines[0], "✓ Av=8.0 · Tv=1/100 · ISO=100")
         self.assertIn("без расхождений", text)
 
     async def test_notice_is_published_on_every_camera_setup(self):
@@ -498,7 +529,7 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "ok")
         self.assertIn("КОНФИГУРАЦИЯ КАМЕРЫ", result["message"])
         self.assertIn("✓ ISO=100", result["message"])
-        self.assertIn("Не применилось: Av", result["message"])
+        self.assertIn("❌ Av не применилось", result["message"])
 
 
 class TelegramCameraFieldUpdateTests(unittest.TestCase):

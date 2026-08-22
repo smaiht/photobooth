@@ -559,6 +559,10 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         result = camera._set_prop_u32(edsdk.kEdsPropID_ISOSpeed, 400)
 
         self.assertEqual(result, edsdk.EDS_ERR_INVALID_DEVICEPROP_VALUE)
+        self.assertEqual(
+            camera._property_options[edsdk.kEdsPropID_ISOSpeed],
+            [100, 200],
+        )
         camera._sdk.EdsSetPropertyData.assert_not_called()
 
     def test_object_event_ref_is_released_for_success_failure_and_ignore(self):
