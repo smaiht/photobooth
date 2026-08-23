@@ -162,6 +162,27 @@ class EventHistoryTests(unittest.TestCase):
         self.assertEqual(current["event"], "new-event")
         self.assertEqual(current["entries"][0]["type"], "event_started")
 
+    def test_invalid_previous_history_is_replaced_when_event_changes(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "_event_history_ready", True):
+            (Path(tmpdir) / "event_history.json").write_text(
+                "not json", encoding="utf-8")
+
+            archived = main._switch_event_history(
+                "new-event", {"actor": "administrator"})
+            current = json.loads(
+                (Path(tmpdir) / "event_history.json").read_text(
+                    encoding="utf-8"))
+            invalid_archives = list(
+                (Path(tmpdir) / "event_history_archive").glob(
+                    "*_invalid.json"))
+
+        self.assertIsNone(archived)
+        self.assertEqual(len(invalid_archives), 1)
+        self.assertEqual(current["event"], "new-event")
+        self.assertEqual(current["entries"][0]["type"], "event_started")
+
 
 class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

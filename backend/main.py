@@ -121,8 +121,8 @@ def _new_event_history(event: str) -> dict:
     }
 
 
-def _load_event_history(path: Path) -> dict:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+def _parse_event_history(raw: str | bytes) -> dict:
+    payload = json.loads(raw)
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != EVENT_HISTORY_SCHEMA_VERSION
@@ -131,6 +131,10 @@ def _load_event_history(path: Path) -> dict:
     ):
         raise ValueError("unsupported event history format")
     return payload
+
+
+def _load_event_history(path: Path) -> dict:
+    return _parse_event_history(path.read_bytes())
 
 
 def _write_event_history(payload: dict) -> None:
@@ -223,6 +227,16 @@ def _event_history_summary(payload: dict) -> str:
     ))
 
 
+def _event_history_attachment(path: Path) -> dict[str, str]:
+    """Build one document and its matching summary from the same file bytes."""
+    raw = path.read_bytes()
+    history = _parse_event_history(raw)
+    return {
+        "document": yadisk_control.response_document(raw),
+        "document_caption": _event_history_summary(history),
+    }
+
+
 def _start_event_history() -> None:
     """Open the current event journal and record this application start."""
     global _event_history_ready
@@ -235,7 +249,7 @@ def _start_event_history() -> None:
             payload = _load_event_history(path)
         except FileNotFoundError:
             payload = _new_event_history(event)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError) as exc:
             archived = _archive_event_history(invalid=True)
             log.warning(
                 "Invalid event history archived as %s: %s", archived, exc)
@@ -269,7 +283,7 @@ def _start_event_history() -> None:
         )
         _write_event_history(payload)
         _event_history_ready = True
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError):
         log.exception("Could not start event history")
 
 
@@ -283,14 +297,14 @@ def _record_event_history(entry: dict) -> None:
             payload = _load_event_history(path)
         except FileNotFoundError:
             payload = _new_event_history(_active_event_name())
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError) as exc:
             archived = _archive_event_history(invalid=True)
             log.warning(
                 "Invalid event history archived as %s: %s", archived, exc)
             payload = _new_event_history(_active_event_name())
         _append_event_history_entry(payload, entry, _event_history_now())
         _write_event_history(payload)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError):
         log.exception("Could not append event history entry: %s", entry.get("type"))
 
 
@@ -299,43 +313,54 @@ def _switch_event_history(new_event: str, source: dict) -> Path | None:
     if not _event_history_ready:
         return None
     try:
+        archived = None
+        previous_event = None
+        now = _event_history_now()
         try:
             payload = _load_event_history(_event_history_path())
         except FileNotFoundError:
-            now = _event_history_now()
-            payload = _new_event_history(new_event)
-            _append_event_history_entry(payload, {
-                "type": "event_started",
-                "source": source,
-            }, now)
-            _write_event_history(payload)
             log.warning(
                 "Previous event history was missing; started journal for %r",
                 new_event,
             )
-            return None
-        previous_event = payload["event"]
-        if previous_event == new_event:
-            return None
-        now = _event_history_now()
-        _append_event_history_entry(payload, {
-            "type": "event_ended",
-            "next_event": new_event,
-            "source": source,
-        }, now)
-        _write_event_history(payload)
-        archived = _archive_event_history()
+        except ValueError as exc:
+            invalid_archive = _archive_event_history(invalid=True)
+            log.warning(
+                "Invalid event history archived as %s before switching to "
+                "%r: %s",
+                invalid_archive,
+                new_event,
+                exc,
+            )
+        else:
+            previous_event = payload["event"]
+            if previous_event == new_event:
+                return None
+            _append_event_history_entry(payload, {
+                "type": "event_ended",
+                "next_event": new_event,
+                "source": source,
+            }, now)
+            _write_event_history(payload)
+            archived = _archive_event_history()
 
         payload = _new_event_history(new_event)
-        _append_event_history_entry(payload, {
+        event_started = {
             "type": "event_started",
-            "previous_event": previous_event,
             "source": source,
-        }, now)
+        }
+        if previous_event is not None:
+            event_started["previous_event"] = previous_event
+        _append_event_history_entry(payload, event_started, now)
         _write_event_history(payload)
-        log.info("Event history archived for %r: %s", previous_event, archived)
+        if archived is not None:
+            log.info(
+                "Event history archived for %r: %s",
+                previous_event,
+                archived,
+            )
         return archived
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError):
         log.exception("Could not switch event history to %r", new_event)
         return None
 
@@ -2394,10 +2419,8 @@ async def handle_disk_command(command: dict) -> dict:
             "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
         }
         try:
-            payload = await asyncio.to_thread(_event_history_path().read_bytes)
-            history = json.loads(payload)
-            result["document"] = yadisk_control.response_document(payload)
-            result["document_caption"] = _event_history_summary(history)
+            result.update(await asyncio.to_thread(
+                _event_history_attachment, _event_history_path()))
         except (OSError, ValueError) as exc:
             log.warning("Event history not attached to status: %s", exc)
         return result
@@ -2443,11 +2466,9 @@ async def handle_disk_command(command: dict) -> dict:
         }
         if archived_history is not None:
             try:
-                payload = await asyncio.to_thread(archived_history.read_bytes)
-                history = json.loads(payload)
-                result["document"] = yadisk_control.response_document(payload)
-                result["document_caption"] = _event_history_summary(history)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                result.update(await asyncio.to_thread(
+                    _event_history_attachment, archived_history))
+            except (OSError, ValueError) as exc:
                 log.warning(
                     "Previous event history not attached: %s", exc)
         return result
