@@ -81,6 +81,7 @@ CAFE_UNLOCK_STATE_FILENAME = "cafe_unlock_state.json"
 EVENT_HISTORY_FILENAME = "event_history.json"
 EVENT_HISTORY_ARCHIVE_DIRNAME = "event_history_archive"
 EVENT_HISTORY_SCHEMA_VERSION = 1
+STATUS_REPORT_INTERVAL_SECONDS = 30 * 60
 MAX_UNLOCK_SESSIONS = 1000
 DEFAULT_MULTI_PRINT_MAX_SHEETS = 6
 MAX_MULTI_PRINT_SHEETS = 20
@@ -806,21 +807,33 @@ def on_camera_connected():
         asyncio.run_coroutine_threadsafe(show_ready(), _event_loop)
 
 
-async def _report_status_to_admin() -> None:
+async def _report_status_to_admin(title: str = "Фотобудка готова") -> None:
     """Push the full booth status to the administrator.
 
     Runs on every successful camera setup, both at launch and after a USB
     reconnect.  The same report is returned by ``/status``.
     """
-    text = await _status_report_text()
     try:
+        text = await _status_report_text()
+        attachment = {}
+        try:
+            attachment = await asyncio.to_thread(
+                _event_history_attachment, _event_history_path())
+        except (OSError, ValueError) as exc:
+            log.warning("Event history not attached to booth status: %s", exc)
         await yadisk_control.publish_booth_notice(
-            "booth_status", "Фотобудка готова", text)
+            "booth_status", title, text, **attachment)
     except Exception as exc:
         # The booth must stay usable even when the notice cannot be delivered.
         log.warning("Could not publish booth status: %s", exc)
         return
     log.info("Booth status published for the administrator")
+
+
+async def _periodic_status_service() -> None:
+    while True:
+        await asyncio.sleep(STATUS_REPORT_INTERVAL_SECONDS)
+        await _report_status_to_admin("Статус фотобудки")
 
 
 def _normalize_print_item(
@@ -2663,6 +2676,7 @@ async def startup():
 
     _service_tasks.add(asyncio.create_task(_control_service()))
     _service_tasks.add(asyncio.create_task(_yadisk_service()))
+    _service_tasks.add(asyncio.create_task(_periodic_status_service()))
 
 
 @app.on_event("shutdown")

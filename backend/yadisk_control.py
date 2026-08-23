@@ -388,7 +388,14 @@ async def _prune_booth_notices(keep: int = MAX_BOOTH_NOTICES) -> None:
                     "Control: could not prune notice %s: %s", name, response.status)
 
 
-async def publish_booth_notice(kind: str, title: str, text: str) -> str:
+async def publish_booth_notice(
+    kind: str,
+    title: str,
+    text: str,
+    *,
+    document: str | None = None,
+    document_caption: str | None = None,
+) -> str:
     """Publish an unsolicited administrator notice into ``control/to_vps``.
 
     The booth holds no Telegram/VK credentials, so the VPS delivers this to the
@@ -400,6 +407,18 @@ async def publish_booth_notice(kind: str, title: str, text: str) -> str:
     body = str(text or "")
     if len(body) > MAX_BOOTH_NOTICE_TEXT:
         body = body[:MAX_BOOTH_NOTICE_TEXT - 3] + "..."
+    if document is not None and (
+        kind != "booth_status"
+        or not isinstance(document, str)
+        or not document
+        or len(document.encode("utf-8")) > MAX_RESPONSE_DOCUMENT_SIZE
+        or not isinstance(document_caption, str)
+        or not document_caption
+        or len(document_caption) > MAX_RESPONSE_DOCUMENT_CAPTION_SIZE
+    ):
+        raise ValueError("invalid booth notice document")
+    if document is None and document_caption is not None:
+        raise ValueError("booth notice caption without document")
     if not await _connect():
         raise RuntimeError("Yandex.Disk control is unavailable")
     created_at = datetime.now(timezone.utc)
@@ -412,6 +431,9 @@ async def publish_booth_notice(kind: str, title: str, text: str) -> str:
         "text": body,
         "created_at": created_at.isoformat(),
     }
+    if document is not None:
+        notice["document"] = document
+        notice["document_caption"] = document_caption
     payload = json.dumps(
         notice, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     remote_path = (

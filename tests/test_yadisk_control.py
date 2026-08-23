@@ -1629,6 +1629,30 @@ class BoothNoticeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(text), yadisk_control.MAX_BOOTH_NOTICE_TEXT)
         self.assertTrue(text.endswith("..."))
 
+    async def test_status_notice_carries_history_and_summary_together(self):
+        uploaded = {}
+
+        async def upload(payload, _path):
+            uploaded["payload"] = json.loads(payload)
+
+        with patch.object(yadisk_control, "_root", "/control"), \
+             patch("backend.yadisk_control._connect",
+                   AsyncMock(return_value=True)), \
+             patch("backend.yadisk_control._prune_booth_notices",
+                   AsyncMock()), \
+             patch("backend.yadisk_control._upload_bytes", side_effect=upload):
+            await yadisk_control.publish_booth_notice(
+                "booth_status",
+                "Статус фотобудки",
+                "status",
+                document="{}\n",
+                document_caption="summary",
+            )
+
+        self.assertEqual(uploaded["payload"]["document"], "{}\n")
+        self.assertEqual(
+            uploaded["payload"]["document_caption"], "summary")
+
     async def test_invalid_kind_is_rejected_before_any_network_call(self):
         with patch("backend.yadisk_control._connect",
                    AsyncMock()) as connect, \

@@ -1,3 +1,4 @@
+import asyncio
 import ctypes
 import json
 import tempfile
@@ -483,6 +484,10 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_notice_is_published_on_every_camera_setup(self):
         with patch("backend.main._status_report_text",
                    AsyncMock(return_value="full status")), \
+             patch("backend.main._event_history_attachment", return_value={
+                 "document": "{}\n",
+                 "document_caption": "summary",
+             }), \
              patch("backend.main.yadisk_control.publish_booth_notice",
                    new_callable=AsyncMock) as publish:
             await main._report_status_to_admin()
@@ -494,6 +499,10 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kind, "booth_status")
         self.assertEqual(title, "Фотобудка готова")
         self.assertEqual(text, "full status")
+        self.assertEqual(publish.await_args.kwargs, {
+            "document": "{}\n",
+            "document_caption": "summary",
+        })
 
     async def test_delivery_failure_does_not_break_the_booth(self):
         with patch("backend.main._status_report_text",
@@ -505,6 +514,20 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
             await main._report_status_to_admin()
 
         self.assertEqual(publish.await_count, 2)
+
+    async def test_periodic_status_waits_before_each_report(self):
+        report = AsyncMock()
+        with patch("backend.main.asyncio.sleep", new_callable=AsyncMock,
+                   side_effect=(None, asyncio.CancelledError)) as sleep, \
+             patch("backend.main._report_status_to_admin", report):
+            with self.assertRaises(asyncio.CancelledError):
+                await main._periodic_status_service()
+
+        self.assertEqual(
+            sleep.await_args_list[0].args,
+            (main.STATUS_REPORT_INTERVAL_SECONDS,),
+        )
+        report.assert_awaited_once_with("Статус фотобудки")
 
     async def test_status_command_includes_the_applied_config(self):
         fake_camera = MagicMock()
