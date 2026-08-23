@@ -587,49 +587,36 @@ html, body {
 .processing-title { font-size: 3.5vw; font-weight: 600; color: #FF2973; }
 
 #screen-template {
-    justify-content: center;
-    gap: 4vh;
-    padding: 3vh 2vw 6vh;
-}
-
-.template-main {
-    flex: 0 0 auto;
-    width: 94vw;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 2.8vh;
+    justify-content: space-around;
+    gap: 2vh;
+    padding: 5vh;
+    background:
+        radial-gradient(circle at 8% -8%, rgba(83, 159, 126, 0.12), transparent 27vw),
+        radial-gradient(circle at 92% -10%, rgba(209, 93, 111, 0.1), transparent 25vw),
+        #f8f7f4;
 }
 
 .template-options-row {
-    width: 100%;
+    --template-column: calc((90vw - 2.4vw) / 3);
+    width: 90vw;
     display: flex;
+    flex-direction: row;
     align-items: center;
     justify-content: center;
     gap: 1.2vw;
 }
 
 .template-tools {
-    width: 92vw;
-    position: relative;
+    width: 90vw;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 3vw;
-    padding-bottom: 1.4vh;
-}
-.template-tools::after {
-    content: "";
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    height: 0.14vw;
-    background: #d9d5d1;
+    gap: 1.2vw;
 }
 
 .template-tool {
-    width: 28vw;
+    flex: 0 0 29.2vw;
+    width: 29.2vw;
     display: flex;
     background: transparent;
 }
@@ -640,9 +627,9 @@ html, body {
 
 .template-tool-label {
     flex: 1 1 auto;
-    font-size: 1.65vw;
+    font-size: 1.35vw;
     font-weight: 700;
-    letter-spacing: 0.025em;
+    letter-spacing: 0.015em;
     line-height: 1.2;
     color: inherit;
     text-align: left;
@@ -652,50 +639,58 @@ html, body {
 #template-skip,
 #template-zoom,
 #template-multi {
-    --tool-bg: #ededecb0;
+    --tool-bg: rgba(255, 255, 255, 0.82);
+    --tool-border: rgba(49, 45, 40, 0.1);
     z-index: 2;
     position: relative;
     width: 100%;
-    height: 5.6vw;
-    padding: 0.75vw 1.5vw;
-    border: 0;
+    height: 4.5vw;
+    padding: 0.45vw 0.85vw;
+    border: 0.08vw solid var(--tool-border);
     border-radius: 999px;
     outline: none;
     display: flex;
     align-items: center;
     justify-content: flex-start;
-    gap: 1.1vw;
+    gap: 0.85vw;
     background: var(--tool-bg);
     color: #222;
     font-family: inherit;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
+    box-shadow: 0 0.35vw 1.2vw rgba(53, 47, 40, 0.07);
     transition: background 0.12s ease, color 0.12s ease,
-                filter 0.12s ease, transform 0.12s ease;
+                filter 0.12s ease, transform 0.12s ease,
+                box-shadow 0.12s ease;
 }
 
 #template-skip {
-    --tool-icon: #d15d6f;
+    --tool-icon: #c75263;
+    --tool-icon-bg: #f9e7ea;
 }
 #template-zoom {
-    --tool-icon: #c67635;
+    --tool-icon: #b76a2d;
+    --tool-icon-bg: #f8ecdd;
 }
 #template-multi {
-    --tool-icon: #4f8f66;
+    --tool-icon: #397c5a;
+    --tool-icon-bg: #e4f1e9;
 }
 
 .template-tool-icon {
-    flex: 0 0 3.2vw;
-    width: 3.2vw;
-    height: 3.2vw;
+    flex: 0 0 3.25vw;
+    width: 3.25vw;
+    height: 3.25vw;
     display: grid;
     place-items: center;
+    border-radius: 50%;
+    background: var(--tool-icon-bg);
     color: var(--tool-icon);
 }
 .template-tool-icon svg {
-    width: 2.8vw;
-    height: 2.8vw;
+    width: 2.05vw;
+    height: 2.05vw;
 }
 #template-skip:active,
 #template-zoom:active,
@@ -713,9 +708,12 @@ html, body {
     z-index: 2;
 }
 #template-multi[aria-pressed="true"] {
-    --tool-bg: #3f7d5a;
+    --tool-bg: #397c5a;
+    --tool-border: #397c5a;
     --tool-icon: #fff;
+    --tool-icon-bg: rgba(255, 255, 255, 0.16);
     color: #fff;
+    box-shadow: 0 0.45vw 1.4vw rgba(57, 124, 90, 0.22);
 }
 
 /* Counter badge over the middle of a preview. The layer covers only the preview
@@ -794,41 +792,40 @@ html, body {
 #template-print {
     z-index: 2;
     position: relative;
-    width: 27vw;
-    height: 8.2vw;
+    width: 100%;
+    height: 7vw;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.35vw;
-    padding: 0.6vw 1vw;
-    border: 0.18vw solid #222;
-    border-radius: 1.2vw;
-    background: #ff006e;
+    gap: 0.2vw;
+    padding: 0.5vw 1.2vw;
+    border: 0;
+    border-radius: 999px;
+    background: #e74676;
     color: #fff;
     font-family: inherit;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-    box-shadow: 0.42vw 0.42vw 0 #ffd60a;
+    box-shadow: 0 0.45vw 1.4vw rgba(188, 39, 84, 0.24);
     transition: transform 0.1s ease, box-shadow 0.1s ease;
 }
 #template-print[hidden] { display: none; }
 #template-print:active {
-    transform: translate(0.2vw, 0.2vw);
-    box-shadow: 0.18vw 0.18vw 0 #ffd60a;
+    transform: scale(0.98);
+    box-shadow: 0 0.2vw 0.7vw rgba(188, 39, 84, 0.2);
 }
 #template-print:disabled {
-    background: #eee;
-    color: #999;
-    border-color: #aaa;
-    box-shadow: 0.35vw 0.35vw 0 #aaa;
+    background: #e5e2dd;
+    color: #99958f;
+    box-shadow: none;
 }
 #template-print::after {
     content: "";
     position: absolute;
-    inset: -0.2vw;
-    border: 0.25vw solid #ff006e;
+    inset: -0.12vw;
+    border: 0.12vw solid #e74676;
     border-radius: inherit;
     opacity: 0;
     pointer-events: none;
@@ -849,69 +846,57 @@ html, body {
 }
 
 .template-print-title {
-    font-size: 1.45vw;
+    font-size: 1.15vw;
     font-weight: 700;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.025em;
     line-height: 1.15;
 }
 
 .template-print-count {
-    font-size: 3vw;
+    font-size: 2.1vw;
     font-weight: 700;
-    line-height: 1.1;
+    line-height: 1;
 }
 
 .template-title {
-    width: 31vw;
+    flex: 0 0 var(--template-column);
+    width: var(--template-column);
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     gap: 2vh;
     font-weight: 700;
-    text-align: center;
+    text-align: left;
 }
 .template-title-normal,
 .template-title-multi {
-    width: 31vw;
-    padding: 1vw 1.2vw;
-    border: 0.18vw solid #222;
-    border-radius: 1.2vw;
-    transform: rotate(-1deg);
+    width: 100%;
+    padding: 0;
 }
 .template-title-normal {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 0.65vw;
-    padding-block: 1.6vw;
-    background: #fff0a6;
-    box-shadow: 0.38vw 0.38vw 0 #ff2973;
+    align-items: flex-start;
+    gap: 0.45vw;
 }
-.template-title-normal-heading {
+.template-title-normal-heading,
+.template-title-multi-heading {
     font-size: 4.3vw;
+    letter-spacing: -0.035em;
     line-height: 1.05;
 }
 .template-title-multi {
     display: none;
     flex-direction: column;
-    align-items: center;
-    gap: 0.65vw;
-    background: #dff7ff;
-    box-shadow: 0.38vw 0.38vw 0 #20bde3;
-}
-.template-title-multi-heading {
-    font-size: 2.75vw;
-    line-height: 1.05;
+    align-items: flex-start;
+    gap: 0.4vw;
 }
 .template-title-hint {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4vw;
-    font-size: 1.25vw;
-    font-weight: 600;
+    font-size: 1.8vw;
+    font-weight: 500;
     line-height: 1.3;
+    color: #77726b;
 }
 .template-plus-icon {
     flex: 0 0 auto;
@@ -931,11 +916,7 @@ html, body {
 #screen-template.multi-select .template-title-multi { display: flex; }
 
 .template-options {
-    width: 58vw;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 2.2vw;
+    display: contents;
 }
 
 /* Holds the tile button and its counter badge as siblings: a badge carries its
@@ -943,35 +924,12 @@ html, body {
    grid stretches the button exactly as the grid column used to. */
 .template-tile {
     position: relative;
-    width: 27vw;
+    flex: 0 0 var(--template-column);
+    width: var(--template-column);
     display: grid;
     min-width: 0;
     isolation: isolate;
 }
-.template-tile::before {
-    content: "";
-    position: absolute;
-    z-index: -1;
-    inset: -0.75vw -0.55vw;
-    border: 0.18vw solid #222;
-    border-radius: 1.1vw;
-    background:
-        radial-gradient(rgba(34, 34, 34, 0.13) 0.08vw, transparent 0.09vw)
-        0 0 / 0.62vw 0.62vw,
-        #fff0a6;
-    box-shadow: 0.38vw 0.38vw 0 #ff2973;
-    transform: rotate(-0.45deg);
-    pointer-events: none;
-}
-.template-tile:nth-child(even)::before {
-    background:
-        radial-gradient(rgba(34, 34, 34, 0.13) 0.08vw, transparent 0.09vw)
-        0 0 / 0.62vw 0.62vw,
-        #dff7ff;
-    box-shadow: 0.38vw 0.38vw 0 #6f61c9;
-    transform: rotate(0.45deg);
-}
-
 .template-btn {
     appearance: none;
     outline: none;
@@ -980,7 +938,8 @@ html, body {
     padding: 0;
     color: #222;
     font-family: inherit;
-    font-size: 2vw;
+    font-size: 1.5vw;
+    font-weight: 650;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
@@ -988,7 +947,7 @@ html, body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1.5vh;
+    gap: 0.55vw;
 }
 
 .template-btn:active { transform: scale(0.98); }
@@ -999,10 +958,12 @@ html, body {
     width: 100%;
     aspect-ratio: 3 / 2;
     object-fit: contain;
-    border-radius: 0.5vw;
+    border-radius: 0.85vw;
+    box-shadow: 0 0.55vw 1.6vw rgba(53, 47, 40, 0.11);
 }
 
 .template-caption {
+    min-height: 2.35vw;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -1015,14 +976,20 @@ html, body {
        while the guest looks at the frames. */
     z-index: 12;
     position: absolute;
-    bottom: 3.2vh;
+    bottom: 1.6vh;
     left: 50%;
     transform: translateX(-50%);
-    font-size: 1vw;
-    opacity: 0.6;
+    padding: 0.35vw 0.85vw;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.72);
+    color: #6f6a63;
+    font-size: 0.95vw;
+    font-weight: 500;
+    opacity: 1;
     white-space: nowrap;
 }
 #screen-template:has(.photo-viewer:not([hidden])) #template-timer {
+    background: rgba(0, 0, 0, 0.34);
     color: #fff;
 }
 
@@ -1140,13 +1107,10 @@ html, body {
 }
 
 .photo-choice-panel {
-    position: relative;
-    z-index: 0;
-    isolation: isolate;
-    margin-top: 1vh;
-    padding-block: 1.4vh;
+    padding-top: 1.6vh;
+    border-top: 0.08vw solid rgba(47, 43, 38, 0.13);
     flex: 0 0 auto;
-    width: 94vw;
+    width: 90vw;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1154,21 +1118,6 @@ html, body {
     animation: photo-choice-reveal 0.22s ease-out;
 }
 .photo-choice-panel[hidden] { display: none; }
-.photo-choice-panel::before {
-    content: "";
-    position: absolute;
-    z-index: -1;
-    inset: -1vh -1vw -1.2vh;
-    border: 0.18vw solid #222;
-    border-radius: 1.2vw;
-    background:
-        radial-gradient(rgba(34, 34, 34, 0.1) 0.08vw, transparent 0.09vw)
-        0 0 / 0.68vw 0.68vw,
-        #f2e8ff;
-    box-shadow: 0.42vw 0.42vw 0 #6f61c9;
-    transform: rotate(0.15deg);
-    pointer-events: none;
-}
 
 @keyframes photo-choice-reveal {
     from {
@@ -1183,72 +1132,77 @@ html, body {
 
 .photo-choice-header {
     flex: 0 0 auto;
-    width: 100%;
-    min-height: 4.8vh;
+    width: 88vw;
+    min-height: 3.5vw;
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 3vw;
+    justify-content: space-between;
+    gap: 2vw;
+    padding-inline: 0.25vw;
 }
 
 .photo-choice-header h2 {
-    font-size: 2.25vw;
+    font-size: 2vw;
     font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
 .frame-segments {
     display: flex;
-    width: 27vw;
-    border: 0.18vw solid #222;
-    border-radius: 1vw;
+    width: 23vw;
+    padding: 0.22vw;
+    border: 0;
+    border-radius: 999px;
     overflow: hidden;
-    background: #fff;
-    box-shadow: 0.32vw 0.32vw 0 #ff9f1c;
-    transform: rotate(0.25deg);
+    background: #e9e6e0;
+    box-shadow: inset 0 0.08vw 0.2vw rgba(50, 45, 39, 0.08);
+    transform: none;
 }
 
 .frame-segment {
     flex: 1 1 0;
     min-width: 0;
-    min-height: 5.4vh;
+    min-height: 3.05vw;
     border: 0;
-    background: #fff;
+    border-radius: 999px;
+    background: transparent;
     color: #222;
     font-family: inherit;
-    font-size: 1.4vw;
+    font-size: 1.05vw;
     font-weight: 700;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-    transition: background 0.12s ease, color 0.12s ease;
+    transition: background 0.12s ease, color 0.12s ease,
+                box-shadow 0.12s ease;
 }
-.frame-segment + .frame-segment { border-left: 0.18vw solid #222; }
 .frame-segment.active {
-    background: #238b82;
+    background: #2f302e;
     color: #fff;
+    box-shadow: 0 0.2vw 0.65vw rgba(47, 48, 46, 0.22);
 }
-.frame-segment:active { background: #dff7ff; color: #222; }
+.frame-segment:active { filter: brightness(0.9); }
 .frame-segment:disabled { opacity: 0.55; }
 
 .photo-choice-options {
     flex: 0 0 auto;
-    width: 100%;
+    width: 88vw;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 1.4vw;
+    gap: 1.2vw;
 }
 
 /* Same sibling wrapper as the template tiles, for the same nested-button
    reason. It owns the width the button used to claim. */
 .photo-choice-tile {
     position: relative;
-    flex: 0 1 calc((100% - 4.2vw) / 4);
-    width: calc((100% - 4.2vw) / 4);
+    flex: 0 0 calc((100% - 3.6vw) / 4);
+    width: calc((100% - 3.6vw) / 4);
     min-width: 0;
     display: grid;
+    isolation: isolate;
 }
-
 .photo-choice-btn {
     position: relative;
     width: 100%;
@@ -1257,7 +1211,10 @@ html, body {
     appearance: none;
     border: 0;
     padding: 0;
+    border-radius: 0.72vw;
+    overflow: hidden;
     background: transparent;
+    box-shadow: 0 0.45vw 1.4vw rgba(53, 47, 40, 0.1);
     cursor: none;
     touch-action: manipulation;
 }
@@ -1271,22 +1228,22 @@ html, body {
     width: 100%;
     height: 100%;
     object-fit: contain;
-    border-radius: 4px;
+    border-radius: 0.72vw;
 }
 
 .photo-choice-number {
     position: absolute;
-    top: 1vw;
-    left: 1vw;
-    width: 3.1vw;
-    height: 3.1vw;
+    top: 0.75vw;
+    left: 0.75vw;
+    width: 2.65vw;
+    height: 2.65vw;
     display: grid;
     place-items: center;
     border-radius: 50%;
     background: #fff;
-    color: #111;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
-    font-size: 1.6vw;
+    color: #222;
+    box-shadow: 0 0.25vw 0.75vw rgba(0, 0, 0, 0.18);
+    font-size: 1.3vw;
     font-weight: 700;
 }
 
