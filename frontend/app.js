@@ -1443,7 +1443,6 @@ if (btnSysTaskmgr) btnSysTaskmgr.addEventListener("click", () => triggerSystemAc
 if (btnSysKeyboard) btnSysKeyboard.addEventListener("click", () => triggerSystemAction("keyboard", "Экранная клавиатура"));
 if (btnAppRestart) {
     btnAppRestart.addEventListener("click", () => {
-        if (!window.confirm("Перезапустить приложение?")) return;
         closeServiceModal();
         showServiceToast("Приложение перезапускается…", 10000);
         fetch("/api/restart", { method: "POST" }).catch(() => {});

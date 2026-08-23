@@ -220,11 +220,18 @@ def _event_history_summary(payload: dict) -> str:
         total_prints - grid_prints - strips_prints - custom_prints)
     return "\n".join((
         f"📊 ИТОГ ИВЕНТА: {event}",
-        f"• Сессии: {sessions} · ретейки: {retakes} · "
-        f"с несколькими копиями: {multiple_copy_sessions}",
-        f"• Отпечатки: {total_prints} · Grid: {grid_prints} · "
-        f"Strips: {strips_prints} · Single: {single_prints} · "
-        f"Print jobs: {custom_prints}",
+        "",
+        "📸 СЕССИИ",
+        f"• Всего: {sessions}",
+        f"• Ретейки: {retakes}",
+        f"• С несколькими копиями: {multiple_copy_sessions}",
+        "",
+        "🖨 ОТПЕЧАТКИ",
+        f"• Всего: {total_prints}",
+        f"• Grid: {grid_prints}",
+        f"• Strips: {strips_prints}",
+        f"• Single: {single_prints}",
+        f"• Print jobs: {custom_prints}",
     ))
 
 

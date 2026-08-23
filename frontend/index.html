@@ -85,31 +85,64 @@
 
         <!-- TEMPLATE SELECT -->
         <div class="screen" id="screen-template" hidden>
-            <div class="template-multi-group" id="template-multi-group" hidden>
-                <button id="template-multi" type="button" aria-pressed="false"
-                        aria-label="Несколько копий">
-                    <!-- Two sheets: the front one is a full rectangle, the back
-                         one only its visible corner, so no strokes cross. -->
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
-                        <rect x="3" y="8" width="13" height="13" rx="2.4"
-                              stroke="currentColor" stroke-width="2"/>
-                        <path d="M8 8V7a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1"
-                              stroke="currentColor" stroke-width="2"
-                              stroke-linecap="round"/>
-                    </svg>
-                    <span class="template-multi-label" aria-hidden="true">НЕСКОЛЬКО КОПИЙ</span>
-                </button>
-            </div>
-            <div class="template-skip-group">
-                <span class="template-skip-label" aria-hidden="true">ФОТКАТЬ ЗАНОВО</span>
-                <button id="template-skip" type="button" aria-label="Фоткать заново">×</button>
-            </div>
             <div class="template-main">
                 <div class="template-title">
                     <span class="template-title-normal">ЧТО ПЕЧАТАЕМ?</span>
                     <span class="template-title-multi">НАЖИМАЙТЕ НА ФОТО ИЛИ +</span>
                 </div>
-                <div class="template-options" id="template-options"></div>
+                <div class="template-options-row">
+                    <div class="template-tools">
+                        <div class="template-tool template-skip-group">
+                            <button id="template-skip" type="button"
+                                    aria-label="Фоткать заново">
+                                <span class="template-tool-icon template-tool-cross"
+                                      aria-hidden="true">×</span>
+                                <span class="template-tool-label" aria-hidden="true">
+                                    ФОТКАТЬ ЗАНОВО
+                                </span>
+                            </button>
+                        </div>
+                        <div class="template-tool template-zoom-group">
+                            <!-- Magnifier is available when per-photo previews exist. -->
+                            <button id="template-zoom" type="button" hidden
+                                    aria-label="Рассмотреть кадры" aria-expanded="false"
+                                    aria-controls="photo-viewer">
+                                <span class="template-tool-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" fill="none" focusable="false">
+                                        <circle cx="10.5" cy="10.5" r="6.5"
+                                                stroke="currentColor" stroke-width="2.2"/>
+                                        <path d="M15.5 15.5 21 21" stroke="currentColor"
+                                              stroke-width="2.2" stroke-linecap="round"/>
+                                    </svg>
+                                </span>
+                                <span class="template-tool-label" aria-hidden="true">
+                                    УВЕЛИЧИТЬ
+                                </span>
+                            </button>
+                        </div>
+                        <div class="template-tool template-multi-group"
+                             id="template-multi-group" hidden>
+                            <button id="template-multi" type="button"
+                                    aria-pressed="false" aria-label="Несколько копий">
+                                <!-- Two sheets: the front one is a full rectangle,
+                                     the back one only its visible corner. -->
+                                <span class="template-tool-icon" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" fill="none" focusable="false">
+                                        <rect x="3" y="8" width="13" height="13" rx="2.4"
+                                              stroke="currentColor" stroke-width="2"/>
+                                        <path d="M8 8V7a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1"
+                                              stroke="currentColor" stroke-width="2"
+                                              stroke-linecap="round"/>
+                                    </svg>
+                                </span>
+                                <span class="template-tool-label" aria-hidden="true">
+                                    НЕСКОЛЬКО КОПИЙ
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="template-options" id="template-options"></div>
+                </div>
             </div>
             <section class="photo-choice-panel" id="photo-choice-panel" hidden>
                 <div class="photo-choice-header">
@@ -126,18 +159,6 @@
                 <span class="template-print-count"><span id="template-print-count">0</span> ШТ.</span>
             </button>
             <div id="template-timer"></div>
-            <!-- Magnifier: only rendered when a photo_choice template exists,
-                 because its per-photo previews are what the gallery shows. -->
-            <button id="template-zoom" type="button" hidden
-                    aria-label="Рассмотреть кадры" aria-expanded="false"
-                    aria-controls="photo-viewer">
-                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
-                    <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor"
-                            stroke-width="2.2"/>
-                    <path d="M15.5 15.5 21 21" stroke="currentColor"
-                          stroke-width="2.2" stroke-linecap="round"/>
-                </svg>
-            </button>
             <section class="photo-viewer" id="photo-viewer" hidden
                      aria-label="Просмотр кадров">
                 <div class="photo-viewer-stage">

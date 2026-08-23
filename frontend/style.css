@@ -594,104 +594,118 @@ html, body {
 
 .template-main {
     flex: 0 0 auto;
+    width: 94vw;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 3vh;
 }
 
-.template-skip-group {
-    z-index: 2;
+.template-options-row {
+    width: 100%;
+}
+
+.template-tools {
     position: absolute;
-    top: 5vh;
-    right: 5vh;
+    top: 19vh;
+    left: 2.5vw;
     display: flex;
-    align-items: center;
-    gap: 1vw;
-    pointer-events: none;
-}
-
-.template-skip-label {
-    font-size: 1.15vw;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    color: #777;
-    white-space: nowrap;
-}
-
-#template-skip {
-    position: relative;
-    pointer-events: auto;
-    width: 7vw;
-    height: 7vw;
-    border: 0;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: #eee;
-    color: #555;
-    font-family: Arial, sans-serif;
-    font-size: 5vw;
-    font-weight: 300;
-    line-height: 1;
-    cursor: none;
-    touch-action: manipulation;
-    -webkit-tap-highlight-color: transparent;
-}
-#template-skip:active { background: #ddd; }
-#template-skip:disabled { opacity: 0.45; }
-.template-skip-group:has(#template-skip:disabled) .template-skip-label {
-    opacity: 0.45;
-}
-
-/* Multi-select toggle: a labelled pill next to the top-left magnifier.
-   The magnifier is 7vw wide at left: 5vh, so this clears it with a small gap.
-   z-index matches the skip button and stays below the photo viewer (10): the
-   gallery must cover it, unlike the magnifier that closes the gallery. */
-.template-multi-group {
-    z-index: 2;
-    position: absolute;
-    top: 5vh;
-    left: calc(5vh + 8.5vw);
-    display: flex;
-    align-items: center;
-    gap: 1vw;
-    pointer-events: none;
-}
-.template-multi-group[hidden] { display: none; }
-
-.template-multi-label {
-    font-size: 1.35vw;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    line-height: 1.15;
-    white-space: nowrap;
-}
-
-#template-multi {
-    position: relative;
-    pointer-events: auto;
-    width: auto;
-    height: 7vw;
-    padding: 0 1.7vw;
-    border: 0;
-    border-radius: 999px;
-    display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
     justify-content: center;
-    gap: 0.9vw;
-    background: #eee;
-    color: #555;
+    gap: 0.75vw;
+}
+
+.template-tool {
+    width: 18vw;
+}
+.template-tool[hidden],
+.template-zoom-group:has(#template-zoom[hidden]) {
+    display: none;
+}
+
+.template-tool-label {
+    flex: 1 1 auto;
+    font-size: 1.3vw;
+    font-weight: 700;
+    letter-spacing: 0.025em;
+    line-height: 1.08;
+    color: inherit;
+    text-align: left;
+}
+
+#template-skip,
+#template-zoom,
+#template-multi {
+    z-index: 2;
+    position: relative;
+    width: 18vw;
+    height: 6.2vw;
+    padding: 0.75vw 1.25vw;
+    border: 0.18vw solid #222;
+    border-radius: 1.2vw;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 1.1vw;
+    background: var(--tool-bg);
+    color: #222;
     font-family: inherit;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
+    box-shadow: 0.35vw 0.35vw 0 var(--tool-accent);
+    transition: transform 0.1s ease, box-shadow 0.1s ease;
 }
-#template-multi svg { flex: none; width: 3vw; height: 3vw; }
-#template-multi:active { background: #ddd; }
+
+#template-skip {
+    --tool-bg: #ffe1ec;
+    --tool-accent: #FF2973;
+}
+#template-zoom {
+    --tool-bg: #dff7ff;
+    --tool-accent: #20bde3;
+}
+#template-multi {
+    --tool-bg: #fff0a6;
+    --tool-accent: #ff9f1c;
+}
+
+.template-tool-icon {
+    flex: 0 0 3.2vw;
+    width: 3.2vw;
+    height: 3.2vw;
+    display: grid;
+    place-items: center;
+}
+.template-tool-icon svg {
+    width: 2.8vw;
+    height: 2.8vw;
+}
+.template-tool-cross {
+    font-family: Arial, sans-serif;
+    font-size: 3.8vw;
+    font-weight: 300;
+    line-height: 1;
+}
+#template-skip:active,
+#template-zoom:active,
+#template-multi:active {
+    transform: translate(0.2vw, 0.2vw);
+    box-shadow: 0.15vw 0.15vw 0 var(--tool-accent);
+}
+#template-skip:disabled,
+#template-zoom:disabled,
 #template-multi:disabled { opacity: 0.45; }
+
+/* The multi-copy toggle stays below the viewer overlay. The magnifier is the
+   only tool above it because the same button also closes that overlay. */
+#template-multi {
+    z-index: 2;
+}
 #template-multi[aria-pressed="true"] {
-    background: #FF2973;
+    --tool-bg: #FF2973;
+    --tool-accent: #222;
     color: #fff;
 }
 
@@ -778,7 +792,7 @@ html, body {
     z-index: 2;
     position: absolute;
     right: 5vh;
-    bottom: 55vh;
+    bottom: 43vh;
     width: 13vw;
     height: 13vw;
     display: flex;
@@ -828,9 +842,9 @@ html, body {
 #screen-template.multi-select .template-title-multi { display: inline; }
 
 .template-options {
-    width: 100vw;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(20vw, 30vw));
+    width: 100%;
+    display: flex;
+    align-items: center;
     justify-content: center;
     gap: 1.5vw;
 }
@@ -840,19 +854,23 @@ html, body {
    grid stretches the button exactly as the grid column used to. */
 .template-tile {
     position: relative;
+    width: 27vw;
     display: grid;
     min-width: 0;
 }
 
 .template-btn {
     appearance: none;
+    outline: none;
     background: transparent;
     border: 0;
     padding: 0;
     color: #222;
     font-family: inherit;
     font-size: 2vw;
-    cursor: pointer;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
     transition: color 0.2s, transform 0.2s;
     display: flex;
     flex-direction: column;
@@ -895,28 +913,11 @@ html, body {
     color: #fff;
 }
 
-/* Magnifier button, mirroring the skip button in the opposite corner. It also
-   closes the viewer, so it stays above the overlay. */
+/* The magnifier also closes the viewer, so it stays above that overlay. */
 #template-zoom {
     z-index: 12;
-    position: absolute;
-    top: 5vh;
-    left: 5vh;
-    width: 7vw;
-    height: 7vw;
-    border: 0;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: #eee;
-    color: #555;
-    cursor: none;
-    touch-action: manipulation;
-    -webkit-tap-highlight-color: transparent;
 }
 #template-zoom[hidden] { display: none; }
-#template-zoom:active { background: #ddd; }
-#template-zoom svg { width: 3.4vw; height: 3.4vw; }
 
 /* Photo viewer: an overlay inside the template screen, not a separate screen. */
 .photo-viewer {

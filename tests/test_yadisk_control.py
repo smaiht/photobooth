@@ -108,10 +108,17 @@ class EventHistoryTests(unittest.TestCase):
         })
 
         self.assertEqual(summary, (
-            "📊 ИТОГ ИВЕНТА: old-event\n"
-            "• Сессии: 5 · ретейки: 1 · с несколькими копиями: 1\n"
-            "• Отпечатки: 7 · Grid: 3 · Strips: 1 · Single: 2 · "
-            "Print jobs: 1"
+            "📊 ИТОГ ИВЕНТА: old-event\n\n"
+            "📸 СЕССИИ\n"
+            "• Всего: 5\n"
+            "• Ретейки: 1\n"
+            "• С несколькими копиями: 1\n\n"
+            "🖨 ОТПЕЧАТКИ\n"
+            "• Всего: 7\n"
+            "• Grid: 3\n"
+            "• Strips: 1\n"
+            "• Single: 2\n"
+            "• Print jobs: 1"
         ))
 
     def test_event_change_archives_the_complete_old_history(self):
@@ -628,10 +635,17 @@ class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["document"], history)
         self.assertEqual(response["document_caption"], (
-            "📊 ИТОГ ИВЕНТА: event\n"
-            "• Сессии: 0 · ретейки: 0 · с несколькими копиями: 0\n"
-            "• Отпечатки: 0 · Grid: 0 · Strips: 0 · Single: 0 · "
-            "Print jobs: 0"
+            "📊 ИТОГ ИВЕНТА: event\n\n"
+            "📸 СЕССИИ\n"
+            "• Всего: 0\n"
+            "• Ретейки: 0\n"
+            "• С несколькими копиями: 0\n\n"
+            "🖨 ОТПЕЧАТКИ\n"
+            "• Всего: 0\n"
+            "• Grid: 0\n"
+            "• Strips: 0\n"
+            "• Single: 0\n"
+            "• Print jobs: 0"
         ))
 
     async def test_clear_reports_partial_failure_across_both_queues(self):
@@ -887,10 +901,17 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(archived["event"], "old-event")
         self.assertEqual(archived["entries"][-1]["type"], "event_ended")
         self.assertEqual(response["document_caption"], (
-            "📊 ИТОГ ИВЕНТА: old-event\n"
-            "• Сессии: 1 · ретейки: 1 · с несколькими копиями: 0\n"
-            "• Отпечатки: 0 · Grid: 0 · Strips: 0 · Single: 0 · "
-            "Print jobs: 0"
+            "📊 ИТОГ ИВЕНТА: old-event\n\n"
+            "📸 СЕССИИ\n"
+            "• Всего: 1\n"
+            "• Ретейки: 1\n"
+            "• С несколькими копиями: 0\n\n"
+            "🖨 ОТПЕЧАТКИ\n"
+            "• Всего: 0\n"
+            "• Grid: 0\n"
+            "• Strips: 0\n"
+            "• Single: 0\n"
+            "• Print jobs: 0"
         ))
 
     async def test_restart_is_rejected_during_session(self):
