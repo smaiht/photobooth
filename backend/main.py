@@ -914,13 +914,15 @@ async def _finish_successful_session(
     camera_generation: int,
     session_uses_cafe_unlock: bool,
     history_entry: dict | None = None,
+    test_session: bool = False,
 ) -> None:
     """Queue every composed sheet, charge the allowance, then expose done.
 
     ``sheets`` is already expanded: one entry per physical 4x6 sheet, so two
     copies of the same layout appear twice and reuse one composed JPEG.
     """
-    if CONFIG["print_enabled"]:
+    print_enabled = CONFIG["print_enabled"] and not test_session
+    if print_enabled:
         from .printer import enqueue_print
         for sheet_path, sheet_template in sheets:
             await enqueue_print(str(sheet_path), CONFIG, sheet_template)
@@ -931,7 +933,7 @@ async def _finish_successful_session(
             **history_entry,
             "result": (
                 "print_queued"
-                if CONFIG["print_enabled"]
+                if print_enabled
                 else "completed_without_print"
             ),
         })
@@ -943,12 +945,12 @@ async def _finish_successful_session(
 
 
 # --- Session flow ---
-async def run_session():
+async def run_session(test_session: bool = False):
     global _session_running, TEMPLATE_OPTIONS
     if _session_running:
         log.warning("Duplicate session start ignored")
         return
-    if _start_locked():
+    if not test_session and _start_locked():
         log.warning(
             "Session start blocked for technical event %r: no unlock sessions remain",
             _technical_event_name(),
@@ -958,10 +960,11 @@ async def run_session():
     previous_session_id = SESSION_ID
     _session_running = True
     try:
-        await _run_session()
+        await _run_session(test_session=test_session)
     except CameraSessionAborted as exc:
         log.warning("Session aborted: %s", exc)
-        if SESSION_ID and SESSION_ID != previous_session_id:
+        if (not test_session
+                and SESSION_ID and SESSION_ID != previous_session_id):
             _record_event_history({
                 "type": "photo_session",
                 "session_id": SESSION_ID,
@@ -975,7 +978,8 @@ async def run_session():
             "idle" if camera and camera.is_connected else "camera_searching")
     except Exception as exc:
         log.exception("Session error")
-        if SESSION_ID and SESSION_ID != previous_session_id:
+        if (not test_session
+                and SESSION_ID and SESSION_ID != previous_session_id):
             _record_event_history({
                 "type": "photo_session",
                 "session_id": SESSION_ID,
@@ -1004,7 +1008,7 @@ async def run_session():
             await set_state("idle")
 
 
-async def _run_session():
+async def _run_session(test_session: bool = False):
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT, SESSION_LINK
     global TEMPLATE_OPTIONS
     global _live_view_active, _evf_accept_after
@@ -1071,7 +1075,8 @@ async def _run_session():
         yadisk_cloud.current_event_folder()
         or str(CONFIG.get("yadisk_folder") or "").strip().strip("/")
     )
-    session_uses_cafe_unlock = event_folder == _technical_event_name()
+    session_uses_cafe_unlock = (
+        not test_session and event_folder == _technical_event_name())
     session_folder = yadisk_cloud.session_folder_name(
         SESSION_ID, session_created_at)
     SESSION_PHOTOS = []
@@ -1080,6 +1085,9 @@ async def _run_session():
     log.info(f"=== Session {SESSION_ID} started ===")
 
     pre_countdown_delay, countdown_seconds, countdown_sound_seconds = _countdown_timing()
+    if test_session:
+        countdown_seconds = 2
+        countdown_sound_seconds = min(countdown_sound_seconds, countdown_seconds)
 
     # Drop the previous session frame before the frontend reconnects to /live.
     _clear_live_view()
@@ -1142,41 +1150,45 @@ async def _run_session():
 
     if len(SESSION_PHOTOS) < num_photos:
         video_recorder.abort()
-        _record_event_history({
-            "type": "photo_session",
-            "session_id": SESSION_ID,
-            "result": "failed",
-            "reason": "photo_download_timeout",
-        })
+        if not test_session:
+            _record_event_history({
+                "type": "photo_session",
+                "session_id": SESSION_ID,
+                "result": "failed",
+                "reason": "photo_download_timeout",
+            })
         await broadcast({"type": "error", "message": "Photo download error. Try again."})
         await asyncio.sleep(3)
         await set_state("idle")
         return
 
-    # Start video encoding in background (all frames + photos ready)
     photos_copy = SESSION_PHOTOS[:]
-    video_future = asyncio.get_event_loop().run_in_executor(
-        None, video_recorder.stop_and_encode
-    )
+    if test_session:
+        video_recorder.abort()
+    else:
+        # Start video encoding in background (all frames + photos ready)
+        video_future = asyncio.get_event_loop().run_in_executor(
+            None, video_recorder.stop_and_encode
+        )
 
-    session_id = SESSION_ID
-    upload_task = asyncio.create_task(_enqueue_session_after_video(
-        session_id,
-        photos_copy,
-        video_future,
-        session_created_at,
-        event_folder,
-        session_folder,
-    ))
-    _track_background(upload_task, f"outbox preparation for {session_id}")
+        session_id = SESSION_ID
+        upload_task = asyncio.create_task(_enqueue_session_after_video(
+            session_id,
+            photos_copy,
+            video_future,
+            session_created_at,
+            event_folder,
+            session_folder,
+        ))
+        _track_background(upload_task, f"outbox preparation for {session_id}")
 
-    link_task = asyncio.create_task(_prepare_session_link(
-        session_id,
-        session_created_at,
-        event_folder,
-        session_folder,
-    ))
-    _track_background(link_task, f"QR preparation for {session_id}")
+        link_task = asyncio.create_task(_prepare_session_link(
+            session_id,
+            session_created_at,
+            event_folder,
+            session_folder,
+        ))
+        _track_background(link_task, f"QR preparation for {session_id}")
 
     # Build real, session-specific options before showing template selection.
     await set_state("processing")
@@ -1378,11 +1390,12 @@ async def _run_session():
             choice_task, disconnect_task, extend_task, return_exceptions=True)
     template_event.set()
     if chosen["skip_print"]:
-        _record_event_history({
-            "type": "photo_session",
-            "session_id": SESSION_ID,
-            "result": "retake",
-        })
+        if not test_session:
+            _record_event_history({
+                "type": "photo_session",
+                "session_id": SESSION_ID,
+                "result": "retake",
+            })
         TEMPLATE_OPTIONS = []
         await set_state("idle")
         return
@@ -1465,7 +1478,8 @@ async def _run_session():
         composed,
         camera_generation,
         session_uses_cafe_unlock,
-        history_entry,
+        None if test_session else history_entry,
+        test_session=test_session,
     )
 
     # Show done/QR screen before allowing the next session
@@ -2582,10 +2596,12 @@ async def websocket_endpoint(ws: WebSocket):
             msg = json.loads(data)
 
             if msg["type"] == "start_session" and STATE == "idle":
-                if _start_locked():
+                test_session = msg.get("test_session") is True
+                if not test_session and _start_locked():
                     await ws.send_text(json.dumps(_state_message(STATE)))
                 elif camera and camera.is_connected:
-                    asyncio.create_task(run_session())
+                    asyncio.create_task(run_session(
+                        test_session=test_session))
                 else:
                     await set_state("camera_searching" if camera else "no_camera")
 

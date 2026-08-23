@@ -58,6 +58,7 @@ const serviceModal = document.getElementById("service-modal");
 const serviceClose = document.getElementById("service-close");
 const serviceToast = document.getElementById("service-toast");
 const networkAdapters = document.getElementById("network-adapters");
+const btnTestSession = document.getElementById("btn-test-session");
 const btnSysLock = document.getElementById("btn-sys-lock");
 const btnSysTaskmgr = document.getElementById("btn-sys-taskmgr");
 const btnSysKeyboard = document.getElementById("btn-sys-keyboard");
@@ -1424,6 +1425,13 @@ if (serviceModal) {
     });
 }
 
+if (btnTestSession) {
+    btnTestSession.addEventListener("click", () => {
+        if (send({ type: "start_session", test_session: true })) {
+            closeServiceModal();
+        }
+    });
+}
 if (btnSysLock) btnSysLock.addEventListener("click", () => triggerSystemAction("lock", "Блокировка экрана"));
 if (btnSysTaskmgr) btnSysTaskmgr.addEventListener("click", () => triggerSystemAction("taskmgr", "Диспетчер задач"));
 if (btnSysKeyboard) btnSysKeyboard.addEventListener("click", () => triggerSystemAction("keyboard", "Экранная клавиатура"));

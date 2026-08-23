@@ -1330,7 +1330,7 @@ class SessionGuardTests(unittest.IsolatedAsyncioTestCase):
         release = asyncio.Event()
         calls = 0
 
-        async def fake_session():
+        async def fake_session(*, test_session=False):
             nonlocal calls
             calls += 1
             entered.set()

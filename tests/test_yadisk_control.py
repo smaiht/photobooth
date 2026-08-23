@@ -148,6 +148,29 @@ class EventHistoryTests(unittest.TestCase):
             ["application_started", "photo_session", "event_ended"],
         )
 
+    def test_application_restart_keeps_the_current_history(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "_event_history_ready", False), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="event"):
+            main._start_event_history()
+            main._record_event_history({
+                "type": "photo_session",
+                "session_id": "session-id",
+                "result": "retake",
+            })
+            main._start_event_history()
+            current = json.loads(
+                (Path(tmpdir) / "event_history.json").read_text(
+                    encoding="utf-8"))
+
+        self.assertEqual(current["event"], "event")
+        self.assertEqual(
+            [entry["type"] for entry in current["entries"]],
+            ["application_started", "photo_session", "application_started"],
+        )
+
     def test_missing_previous_history_starts_the_new_journal_without_archive(self):
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch.object(main, "ROOT_DIR", Path(tmpdir)), \
