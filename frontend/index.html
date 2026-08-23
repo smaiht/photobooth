@@ -87,7 +87,7 @@
         <div class="screen" id="screen-template" hidden>
             <div class="template-multi-group" id="template-multi-group" hidden>
                 <button id="template-multi" type="button" aria-pressed="false"
-                        aria-label="Выбрать несколько отпечатков">
+                        aria-label="Несколько копий">
                     <!-- Two sheets: the front one is a full rectangle, the back
                          one only its visible corner, so no strokes cross. -->
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
@@ -97,15 +97,18 @@
                               stroke="currentColor" stroke-width="2"
                               stroke-linecap="round"/>
                     </svg>
+                    <span class="template-multi-label" aria-hidden="true">НЕСКОЛЬКО КОПИЙ</span>
                 </button>
-                <span class="template-multi-label" aria-hidden="true"></span>
             </div>
             <div class="template-skip-group">
                 <span class="template-skip-label" aria-hidden="true">ФОТКАТЬ ЗАНОВО</span>
                 <button id="template-skip" type="button" aria-label="Фоткать заново">×</button>
             </div>
             <div class="template-main">
-                <div class="template-title">ЧТО ПЕЧАТАЕМ?</div>
+                <div class="template-title">
+                    <span class="template-title-normal">ЧТО ПЕЧАТАЕМ?</span>
+                    <span class="template-title-multi">НАЖИМАЙТЕ НА ФОТО ИЛИ +</span>
+                </div>
                 <div class="template-options" id="template-options"></div>
             </div>
             <section class="photo-choice-panel" id="photo-choice-panel" hidden>
@@ -119,8 +122,8 @@
                 <div class="photo-choice-options" id="photo-choice-options"></div>
             </section>
             <button id="template-print" type="button" hidden disabled>
-                <span class="template-print-title">ПЕЧАТАТЬ</span>
-                <span class="template-print-count" id="template-print-count">0</span>
+                <span class="template-print-title">НАПЕЧАТАТЬ</span>
+                <span class="template-print-count"><span id="template-print-count">0</span> ШТ.</span>
             </button>
             <div id="template-timer"></div>
             <!-- Magnifier: only rendered when a photo_choice template exists,

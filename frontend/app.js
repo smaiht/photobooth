@@ -795,18 +795,20 @@ function renderTemplateOptions(options) {
         button.append(preview, caption);
         // A badge holds its own buttons, so it must be a sibling of the tile
         // button rather than a child: nested buttons are invalid HTML.
-        const tile = document.createElement("div");
-        tile.className = "template-tile";
-        tile.appendChild(button);
-        tile.appendChild(createPrintBadge({
+        const printItem = {
             template: option.name,
             photo_index: null,
             with_frame: true,
-        }));
+        };
+        const tile = document.createElement("div");
+        tile.className = "template-tile";
+        tile.appendChild(button);
+        tile.appendChild(createPrintBadge(printItem));
         button.addEventListener("click", () => {
-            // In multi-select the tile itself is inert: only its +/- change
-            // the basket, so a stray tap can never print a sheet outright.
-            if (multiSelectActive) return;
+            if (multiSelectActive) {
+                adjustBasket(printItem, 1);
+                return;
+            }
             if (!send({ type: "select_template", template: option.name })) return;
             lockTemplateSelection();
         });
@@ -890,8 +892,16 @@ function renderPhotoChoices() {
         number.className = "photo-choice-number";
         number.textContent = photoNumber;
         button.append(preview, number);
+        const printItem = {
+            template: photoChoiceTemplate.name,
+            photo_index: choice.photo_index,
+            with_frame: photoChoiceWithFrame,
+        };
         button.addEventListener("click", () => {
-            if (multiSelectActive) return;
+            if (multiSelectActive) {
+                adjustBasket(printItem, 1);
+                return;
+            }
             const sent = send({
                 type: "select_template",
                 template: photoChoiceTemplate.name,
@@ -902,11 +912,7 @@ function renderPhotoChoices() {
         });
         const tile = document.createElement("div");
         tile.className = "photo-choice-tile";
-        tile.append(button, createPrintBadge({
-            template: photoChoiceTemplate.name,
-            photo_index: choice.photo_index,
-            with_frame: photoChoiceWithFrame,
-        }));
+        tile.append(button, createPrintBadge(printItem));
         photoChoiceOptions.appendChild(tile);
     });
     renderBasket();

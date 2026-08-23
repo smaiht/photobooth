@@ -84,6 +84,20 @@ def _build_loading_html():
         <div id="progress" style="min-height:1.8em; font-size:1.5vw; font-weight:600;
              color:#555; text-align:center"></div>
         <div id="log" style="font-size:1.2vw; color:#999; text-align:center; line-height:1.8"></div>
+        <div id="update-controls" style="display:flex; flex-direction:column;
+             align-items:center; gap:0.8vw">
+            <button id="skip-update" disabled onclick="requestUpdateAction('skip')"
+                    style="border:0; border-radius:999px; padding:1vw 2vw;
+                    background:#FF2973; color:#fff; font-family:inherit;
+                    font-size:1.25vw; font-weight:600;
+                    cursor:pointer">Запустить без обновления</button>
+            <button id="retry-update" disabled onclick="requestUpdateAction('retry')"
+                    style="border:0; padding:0.4vw 0.8vw; background:transparent;
+                    color:#777; font-family:inherit; font-size:0.95vw;
+                    font-weight:600; cursor:pointer">
+                Повторить проверку
+            </button>
+        </div>
     </div>
     <script>
     function setStatus(text) {{ document.getElementById('status').textContent = text; }}
@@ -92,6 +106,32 @@ def _build_loading_html():
         var el = document.getElementById('log');
         el.innerHTML += text + '<br>';
     }}
+    function setUpdateControlsDisabled(disabled) {{
+        document.getElementById('skip-update').disabled = disabled;
+        document.getElementById('retry-update').disabled = disabled;
+        document.getElementById('update-controls').style.opacity = disabled ? '0.55' : '1';
+    }}
+    function beginUpdateCheck() {{
+        document.getElementById('update-controls').style.display = 'flex';
+        setUpdateControlsDisabled(false);
+        setProgress('Подключение к Яндекс Диску · попытка 1/5');
+    }}
+    function hideUpdateControls() {{
+        document.getElementById('update-controls').style.display = 'none';
+    }}
+    function requestUpdateAction(action) {{
+        setUpdateControlsDisabled(true);
+        if (action === 'skip') {{
+            setProgress('Запуск без обновления...');
+            window.pywebview.api.skip_update();
+        }} else {{
+            setProgress('Проверка запускается заново...');
+            window.pywebview.api.retry_update();
+        }}
+    }}
+    window.addEventListener('pywebviewready', function() {{
+        setUpdateControlsDisabled(false);
+    }});
     </script>
 </body>
 </html>
@@ -186,6 +226,28 @@ def wait_and_load(window):
 
 
 _window = None
+
+
+class _LoadingApi:
+    def __init__(self):
+        self.event = threading.Event()
+        self.action = None
+
+    def skip_update(self):
+        self.action = "skip"
+        self.event.set()
+
+    def retry_update(self):
+        self.action = "retry"
+        self.event.set()
+
+    def reset(self):
+        self.action = None
+        self.event.clear()
+
+
+_loading_api = _LoadingApi()
+
 
 def _ui(js):
     """Execute JS on loading screen (safe to call before window is ready)."""
@@ -1048,7 +1110,7 @@ def _apply_stage_in_process(
         shutil.move(str(source), str(target))
 
 
-def _update_from_disk() -> str | None:
+def _update_from_disk(cancel_event=None) -> str | None:
     """Download and install changed release folders, or full for a clean install."""
     from backend.yadisk_updates import read_status
 
@@ -1076,7 +1138,15 @@ def _update_from_disk() -> str | None:
             f"повтор {attempt + 1}/{attempts} через {delay:.0f} с"
         )
 
-    status = read_status(folder, on_retry=report_status_retry)
+    status = read_status(
+        folder,
+        on_retry=report_status_retry,
+        cancel_event=cancel_event,
+    )
+    if cancel_event is not None:
+        _ui("hideUpdateControls()")
+        if cancel_event.is_set():
+            return "cancelled"
     if not status:
         log.info("Disk update: status.json not available")
         _ui_log("На Диске нет обновлений")
@@ -1186,21 +1256,34 @@ def auto_update():
     if sys.platform == "win32":
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    try:
-        update_action = _update_from_disk()
-        if update_action == "external":
-            log.info("Exiting for external full update...")
-            _ui_log("Завершение полной установки...")
-            os._exit(0)
-        if update_action == "restart":
-            log.info("Restarting with new Disk code...")
-            _ui_log("Перезапуск...")
-            subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
-            os._exit(0)
-    except Exception as e:
-        log.exception("Disk update failed")
-        _ui_progress("Обновление не скачано — запускаем текущую версию")
-        _ui_log(f"Ошибка обновления: {e}")
+    while True:
+        _ui("beginUpdateCheck()")
+        try:
+            update_action = _update_from_disk(_loading_api.event)
+            if update_action == "cancelled":
+                if _loading_api.action == "retry":
+                    log.info("Disk update: status check restarted by user")
+                    _loading_api.reset()
+                    continue
+                log.info("Disk update: skipped by user")
+                _ui("hideUpdateControls()")
+                return
+            if update_action == "external":
+                log.info("Exiting for external full update...")
+                _ui_log("Завершение полной установки...")
+                os._exit(0)
+            if update_action == "restart":
+                log.info("Restarting with new Disk code...")
+                _ui_log("Перезапуск...")
+                subprocess.Popen([sys.executable] + sys.argv, startupinfo=si)
+                os._exit(0)
+            return
+        except Exception as e:
+            log.exception("Disk update failed")
+            _ui("hideUpdateControls()")
+            _ui_progress("Обновление не скачано — запускаем текущую версию")
+            _ui_log(f"Ошибка обновления: {e}")
+            return
 
 
 def _run_application():
@@ -1233,9 +1316,11 @@ def _run_application():
 
     # Show loading screen immediately
     import webview
+    _loading_api.reset()
     window = webview.create_window(
         title="Photobooth",
         html=_build_loading_html(),
+        js_api=_loading_api,
         fullscreen=not dev,
         width=1200,
         height=900,

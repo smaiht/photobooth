@@ -227,6 +227,30 @@ class DiskUpdateStatusTests(unittest.TestCase):
             [2.0, 3.0, 3.0, 3.0],
         )
 
+    def test_cancel_stops_before_the_next_status_attempt(self):
+        cancel_event = app.threading.Event()
+        error = urllib.error.URLError("network unavailable")
+
+        def cancel_on_retry(*_args):
+            cancel_event.set()
+
+        with patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch(
+                 "backend.yadisk_updates._request",
+                 side_effect=error,
+             ) as request_link, \
+             patch("backend.yadisk_updates.time.sleep") as sleep:
+            status = yadisk_updates.read_status(
+                "updates",
+                on_retry=cancel_on_retry,
+                retry_delays=(3, 3),
+                cancel_event=cancel_event,
+            )
+
+        self.assertIsNone(status)
+        request_link.assert_called_once()
+        sleep.assert_not_called()
+
     def test_loading_screen_reports_the_next_status_attempt(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -234,7 +258,7 @@ class DiskUpdateStatusTests(unittest.TestCase):
             fake_app.write_text("", encoding="utf-8")
             (root / "config_app.json").write_text("{}", encoding="utf-8")
 
-            def read_status(_folder, *, on_retry):
+            def read_status(_folder, *, on_retry, cancel_event=None):
                 on_retry(
                     1,
                     5,

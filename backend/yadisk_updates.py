@@ -72,7 +72,7 @@ def _request(method: str, url: str, token: str, *, params: dict | None = None,
     return urllib.request.urlopen(request, timeout=timeout)
 
 
-def _read_status_once(root: str, token: str) -> dict:
+def _read_status_once(root: str, token: str, cancel_event=None) -> dict:
     # Ask for a new storage URL on every attempt. Yandex download links are
     # temporary, and retrying a link issued while the network was unhealthy is
     # less reliable than resolving the path again through the API.
@@ -86,6 +86,8 @@ def _read_status_once(root: str, token: str) -> dict:
         if exc.code == 404:
             raise StatusNotFound from exc
         raise
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError
     request = urllib.request.Request(
         link, headers={"User-Agent": "photobooth-update/1"})
     try:
@@ -162,6 +164,7 @@ def read_status(
     *,
     on_retry: RetryCallback | None = None,
     retry_delays: Sequence[float] = STATUS_RETRY_DELAYS,
+    cancel_event=None,
 ) -> dict | None:
     token = os.environ.get("YADISK_TOKEN", "").strip()
     if not token:
@@ -172,16 +175,23 @@ def read_status(
         raise ValueError("invalid status retry delay")
     attempts = len(delays) + 1
     for attempt in range(1, attempts + 1):
+        if cancel_event is not None and cancel_event.is_set():
+            return None
         log.info(
             "Disk update: status check attempt %d/%d",
             attempt,
             attempts,
         )
         try:
-            return _read_status_once(root, token)
+            status = _read_status_once(root, token, cancel_event)
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            return status
         except StatusNotFound:
             return None
         except Exception as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                return None
             error = exc
 
         if (attempt >= attempts
@@ -190,7 +200,11 @@ def read_status(
         delay = delays[attempt - 1]
         if on_retry:
             on_retry(attempt, attempts, delay, error)
-        time.sleep(delay)
+        if cancel_event is not None:
+            if cancel_event.wait(delay):
+                return None
+        else:
+            time.sleep(delay)
 
     raise AssertionError("unreachable")
 

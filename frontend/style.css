@@ -644,9 +644,8 @@ html, body {
     opacity: 0.45;
 }
 
-/* Multi-select toggle: sits next to the magnifier in the top left, not centred,
-   so the two related controls read as one group. The magnifier is 7vw wide at
-   left: 5vh, so this clears it with a small gap.
+/* Multi-select toggle: a labelled pill next to the top-left magnifier.
+   The magnifier is 7vw wide at left: 5vh, so this clears it with a small gap.
    z-index matches the skip button and stays below the photo viewer (10): the
    gallery must cover it, unlike the magnifier that closes the gallery. */
 .template-multi-group {
@@ -661,45 +660,39 @@ html, body {
 }
 .template-multi-group[hidden] { display: none; }
 
-/* Empty for now: the icon speaks for itself. Kept in the markup so a caption
-   can be restored without touching the layout. */
 .template-multi-label {
-    font-size: 1.15vw;
+    font-size: 1.35vw;
     font-weight: 700;
     letter-spacing: 0.05em;
     line-height: 1.15;
-    color: #777;
     white-space: nowrap;
 }
-.template-multi-label:empty { display: none; }
 
 #template-multi {
     position: relative;
     pointer-events: auto;
-    width: 7vw;
+    width: auto;
     height: 7vw;
+    padding: 0 1.7vw;
     border: 0;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.9vw;
     background: #eee;
     color: #555;
+    font-family: inherit;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
 }
-#template-multi svg { width: 3.4vw; height: 3.4vw; }
+#template-multi svg { flex: none; width: 3vw; height: 3vw; }
 #template-multi:active { background: #ddd; }
 #template-multi:disabled { opacity: 0.45; }
 #template-multi[aria-pressed="true"] {
     background: #FF2973;
     color: #fff;
-}
-.template-multi-group:has(#template-multi[aria-pressed="true"]) .template-multi-label {
-    color: #FF2973;
-}
-.template-multi-group:has(#template-multi:disabled) .template-multi-label {
-    opacity: 0.45;
 }
 
 /* Counter badge over the middle of a preview. The layer covers only the preview
@@ -786,13 +779,13 @@ html, body {
     position: absolute;
     right: 5vh;
     bottom: 55vh;
-    width: 11vw;
-    height: 11vw;
+    width: 13vw;
+    height: 13vw;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.2vh;
+    gap: 7px;
     padding: 0;
     border: 0;
     border-radius: 50%;
@@ -830,6 +823,9 @@ html, body {
 }
 
 .template-title { font-size: 4vw; font-weight: 700; }
+.template-title-multi { display: none; }
+#screen-template.multi-select .template-title-normal { display: none; }
+#screen-template.multi-select .template-title-multi { display: inline; }
 
 .template-options {
     width: 100vw;
