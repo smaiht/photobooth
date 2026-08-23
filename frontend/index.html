@@ -128,8 +128,13 @@
                     <div class="template-tool template-skip-group">
                         <button id="template-skip" type="button"
                                 aria-label="Фоткать заново">
-                            <span class="template-tool-icon template-tool-cross"
-                                  aria-hidden="true">×</span>
+                            <span class="template-tool-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" focusable="false">
+                                    <path d="M5 5 19 19M19 5 5 19"
+                                          stroke="currentColor" stroke-width="3"
+                                          stroke-linecap="round"/>
+                                </svg>
+                            </span>
                             <span class="template-tool-label" aria-hidden="true">
                                 ФОТКАТЬ ЗАНОВО
                             </span>
@@ -138,10 +143,16 @@
                 </div>
                 <div class="template-options-row">
                     <div class="template-title">
-                        <span class="template-title-normal">ЧТО<br>ПЕЧАТАЕМ?</span>
+                        <span class="template-title-normal">
+                            <span class="template-title-normal-heading">ЧТО<br>ПЕЧАТАЕМ?</span>
+                            <span class="template-title-hint">Нажмите на нужный вариант</span>
+                        </span>
                         <span class="template-title-multi">
                             <span class="template-title-multi-heading">СКОЛЬКО ПЕЧАТАЕМ?</span>
-                            <span class="template-title-multi-hint">Нажимайте на нужный вариант или «+»</span>
+                            <span class="template-title-hint">
+                                Нажимайте на нужный вариант или
+                                <span class="template-plus-icon" aria-hidden="true">+</span>
+                            </span>
                         </span>
                         <button id="template-print" type="button" hidden disabled>
                             <span class="template-print-title">НАПЕЧАТАТЬ</span>
