@@ -163,6 +163,66 @@ def _append_event_history_entry(payload: dict, entry: dict, at: str) -> None:
     payload["entries"].append({"at": at, **entry})
 
 
+def _event_history_summary(payload: dict) -> str:
+    """Summarize sessions and physical print sheets from one event journal."""
+    sessions = 0
+    retakes = 0
+    multiple_copy_sessions = 0
+    total_prints = 0
+    grid_prints = 0
+    strips_prints = 0
+    custom_prints = 0
+
+    entries = payload.get("entries") if isinstance(payload, dict) else []
+    if not isinstance(entries, list):
+        entries = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") == "custom_print_job":
+            if entry.get("result") == "print_queued":
+                total_prints += 1
+                custom_prints += 1
+            continue
+        if entry.get("type") != "photo_session":
+            continue
+
+        sessions += 1
+        if entry.get("result") == "retake":
+            retakes += 1
+        if entry.get("result") != "print_queued":
+            continue
+
+        items = entry.get("items")
+        if not isinstance(items, dict):
+            continue
+        session_prints = sum(
+            copies for copies in items.values()
+            if type(copies) is int and copies > 0
+        )
+        total_prints += session_prints
+        grid = items.get("grid")
+        strips = items.get("strips")
+        if type(grid) is int and grid > 0:
+            grid_prints += grid
+        if type(strips) is int and strips > 0:
+            strips_prints += strips
+        if session_prints > 1:
+            multiple_copy_sessions += 1
+
+    event = str(payload.get("event") or "не задан")
+    single_prints = (
+        total_prints - grid_prints - strips_prints - custom_prints)
+    return "\n".join((
+        f"📊 ИТОГ ИВЕНТА: {event}",
+        f"• Сессии: {sessions} · ретейки: {retakes} · "
+        f"с несколькими копиями: {multiple_copy_sessions}",
+        f"• Отпечатки: {total_prints} · Grid: {grid_prints} · "
+        f"Strips: {strips_prints} · Single: {single_prints} · "
+        f"Print jobs: {custom_prints}",
+    ))
+
+
 def _start_event_history() -> None:
     """Open the current event journal and record this application start."""
     global _event_history_ready
@@ -234,15 +294,29 @@ def _record_event_history(entry: dict) -> None:
         log.exception("Could not append event history entry: %s", entry.get("type"))
 
 
-def _switch_event_history(new_event: str, source: dict) -> None:
+def _switch_event_history(new_event: str, source: dict) -> Path | None:
     """Archive the old event intact and create the next event journal."""
     if not _event_history_ready:
-        return
+        return None
     try:
-        payload = _load_event_history(_event_history_path())
+        try:
+            payload = _load_event_history(_event_history_path())
+        except FileNotFoundError:
+            now = _event_history_now()
+            payload = _new_event_history(new_event)
+            _append_event_history_entry(payload, {
+                "type": "event_started",
+                "source": source,
+            }, now)
+            _write_event_history(payload)
+            log.warning(
+                "Previous event history was missing; started journal for %r",
+                new_event,
+            )
+            return None
         previous_event = payload["event"]
         if previous_event == new_event:
-            return
+            return None
         now = _event_history_now()
         _append_event_history_entry(payload, {
             "type": "event_ended",
@@ -260,8 +334,10 @@ def _switch_event_history(new_event: str, source: dict) -> None:
         }, now)
         _write_event_history(payload)
         log.info("Event history archived for %r: %s", previous_event, archived)
+        return archived
     except (OSError, ValueError, json.JSONDecodeError):
         log.exception("Could not switch event history to %r", new_event)
+        return None
 
 
 def _command_history_source(command: dict, actor: str = "administrator") -> dict:
@@ -488,12 +564,6 @@ def _format_camera_config_report(report: dict) -> list[str]:
             lines.append(
                 "• Приложение: "
                 + " · ".join(host_values[index:index + 3]))
-    mismatched = report.get("mismatched") or []
-    unavailable = report.get("unavailable") or []
-    if unavailable:
-        lines.append("⚠️ Камера не сообщила: " + ", ".join(unavailable))
-    if not mismatched and not unavailable and camera_entries:
-        lines.append("✅ Все параметры применены без расхождений")
     return lines
 
 
@@ -1667,24 +1737,26 @@ async def _status_report_text() -> str:
         "🎪 СОБЫТИЕ",
         f"• Будка: {event}",
     ]
+    template_lines = [
+        f"🖼 ШАБЛОН: {CONFIG.get('template_pack', 'unknown')}",
+    ]
     session_lines = [
-        "🖼 ШАБЛОН И СЕССИИ",
-        f"• Набор: {CONFIG.get('template_pack', 'unknown')}",
+        "🎟 СЕССИИ",
+        f"• Технический ивент: {'да' if technical_event else 'нет'}",
     ]
     if technical_event:
         session_lines.append(
             f"• Допуск: {'🔴 закрыт' if start_locked else '🟢 открыт'} · "
-            f"Осталось сессий: {_cafe_unlock_sessions_remaining}"
+            f"сессий осталось: {_cafe_unlock_sessions_remaining}"
         )
     else:
         session_lines.append("• Допуск: ♾ без ограничений")
 
     connected = bool(camera and camera.is_connected)
     camera_lines = [
-        "📷 КАМЕРА",
-        f"• Статус: {'🟢 подключена' if connected else '🔴 не подключена'}",
+        f"📷 КАМЕРА: {'🟢 подключена' if connected else '🔴 не подключена'}",
     ]
-    blocks = [event_lines, session_lines, camera_lines]
+    blocks = [event_lines, template_lines, session_lines, camera_lines]
     disk_free = None
     snapshot_method = getattr(camera, "status_snapshot", None) if camera else None
     if snapshot_method:
@@ -1727,10 +1799,16 @@ async def _status_report_text() -> str:
                 "• Последняя очистка: "
                 f"{snapshot['last_cleanup_result']} at "
                 f"{snapshot.get('last_cleanup_at') or 'unknown'}")
-        config_lines = _format_camera_config_report(
-            snapshot.get("config_report"))
+        config_report = snapshot.get("config_report")
+        config_lines = _format_camera_config_report(config_report)
         if config_lines:
-            config_block = ["⚙️ КОНФИГУРАЦИЯ КАМЕРЫ"]
+            config_ok = (
+                isinstance(config_report, dict)
+                and bool(config_report.get("camera"))
+                and not config_report.get("mismatched")
+                and not config_report.get("unavailable")
+            )
+            config_title = f"⚙️ КОНФИГ КАМЕРЫ: {'✅' if config_ok else '❌'}"
             report_at = snapshot.get("config_report_at")
             if report_at:
                 try:
@@ -1738,19 +1816,18 @@ async def _status_report_text() -> str:
                         str(report_at)).astimezone().strftime("%d.%m.%Y %H:%M")
                 except ValueError:
                     checked_at = str(report_at)
-                config_block.append(f"• Проверено: {checked_at}")
+                config_title += f" · {checked_at}"
+            config_block = [config_title]
             config_block.extend(config_lines)
             blocks.append(config_block)
     print_enabled = CONFIG.get("print_enabled") is True
     blocks.append([
-        "🖨 ПРИНТЕР",
-        f"• Печать: {'🟢 включена' if print_enabled else '🔴 выключена'}",
+        f"🖨 ПРИНТЕР: {'🟢 печать включена' if print_enabled else '🔴 печать выключена'}",
         *await asyncio.to_thread(_printer_status_lines),
     ])
     pending_sessions = yadisk_cloud.pending_count()
     system_lines = [
-        "☁️ СИСТЕМА",
-        f"• Состояние: {STATE}",
+        f"☁️ СИСТЕМА: {STATE}",
         (
             f"⚠️ Яндекс.Диск: незавершённых сессий — {pending_sessions}"
             if pending_sessions
@@ -2309,13 +2386,21 @@ async def handle_disk_command(command: dict) -> dict:
 
     if cmd == "status":
         event = _active_event_name()
-        return {
+        result = {
             "status": "ok",
             "message": await _status_report_text(),
             "event_folder": event,
             "start_locked": _start_locked(),
             "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
         }
+        try:
+            payload = await asyncio.to_thread(_event_history_path().read_bytes)
+            history = json.loads(payload)
+            result["document"] = yadisk_control.response_document(payload)
+            result["document_caption"] = _event_history_summary(history)
+        except (OSError, ValueError) as exc:
+            log.warning("Event history not attached to status: %s", exc)
+        return result
 
     if cmd == "set_event":
         name = data.get("name", "") if isinstance(data, dict) else ""
@@ -2338,7 +2423,7 @@ async def handle_disk_command(command: dict) -> dict:
         except Exception as exc:
             return {"status": "error", "message": f"Event не изменён: {exc}"}
         source = _command_history_source(command)
-        _switch_event_history(name, source)
+        archived_history = _switch_event_history(name, source)
         if previous_unlock_sessions != _cafe_unlock_sessions_remaining:
             _record_event_history({
                 "type": "access_changed",
@@ -2349,13 +2434,23 @@ async def handle_disk_command(command: dict) -> dict:
             })
         if STATE == "idle":
             await broadcast(_state_message(STATE))
-        return {
+        result = {
             "status": "ok",
             "message": f"Event активирован на будке: {name}",
             "event_folder": name,
             "start_locked": _start_locked(),
             "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
         }
+        if archived_history is not None:
+            try:
+                payload = await asyncio.to_thread(archived_history.read_bytes)
+                history = json.loads(payload)
+                result["document"] = yadisk_control.response_document(payload)
+                result["document_caption"] = _event_history_summary(history)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                log.warning(
+                    "Previous event history not attached: %s", exc)
+        return result
 
     if cmd == "send_logs":
         log_path = ROOT_DIR / "photobooth.log"

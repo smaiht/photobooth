@@ -80,6 +80,40 @@ class EventHistoryTests(unittest.TestCase):
             "single_no_frame_4": 1,
         })
 
+    def test_summary_counts_sessions_copies_and_physical_prints(self):
+        summary = main._event_history_summary({
+            "event": "old-event",
+            "entries": [
+                {"type": "photo_session", "result": "retake"},
+                {
+                    "type": "photo_session",
+                    "result": "print_queued",
+                    "items": {"grid": 2, "strips": 1,
+                              "single_no_frame_3": 2},
+                },
+                {
+                    "type": "photo_session",
+                    "result": "print_queued",
+                    "items": {"grid": 1},
+                },
+                {
+                    "type": "photo_session",
+                    "result": "completed_without_print",
+                    "items": {"grid": 10},
+                },
+                {"type": "photo_session", "result": "failed"},
+                {"type": "custom_print_job", "result": "print_queued"},
+                {"type": "custom_print_job", "result": "failed"},
+            ],
+        })
+
+        self.assertEqual(summary, (
+            "📊 ИТОГ ИВЕНТА: old-event\n"
+            "• Сессии: 5 · ретейки: 1 · с несколькими копиями: 1\n"
+            "• Отпечатки: 7 · Grid: 3 · Strips: 1 · Single: 2 · "
+            "Print jobs: 1"
+        ))
+
     def test_event_change_archives_the_complete_old_history(self):
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch.object(main, "ROOT_DIR", Path(tmpdir)), \
@@ -113,6 +147,20 @@ class EventHistoryTests(unittest.TestCase):
             [entry["type"] for entry in archived["entries"]],
             ["application_started", "photo_session", "event_ended"],
         )
+
+    def test_missing_previous_history_starts_the_new_journal_without_archive(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "_event_history_ready", True):
+            archived = main._switch_event_history(
+                "new-event", {"actor": "administrator"})
+            current = json.loads(
+                (Path(tmpdir) / "event_history.json").read_text(
+                    encoding="utf-8"))
+
+        self.assertIsNone(archived)
+        self.assertEqual(current["event"], "new-event")
+        self.assertEqual(current["entries"][0]["type"], "event_started")
 
 
 class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
@@ -499,8 +547,9 @@ class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
             })
 
         self.assertEqual(result["status"], "ok")
-        self.assertIn("• Будка: event\n\n🖼 ШАБЛОН И СЕССИИ", result["message"])
-        self.assertIn("• Набор: birthday", result["message"])
+        self.assertIn("• Будка: event\n\n🖼 ШАБЛОН: birthday", result["message"])
+        self.assertIn("🎟 СЕССИИ", result["message"])
+        self.assertIn("• Технический ивент: нет", result["message"])
         self.assertIn("• Допуск: ♾ без ограничений", result["message"])
         self.assertIn("Отпечатков: всего 1234 · остаток 150/700", result["message"])
         self.assertIn("Grid · DS-RX1 — в очереди: 2", result["message"])
@@ -510,6 +559,36 @@ class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         inspect_dnp.assert_called_once_with(config)
         inspect_queues.assert_called_once_with(config)
+
+    async def test_status_attaches_the_current_event_history(self):
+        history = '{"schema_version":1,"event":"event","entries":[]}\n'
+        command = {
+            "command_id": "a" * 32,
+            "command": "status",
+            "data": None,
+            "reply_target": {
+                "provider": "telegram",
+                "conversation_id": "123",
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch("backend.main._status_report_text",
+                   AsyncMock(return_value="status")), \
+             patch("backend.main._active_event_name", return_value="event"), \
+             patch("backend.main._start_locked", return_value=False):
+            (Path(tmpdir) / "event_history.json").write_text(
+                history, encoding="utf-8")
+            result = await main.handle_disk_command(command)
+            response, _post_action = yadisk_control._response(command, result)
+
+        self.assertEqual(response["document"], history)
+        self.assertEqual(response["document_caption"], (
+            "📊 ИТОГ ИВЕНТА: event\n"
+            "• Сессии: 0 · ретейки: 0 · с несколькими копиями: 0\n"
+            "• Отпечатки: 0 · Grid: 0 · Strips: 0 · Single: 0 · "
+            "Print jobs: 0"
+        ))
 
     async def test_clear_reports_partial_failure_across_both_queues(self):
         records = [
@@ -727,6 +806,48 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("<b>", result["message"])
         save.assert_called_once_with("Свадьба Ивановых 2026")
         reset.assert_not_called()
+
+    async def test_set_event_attaches_the_archived_history_and_summary(self):
+        command = {
+            "command_id": "a" * 32,
+            "command": "set_event",
+            "data": {"name": "new-event"},
+            "reply_target": {
+                "provider": "telegram",
+                "conversation_id": "123",
+            },
+        }
+        old_history = {
+            "schema_version": 1,
+            "event": "old-event",
+            "entries": [
+                {"at": "2026-08-23T10:00:00+00:00",
+                 "type": "photo_session", "result": "retake"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "_event_history_ready", True), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_background_uploads", set()), \
+             patch("backend.main.yadisk_cloud.set_event_folder", AsyncMock()), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="new-event"), \
+             patch("backend.main._save_event_folder"), \
+             patch("backend.main.broadcast", AsyncMock()):
+            main._write_event_history(old_history)
+            result = await main.handle_disk_command(command)
+            response, _post_action = yadisk_control._response(command, result)
+
+        archived = json.loads(response["document"])
+        self.assertEqual(archived["event"], "old-event")
+        self.assertEqual(archived["entries"][-1]["type"], "event_ended")
+        self.assertEqual(response["document_caption"], (
+            "📊 ИТОГ ИВЕНТА: old-event\n"
+            "• Сессии: 1 · ретейки: 1 · с несколькими копиями: 0\n"
+            "• Отпечатки: 0 · Grid: 0 · Strips: 0 · Single: 0 · "
+            "Print jobs: 0"
+        ))
 
     async def test_restart_is_rejected_during_session(self):
         command = {
@@ -1279,8 +1400,10 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result["start_locked"])
         self.assertEqual(result["unlock_sessions_remaining"], 0)
+        self.assertIn("• Технический ивент: да", result["message"])
         self.assertIn("• Допуск: 🔴 закрыт", result["message"])
-        self.assertIn("Осталось сессий: 0", result["message"])
+        self.assertIn("сессий осталось: 0", result["message"])
+        self.assertNotIn("document", result)
 
     async def test_set_event_rebroadcasts_idle_lock_state(self):
         command = {

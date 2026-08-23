@@ -457,7 +457,7 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
             text,
         )
         self.assertIn("? ImageQuality=unavailable", text)
-        self.assertIn("Камера не сообщила: ImageQuality", text)
+        self.assertIn("⚙️ КОНФИГ КАМЕРЫ: ❌", text)
         self.assertIn("FocusDelay=0.4", text)
 
     def test_clean_report_states_that_everything_applied(self):
@@ -478,9 +478,7 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
             "unavailable": [],
         }
         lines = main._format_camera_config_report(clean)
-        text = "\n".join(lines)
-        self.assertEqual(lines[0], "✓ Av=8.0 · Tv=1/100 · ISO=100")
-        self.assertIn("без расхождений", text)
+        self.assertEqual(lines, ["✓ Av=8.0 · Tv=1/100 · ISO=100"])
 
     async def test_notice_is_published_on_every_camera_setup(self):
         with patch("backend.main._status_report_text",
@@ -527,7 +525,7 @@ class CameraConfigReportDeliveryTests(unittest.IsolatedAsyncioTestCase):
             })
 
         self.assertEqual(result["status"], "ok")
-        self.assertIn("КОНФИГУРАЦИЯ КАМЕРЫ", result["message"])
+        self.assertIn("⚙️ КОНФИГ КАМЕРЫ: ❌", result["message"])
         self.assertIn("✓ ISO=100", result["message"])
         self.assertIn("❌ Av не применилось", result["message"])
 

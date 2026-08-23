@@ -27,6 +27,7 @@ SCHEMA_VERSION = 3
 POLL_INTERVAL = 5
 PAGE_SIZE = 100
 MAX_RESPONSE_DOCUMENT_SIZE = 512 * 1024
+MAX_RESPONSE_DOCUMENT_CAPTION_SIZE = 1000
 MAX_PRINT_ARTIFACT_SIZE = 20 * 1024 * 1024
 MAX_PRINT_INFO_SIZE = 512 * 1024
 MAX_PRINT_FOLDER_ARCHIVE_SIZE = 22 * 1024 * 1024
@@ -535,14 +536,28 @@ def _response(command: dict, result: dict) -> tuple[dict, Callable[[], Awaitable
     post_action = result.pop("_post_action", None)
     status = result.get("status", "ok")
     document = result.get("document")
+    document_caption = result.get("document_caption")
     if document is not None and (
         status != "ok"
-        or command["command"] not in {"send_logs", "get_config"}
+        or command["command"] not in {
+            "send_logs", "get_config", "status", "set_event"
+        }
         or not isinstance(document, str)
         or not document
         or len(document.encode("utf-8")) > MAX_RESPONSE_DOCUMENT_SIZE
     ):
         raise ValueError("invalid response document")
+    if document_caption is not None and (
+        command["command"] not in {"set_event", "status"}
+        or document is None
+        or not isinstance(document_caption, str)
+        or not document_caption
+        or len(document_caption) > MAX_RESPONSE_DOCUMENT_CAPTION_SIZE
+    ):
+        raise ValueError("invalid response document caption")
+    if (command["command"] in {"set_event", "status"}
+            and document is not None and document_caption is None):
+        raise ValueError("missing response document caption")
     response = {
         "schema_version": SCHEMA_VERSION,
         "message_type": "command_response",
@@ -556,6 +571,8 @@ def _response(command: dict, result: dict) -> tuple[dict, Callable[[], Awaitable
     }
     if document is not None:
         response["document"] = document
+    if document_caption is not None:
+        response["document_caption"] = document_caption
     for field in ("start_locked", "unlock_sessions_remaining"):
         if field in result:
             response[field] = result[field]

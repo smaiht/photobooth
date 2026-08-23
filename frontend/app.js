@@ -61,6 +61,7 @@ const networkAdapters = document.getElementById("network-adapters");
 const btnSysLock = document.getElementById("btn-sys-lock");
 const btnSysTaskmgr = document.getElementById("btn-sys-taskmgr");
 const btnSysKeyboard = document.getElementById("btn-sys-keyboard");
+const btnAppRestart = document.getElementById("btn-app-restart");
 const btnSysLogoff = document.getElementById("btn-sys-logoff");
 
 let ws = null;
@@ -1423,10 +1424,24 @@ if (serviceModal) {
     });
 }
 
-if (btnSysLock) btnSysLock.addEventListener("click", () => triggerSystemAction("lock", "Лок"));
-if (btnSysTaskmgr) btnSysTaskmgr.addEventListener("click", () => triggerSystemAction("taskmgr", "Таск менеджер"));
-if (btnSysKeyboard) btnSysKeyboard.addEventListener("click", () => triggerSystemAction("keyboard", "Клава"));
-if (btnSysLogoff) btnSysLogoff.addEventListener("click", () => triggerSystemAction("logoff", "Лог офф"));
+if (btnSysLock) btnSysLock.addEventListener("click", () => triggerSystemAction("lock", "Блокировка экрана"));
+if (btnSysTaskmgr) btnSysTaskmgr.addEventListener("click", () => triggerSystemAction("taskmgr", "Диспетчер задач"));
+if (btnSysKeyboard) btnSysKeyboard.addEventListener("click", () => triggerSystemAction("keyboard", "Экранная клавиатура"));
+if (btnAppRestart) {
+    btnAppRestart.addEventListener("click", () => {
+        if (!window.confirm("Перезапустить приложение?")) return;
+        closeServiceModal();
+        showServiceToast("Приложение перезапускается…", 10000);
+        fetch("/api/restart", { method: "POST" }).catch(() => {});
+    });
+}
+if (btnSysLogoff) {
+    btnSysLogoff.addEventListener("click", () => {
+        if (window.confirm("Выйти из системы?")) {
+            triggerSystemAction("logoff", "Выход из системы");
+        }
+    });
+}
 
 window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && serviceModal && !serviceModal.hidden) {
