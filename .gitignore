@@ -40,6 +40,9 @@ diagnostics/yadisk_network_*.log
 yadisk_queue.json
 cafe_unlock_state.json
 cafe_unlock_state.json.tmp
+event_history.json
+event_history.json.tmp
+event_history_archive/
 templates/**/*_preview.jpg
 templates/**/*_preview.jpg.tmp
 templates/**/*_single_strip_layout_preview.png

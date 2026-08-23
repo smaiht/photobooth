@@ -78,9 +78,14 @@ TEMPLATE_OPTIONS: list[dict] = []
 CONFIG = load_event_config()
 
 CAFE_UNLOCK_STATE_FILENAME = "cafe_unlock_state.json"
+EVENT_HISTORY_FILENAME = "event_history.json"
+EVENT_HISTORY_ARCHIVE_DIRNAME = "event_history_archive"
+EVENT_HISTORY_SCHEMA_VERSION = 1
 MAX_UNLOCK_SESSIONS = 1000
 DEFAULT_MULTI_PRINT_MAX_SHEETS = 6
 MAX_MULTI_PRINT_SHEETS = 20
+
+_event_history_ready = False
 
 
 def _technical_event_name() -> str:
@@ -98,6 +103,177 @@ def _active_event_name() -> str:
 
 def _is_technical_event() -> bool:
     return _active_event_name() == _technical_event_name()
+
+
+def _event_history_path() -> Path:
+    return ROOT_DIR / EVENT_HISTORY_FILENAME
+
+
+def _event_history_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _new_event_history(event: str) -> dict:
+    return {
+        "schema_version": EVENT_HISTORY_SCHEMA_VERSION,
+        "event": event,
+        "entries": [],
+    }
+
+
+def _load_event_history(path: Path) -> dict:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != EVENT_HISTORY_SCHEMA_VERSION
+        or not isinstance(payload.get("event"), str)
+        or not isinstance(payload.get("entries"), list)
+    ):
+        raise ValueError("unsupported event history format")
+    return payload
+
+
+def _write_event_history(payload: dict) -> None:
+    path = _event_history_path()
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _archive_event_history(*, invalid: bool = False) -> Path:
+    archive_dir = ROOT_DIR / EVENT_HISTORY_ARCHIVE_DIRNAME
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+    suffix = "_invalid" if invalid else ""
+    destination = archive_dir / f"{stamp}{suffix}.json"
+    _event_history_path().replace(destination)
+    return destination
+
+
+def _append_event_history_entry(payload: dict, entry: dict, at: str) -> None:
+    payload["entries"].append({"at": at, **entry})
+
+
+def _start_event_history() -> None:
+    """Open the current event journal and record this application start."""
+    global _event_history_ready
+    _event_history_ready = False
+    event = _active_event_name()
+    path = _event_history_path()
+    now = _event_history_now()
+    try:
+        try:
+            payload = _load_event_history(path)
+        except FileNotFoundError:
+            payload = _new_event_history(event)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            archived = _archive_event_history(invalid=True)
+            log.warning(
+                "Invalid event history archived as %s: %s", archived, exc)
+            payload = _new_event_history(event)
+        else:
+            previous_event = payload["event"]
+            if previous_event != event:
+                _append_event_history_entry(payload, {
+                    "type": "event_ended",
+                    "next_event": event,
+                    "reason": "event_changed_before_application_start",
+                }, now)
+                _write_event_history(payload)
+                archived = _archive_event_history()
+                log.info(
+                    "Event history archived for %r: %s",
+                    previous_event,
+                    archived,
+                )
+                payload = _new_event_history(event)
+                _append_event_history_entry(payload, {
+                    "type": "event_started",
+                    "previous_event": previous_event,
+                    "source": {"actor": "system"},
+                }, now)
+
+        _append_event_history_entry(
+            payload,
+            {"type": "application_started"},
+            _event_history_now(),
+        )
+        _write_event_history(payload)
+        _event_history_ready = True
+    except (OSError, ValueError, json.JSONDecodeError):
+        log.exception("Could not start event history")
+
+
+def _record_event_history(entry: dict) -> None:
+    """Append one fact without letting journal I/O interrupt the booth."""
+    if not _event_history_ready:
+        return
+    try:
+        path = _event_history_path()
+        try:
+            payload = _load_event_history(path)
+        except FileNotFoundError:
+            payload = _new_event_history(_active_event_name())
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            archived = _archive_event_history(invalid=True)
+            log.warning(
+                "Invalid event history archived as %s: %s", archived, exc)
+            payload = _new_event_history(_active_event_name())
+        _append_event_history_entry(payload, entry, _event_history_now())
+        _write_event_history(payload)
+    except (OSError, ValueError, json.JSONDecodeError):
+        log.exception("Could not append event history entry: %s", entry.get("type"))
+
+
+def _switch_event_history(new_event: str, source: dict) -> None:
+    """Archive the old event intact and create the next event journal."""
+    if not _event_history_ready:
+        return
+    try:
+        payload = _load_event_history(_event_history_path())
+        previous_event = payload["event"]
+        if previous_event == new_event:
+            return
+        now = _event_history_now()
+        _append_event_history_entry(payload, {
+            "type": "event_ended",
+            "next_event": new_event,
+            "source": source,
+        }, now)
+        _write_event_history(payload)
+        archived = _archive_event_history()
+
+        payload = _new_event_history(new_event)
+        _append_event_history_entry(payload, {
+            "type": "event_started",
+            "previous_event": previous_event,
+            "source": source,
+        }, now)
+        _write_event_history(payload)
+        log.info("Event history archived for %r: %s", previous_event, archived)
+    except (OSError, ValueError, json.JSONDecodeError):
+        log.exception("Could not switch event history to %r", new_event)
+
+
+def _command_history_source(command: dict, actor: str = "administrator") -> dict:
+    source = {
+        "actor": actor,
+        "command": command.get("command"),
+        "command_id": command.get("command_id"),
+    }
+    reply_target = command.get("reply_target")
+    if isinstance(reply_target, dict) and reply_target.get("provider"):
+        source["provider"] = reply_target["provider"]
+    return source
 
 
 def _cafe_unlock_state_path() -> Path:
@@ -618,6 +794,18 @@ def _print_item_label(item: dict) -> str:
     return label
 
 
+def _history_print_items(items: list[dict]) -> dict[str, int]:
+    """Compact a basket into printable choice names and copy counts."""
+    result: dict[str, int] = {}
+    for item in items:
+        name = item["template"]
+        if item["photo_index"] is not None:
+            frame = "frame" if item["with_frame"] else "no_frame"
+            name = f"{name}_{frame}_{item['photo_index'] + 1}"
+        result[name] = result.get(name, 0) + item["copies"]
+    return result
+
+
 def _countdown_timing() -> tuple[float, int, int]:
     pre_countdown_delay = max(0.0, float(CONFIG["pre_countdown_delay"]))
     countdown_seconds = max(0, int(CONFIG["countdown_seconds"]))
@@ -630,6 +818,7 @@ async def _finish_successful_session(
     sheets: list[tuple[Path, str]],
     camera_generation: int,
     session_uses_cafe_unlock: bool,
+    history_entry: dict | None = None,
 ) -> None:
     """Queue every composed sheet, charge the allowance, then expose done.
 
@@ -641,6 +830,16 @@ async def _finish_successful_session(
         for sheet_path, sheet_template in sheets:
             await enqueue_print(str(sheet_path), CONFIG, sheet_template)
         _require_session_camera(camera_generation)
+
+    if history_entry is not None:
+        _record_event_history({
+            **history_entry,
+            "result": (
+                "print_queued"
+                if CONFIG["print_enabled"]
+                else "completed_without_print"
+            ),
+        })
 
     if session_uses_cafe_unlock:
         _consume_cafe_unlock_session()
@@ -661,18 +860,33 @@ async def run_session():
         )
         await broadcast(_state_message(STATE))
         return
+    previous_session_id = SESSION_ID
     _session_running = True
     try:
         await _run_session()
     except CameraSessionAborted as exc:
         log.warning("Session aborted: %s", exc)
+        if SESSION_ID and SESSION_ID != previous_session_id:
+            _record_event_history({
+                "type": "photo_session",
+                "session_id": SESSION_ID,
+                "result": "aborted",
+                "reason": str(exc),
+            })
         _clear_live_view()
         SESSION_PHOTOS.clear()
         video_recorder.abort()
         await set_state(
             "idle" if camera and camera.is_connected else "camera_searching")
-    except Exception:
+    except Exception as exc:
         log.exception("Session error")
+        if SESSION_ID and SESSION_ID != previous_session_id:
+            _record_event_history({
+                "type": "photo_session",
+                "session_id": SESSION_ID,
+                "result": "failed",
+                "reason": str(exc),
+            })
         _clear_live_view()
         video_recorder.abort()
         if camera and camera.is_connected:
@@ -833,6 +1047,12 @@ async def _run_session():
 
     if len(SESSION_PHOTOS) < num_photos:
         video_recorder.abort()
+        _record_event_history({
+            "type": "photo_session",
+            "session_id": SESSION_ID,
+            "result": "failed",
+            "reason": "photo_download_timeout",
+        })
         await broadcast({"type": "error", "message": "Photo download error. Try again."})
         await asyncio.sleep(3)
         await set_state("idle")
@@ -946,6 +1166,7 @@ async def _run_session():
             "copies": 1,
         }],
         "skip_print": False,
+        "selection": "timeout",
     }
 
     def on_template_choice(t, photo_index=None, with_frame=None, items=None):
@@ -997,6 +1218,7 @@ async def _run_session():
             ", ".join(_print_item_label(item) for item in normalized),
         )
         chosen["items"] = normalized
+        chosen["selection"] = "guest"
         template_event.set()
 
     def on_skip_print():
@@ -1004,6 +1226,7 @@ async def _run_session():
             return
         log.info("Print skipped by visitor")
         chosen["skip_print"] = True
+        chosen["selection"] = "guest"
         template_event.set()
 
     # Any touch on the template screen restarts the full timeout, so a visitor
@@ -1060,6 +1283,11 @@ async def _run_session():
             choice_task, disconnect_task, extend_task, return_exceptions=True)
     template_event.set()
     if chosen["skip_print"]:
+        _record_event_history({
+            "type": "photo_session",
+            "session_id": SESSION_ID,
+            "result": "retake",
+        })
         TEMPLATE_OPTIONS = []
         await set_state("idle")
         return
@@ -1131,10 +1359,18 @@ async def _run_session():
 
     # Any compose/print-enqueue error happens before the durable allowance is
     # consumed, so a failed visitor session can be retried.
+    history_entry = {
+        "type": "photo_session",
+        "session_id": SESSION_ID,
+        "items": _history_print_items(selected_items),
+    }
+    if chosen["selection"] == "timeout":
+        history_entry["selection"] = "timeout"
     await _finish_successful_session(
         composed,
         camera_generation,
         session_uses_cafe_unlock,
+        history_entry,
     )
 
     # Show done/QR screen before allowing the next session
@@ -1235,6 +1471,9 @@ def set_network(payload: dict):
 
 
 async def _do_restart():
+    _record_event_history({
+        "type": "application_restart_requested",
+    })
     log.info("Restart requested!")
     await _shutdown_services()
     si = None
@@ -1685,6 +1924,12 @@ async def handle_disk_command(command: dict) -> dict:
         source_filename = str(data.get("source_filename") or "")
         source_kind = str(data.get("telegram_source_kind") or "")
         source_mime = str(data.get("telegram_mime_type") or "")
+        custom_print_entry = {
+            "type": "custom_print_job",
+            "job_id": job_id,
+            "print_mode": print_mode,
+            "source": _command_history_source(command, "messenger_user"),
+        }
         log.info(
             "Custom print received: job=%s mode=%s kind=%s filename=%s mime=%s "
             "artifact=%s expected_size=%s",
@@ -1740,20 +1985,39 @@ async def handle_disk_command(command: dict) -> dict:
                     job_dir.rmdir()
                 except OSError:
                     pass
+            _record_event_history({
+                **custom_print_entry,
+                "result": "failed",
+                "stage": "preparation",
+                "reason": str(exc),
+            })
             return {"status": "error", "message": f"Фото не поставлено на печать: {exc}"}
 
         async def enqueue_custom_print_after_ack() -> None:
             from .printer import enqueue_print
-            await enqueue_print(
-                str(output_path),
-                CONFIG,
-                delete_after=not keep_print_files,
-                delete_paths=(
-                    [str(original_path)]
-                    if not keep_print_files and original_path is not None
-                    else []
-                ),
-            )
+            try:
+                await enqueue_print(
+                    str(output_path),
+                    CONFIG,
+                    delete_after=not keep_print_files,
+                    delete_paths=(
+                        [str(original_path)]
+                        if not keep_print_files and original_path is not None
+                        else []
+                    ),
+                )
+            except Exception as exc:
+                _record_event_history({
+                    **custom_print_entry,
+                    "result": "failed",
+                    "stage": "enqueue",
+                    "reason": str(exc),
+                })
+                raise
+            _record_event_history({
+                **custom_print_entry,
+                "result": "print_queued",
+            })
 
         return {
             "status": "ok",
@@ -1809,6 +2073,15 @@ async def handle_disk_command(command: dict) -> dict:
             if changed
             else f"Параметр приложения {field} уже равен {new_text}. "
         )
+        if changed:
+            _record_event_history({
+                "type": "configuration_changed",
+                "section": "application",
+                "field": field,
+                "old": old_value,
+                "new": new_value,
+                "source": _command_history_source(command),
+            })
         return {
             "status": "ok",
             "message": message + "Перезапуск подтверждён",
@@ -1841,6 +2114,14 @@ async def handle_disk_command(command: dict) -> dict:
                 f"Template pack: {old_name} → {new_name}. "
                 "Перезапуск подтверждён"
             )
+            _record_event_history({
+                "type": "configuration_changed",
+                "section": "application",
+                "field": "template_pack",
+                "old": old_name,
+                "new": new_name,
+                "source": _command_history_source(command),
+            })
         else:
             message = (
                 f"Template pack уже выбран: {new_name}. "
@@ -1887,6 +2168,14 @@ async def handle_disk_command(command: dict) -> dict:
                 ),
                 "_post_action": _do_restart,
             }
+        _record_event_history({
+            "type": "configuration_changed",
+            "section": "camera",
+            "field": field,
+            "old": old_value,
+            "new": new_value,
+            "source": _command_history_source(command),
+        })
         return {
             "status": "ok",
             "message": (
@@ -1932,6 +2221,16 @@ async def handle_disk_command(command: dict) -> dict:
         if hint:
             lines.append(f"Подсказка: {hint}")
         lines.append("Перезапуск подтверждён")
+        if changes:
+            _record_event_history({
+                "type": "camera_preset_applied",
+                "preset": name,
+                "changes": {
+                    field: {"old": old, "new": new}
+                    for field, (old, new) in changes.items()
+                },
+                "source": _command_history_source(command),
+            })
         return {
             "status": "ok",
             "message": "\n".join(lines),
@@ -1961,6 +2260,11 @@ async def handle_disk_command(command: dict) -> dict:
                 return {"status": "error", "message": storage_error}
 
         async def start_session_after_ack() -> None:
+            _record_event_history({
+                "type": "admin_command",
+                "command": cmd,
+                "command_id": command_id,
+            })
             asyncio.create_task(run_session())
 
         return {
@@ -1977,6 +2281,7 @@ async def handle_disk_command(command: dict) -> dict:
                 "status": "error",
                 "message": "sessions должно быть целым числом от 0 до 1000",
             }
+        previous_sessions = _cafe_unlock_sessions_remaining
         try:
             _set_cafe_unlock_sessions(sessions)
         except (OSError, ValueError) as exc:
@@ -1985,6 +2290,14 @@ async def handle_disk_command(command: dict) -> dict:
                 "message": f"Фотобудка не разблокирована: {exc}",
             }
         log.info("Cafe unlock updated: remaining sessions=%d", sessions)
+        if previous_sessions != sessions:
+            _record_event_history({
+                "type": "access_changed",
+                "field": "unlock_sessions_remaining",
+                "old": previous_sessions,
+                "new": sessions,
+                "source": _command_history_source(command),
+            })
         if STATE == "idle":
             await broadcast(_state_message(STATE))
         return {
@@ -2010,6 +2323,7 @@ async def handle_disk_command(command: dict) -> dict:
             return {"status": "error", "message": f"Event не изменён: state={STATE}"}
         if _background_uploads:
             return {"status": "error", "message": "Event не изменён: завершается текущая загрузка"}
+        previous_unlock_sessions = _cafe_unlock_sessions_remaining
         if name == _technical_event_name():
             try:
                 _set_cafe_unlock_sessions(0)
@@ -2023,6 +2337,16 @@ async def handle_disk_command(command: dict) -> dict:
             _save_event_folder(name)
         except Exception as exc:
             return {"status": "error", "message": f"Event не изменён: {exc}"}
+        source = _command_history_source(command)
+        _switch_event_history(name, source)
+        if previous_unlock_sessions != _cafe_unlock_sessions_remaining:
+            _record_event_history({
+                "type": "access_changed",
+                "field": "unlock_sessions_remaining",
+                "old": previous_unlock_sessions,
+                "new": _cafe_unlock_sessions_remaining,
+                "source": source,
+            })
         if STATE == "idle":
             await broadcast(_state_message(STATE))
         return {
@@ -2184,6 +2508,7 @@ async def startup():
     global _event_loop, _services_stopping
     _services_stopping = False
     _event_loop = asyncio.get_event_loop()
+    _start_event_history()
     yadisk_cloud.set_session_link_handler(_on_session_link)
     await asyncio.to_thread(_cleanup_stale_preview_dirs)
 

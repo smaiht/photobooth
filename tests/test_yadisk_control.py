@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import tempfile
@@ -65,6 +66,53 @@ class CommandValidationTests(unittest.TestCase):
                     **base,
                     "reply_target": target,
                 })
+
+
+class EventHistoryTests(unittest.TestCase):
+    def test_photo_session_keeps_only_print_counts_and_exceptions(self):
+        self.assertEqual(main._history_print_items([
+            {"template": "grid", "photo_index": None,
+             "with_frame": True, "copies": 2},
+            {"template": "single", "photo_index": 3,
+             "with_frame": False, "copies": 1},
+        ]), {
+            "grid": 2,
+            "single_no_frame_4": 1,
+        })
+
+    def test_event_change_archives_the_complete_old_history(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "_event_history_ready", False), \
+             patch("backend.main.yadisk_cloud.current_event_folder",
+                   return_value="old-event"):
+            main._start_event_history()
+            main._record_event_history({
+                "type": "photo_session",
+                "session_id": "session-id",
+                "result": "retake",
+            })
+            main._switch_event_history(
+                "new-event",
+                {"actor": "administrator", "via": "control"},
+            )
+
+            current = json.loads(
+                (Path(tmpdir) / "event_history.json").read_text(
+                    encoding="utf-8"))
+            archive_paths = list(
+                (Path(tmpdir) / "event_history_archive").glob("*.json"))
+            archived = json.loads(
+                archive_paths[0].read_text(encoding="utf-8"))
+
+        self.assertEqual(current["event"], "new-event")
+        self.assertEqual(current["entries"][0]["type"], "event_started")
+        self.assertEqual(len(archive_paths), 1)
+        self.assertEqual(archived["event"], "old-event")
+        self.assertEqual(
+            [entry["type"] for entry in archived["entries"]],
+            ["application_started", "photo_session", "event_ended"],
+        )
 
 
 class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
@@ -1017,6 +1065,30 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "error")
         self.assertTrue(result["start_locked"])
         self.assertNotIn("_post_action", result)
+
+    async def test_remote_run_records_the_command_after_ack(self):
+        camera = MagicMock(is_connected=True, storage_ready=None)
+        command = {
+            "command_id": "a" * 32,
+            "command": "run",
+            "data": None,
+        }
+        with patch.object(main, "STATE", "idle"), \
+             patch.object(main, "camera", camera), \
+             patch.object(main, "_background_uploads", set()), \
+             patch("backend.main._start_locked", return_value=False), \
+             patch("backend.main._record_event_history") as record, \
+             patch("backend.main.run_session", new_callable=AsyncMock) as run:
+            result = await main.handle_disk_command(command)
+            await result["_post_action"]()
+            await asyncio.sleep(0)
+
+        record.assert_called_once_with({
+            "type": "admin_command",
+            "command": "run",
+            "command_id": "a" * 32,
+        })
+        run.assert_awaited_once_with()
 
     async def test_run_session_has_a_final_central_lock_guard(self):
         with patch.object(main, "_session_running", False), \
