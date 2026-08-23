@@ -151,6 +151,7 @@ class Camera:
         self._ui_locked = False
         self._mode_dial_locked = False
         self._evf_original_output: int | None = None
+        self._read_focal_length_on_next_evf_frame = False
         self._running = False
         self._connected = False
         self._connection_generation = 0
@@ -1393,6 +1394,7 @@ class Camera:
         _check("SetEvfOutput", self._sdk.EdsSetPropertyData(
             self._camera, kEdsPropID_Evf_OutputDevice, 0,
             ctypes.sizeof(device), ctypes.byref(device)))
+        self._read_focal_length_on_next_evf_frame = True
         log.info("Live view started")
 
     def _do_stop_evf(self):
@@ -1406,6 +1408,7 @@ class Camera:
                 "Stop live view output restore failed: 0x%08X %s",
                 err, edsdk_error_name(err),
             )
+        self._read_focal_length_on_next_evf_frame = False
         log.info("Live view stopped")
 
     def _download_evf_frame(self) -> bytes | None:
@@ -1424,6 +1427,26 @@ class Camera:
             ):
                 return None  # Normal while the next frame is not ready yet.
             _check("DownloadEvfImage", err)
+
+            if self._read_focal_length_on_next_evf_frame:
+                self._read_focal_length_on_next_evf_frame = False
+                focal_length = EdsUInt32()
+                focal_err = self._sdk.EdsGetPropertyData(
+                    evf_image,
+                    kEdsPropID_Evf_FocalLength,
+                    0,
+                    ctypes.sizeof(focal_length),
+                    ctypes.byref(focal_length),
+                )
+                if focal_err == EDS_ERR_OK and focal_length.value > 0:
+                    self._update_health(focal_length_mm=focal_length.value)
+                    log.info("Camera focal length: %d mm", focal_length.value)
+                elif focal_err not in OPTIONAL_PROPERTY_ERRORS:
+                    log.info(
+                        "Camera focal length unavailable: 0x%08X %s",
+                        focal_err,
+                        edsdk_error_name(focal_err),
+                    )
 
             length = EdsUInt64()
             _check("GetLength", self._sdk.EdsGetLength(stream, ctypes.byref(length)))

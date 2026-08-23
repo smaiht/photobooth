@@ -1,6 +1,6 @@
 {
     "_comment": "Canon EDSDK Camera Settings for Photobooth",
-    "_lens_max_aperture_hint": "RF24–50, максимально открытая: 24 мм f/4.5 · 25–31 мм f/5.0 · 32–38 мм f/5.6 · 39–50 мм f/6.3",
+    "_lens_max_aperture_hint": "RF24–50 — максимально открытая диафрагма:\n  ↳ 24 мм: f/4.5\n  ↳ 25–31 мм: f/5.0\n  ↳ 32–38 мм: f/5.6\n  ↳ 39–50 мм: f/6.3",
 
     "_presets_comment": [
         "Наборы экспозиции под условия съёмки; применяются командой /light <имя>.",

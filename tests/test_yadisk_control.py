@@ -824,11 +824,14 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertIn("🎛 УПРАВЛЕНИЕ", result["message"])
-        self.assertIn("Свет: /light sun · /light indoor_dark", result["message"])
+        self.assertIn(
+            '/light <имя>: ["sun", "indoor_dark"]',
+            result["message"],
+        )
         self.assertIn("• lens aperture hint", result["message"])
-        self.assertIn("/av: av-option", result["message"])
-        self.assertIn("/tv: tv-option", result["message"])
-        self.assertIn("/iso: iso-option", result["message"])
+        self.assertIn('/av: ["av-option"]', result["message"])
+        self.assertIn('/tv: ["tv-option"]', result["message"])
+        self.assertIn('/iso: ["iso-option"]', result["message"])
 
     async def test_get_config_embeds_one_text_export_in_response(self):
         command = {

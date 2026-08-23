@@ -182,6 +182,7 @@ kEdsPropID_AFEyeDetect = 0x01000455
 kEdsPropID_ShutterType = 0x01000461
 kEdsPropID_AFTrackingObject = 0x01000468
 kEdsPropID_Evf_ViewType = 0x01000513
+kEdsPropID_Evf_FocalLength = 0x01000555
 
 # --- Save To ---
 kEdsSaveTo_Camera = 1

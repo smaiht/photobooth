@@ -325,6 +325,55 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         self.assertIsNone(camera._download_evf_frame())
         self.assertEqual(camera._sdk.EdsRelease.call_count, 2)
 
+    def test_focal_length_is_read_from_only_the_first_ready_evf_frame(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        camera._sdk = MagicMock()
+        camera._camera = ctypes.c_void_p(123)
+        camera._sdk.EdsSetPropertyData.return_value = edsdk.EDS_ERR_OK
+        camera._sdk.EdsDownloadEvfImage.return_value = edsdk.EDS_ERR_OK
+        payload = ctypes.create_string_buffer(b"jpeg")
+
+        def make_ref(_size, out_ref):
+            out_ref._obj.value = 201
+            return edsdk.EDS_ERR_OK
+
+        def make_evf(_stream, out_ref):
+            out_ref._obj.value = 202
+            return edsdk.EDS_ERR_OK
+
+        def get_property(_ref, prop_id, _index, _size, out_value):
+            self.assertEqual(prop_id, edsdk.kEdsPropID_Evf_FocalLength)
+            out_value._obj.value = 50
+            return edsdk.EDS_ERR_OK
+
+        def get_length(_stream, out_length):
+            out_length._obj.value = 4
+            return edsdk.EDS_ERR_OK
+
+        def get_pointer(_stream, out_pointer):
+            out_pointer._obj.value = ctypes.addressof(payload)
+            return edsdk.EDS_ERR_OK
+
+        camera._sdk.EdsCreateMemoryStream.side_effect = make_ref
+        camera._sdk.EdsCreateEvfImageRef.side_effect = make_evf
+        camera._sdk.EdsGetPropertyData.side_effect = get_property
+        camera._sdk.EdsGetLength.side_effect = get_length
+        camera._sdk.EdsGetPointer.side_effect = get_pointer
+
+        with patch.object(camera, "_get_prop_u32", return_value=0):
+            camera._do_start_evf()
+        self.assertEqual(camera._download_evf_frame(), b"jpeg")
+        self.assertEqual(camera._download_evf_frame(), b"jpeg")
+
+        self.assertEqual(camera.status_snapshot()["focal_length_mm"], 50)
+        camera._sdk.EdsGetPropertyData.assert_called_once()
+
+        camera._do_stop_evf()
+        with patch.object(camera, "_get_prop_u32", return_value=0):
+            camera._do_start_evf()
+        self.assertEqual(camera._download_evf_frame(), b"jpeg")
+        self.assertEqual(camera._sdk.EdsGetPropertyData.call_count, 2)
+
     def test_mode_dial_is_locked_with_zero_and_unlocked_with_one(self):
         camera = edsdk.Camera("fake-edSDK.dll")
         camera._sdk = MagicMock()
@@ -775,6 +824,8 @@ class CameraStatusTests(unittest.IsolatedAsyncioTestCase):
         camera.is_connected = True
         camera.status_snapshot.return_value = {
             "product_name": "Canon EOS R8",
+            "lens": "RF24-50mm F4.5-6.3 IS STM",
+            "focal_length_mm": 50,
             "battery": "AC",
             "temperature": "normal",
             "ae_mode": "manual",
@@ -800,6 +851,7 @@ class CameraStatusTests(unittest.IsolatedAsyncioTestCase):
             result = await main.handle_disk_command(command)
 
         self.assertIn("Модель: Canon EOS R8", result["message"])
+        self.assertIn("Фокусное: 50 мм", result["message"])
         self.assertIn("Питание: AC", result["message"])
         self.assertIn("Диск фото: 10.00 GiB свободно", result["message"])
         self.assertIn("Последнее отключение", result["message"])

@@ -1453,8 +1453,14 @@ async def _status_report_text() -> str:
         identity = snapshot.get("product_name") or snapshot.get("model")
         if identity:
             camera_lines.append(f"• Модель: {identity}")
+        lens_info = []
         if snapshot.get("lens"):
-            camera_lines.append(f"• Объектив: {snapshot['lens']}")
+            lens_info.append(f"Объектив: {snapshot['lens']}")
+        focal_length = snapshot.get("focal_length_mm")
+        if type(focal_length) is int and focal_length > 0:
+            lens_info.append(f"Фокусное: {focal_length} мм")
+        if lens_info:
+            camera_lines.append("• " + " · ".join(lens_info))
         health = []
         for label, key in (
             ("Питание", "battery"),
@@ -1526,7 +1532,8 @@ async def _status_report_text() -> str:
         presets = []
     if presets:
         control_lines.append(
-            "• Свет: " + " · ".join(f"/light {name}" for name in presets))
+            "• /light <имя>: "
+            + json.dumps(presets, ensure_ascii=False))
     try:
         aperture_hint = lens_max_aperture_hint()
     except (OSError, ValueError, json.JSONDecodeError):
@@ -1539,7 +1546,7 @@ async def _status_report_text() -> str:
         exposure_options = {}
     for field, values in exposure_options.items():
         control_lines.append(
-            f"• /{field}: " + " · ".join(str(value) for value in values))
+            f"• /{field}: " + json.dumps(values, ensure_ascii=False))
     if len(control_lines) > 1:
         blocks.append(control_lines)
     return "\n\n".join("\n".join(block) for block in blocks)
