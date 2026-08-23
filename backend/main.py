@@ -229,11 +229,11 @@ def _event_history_summary(payload: dict) -> str:
 
 
 def _event_history_attachment(path: Path) -> dict[str, str]:
-    """Build one document and its matching summary from the same file bytes."""
-    raw = path.read_bytes()
-    history = _parse_event_history(raw)
+    """Build one document and its matching summary from the same file."""
+    text = path.read_text(encoding="utf-8")
+    history = _parse_event_history(text)
     return {
-        "document": yadisk_control.response_document(raw),
+        "document": yadisk_control.response_document(text.encode("utf-8")),
         "document_caption": _event_history_summary(history),
     }
 

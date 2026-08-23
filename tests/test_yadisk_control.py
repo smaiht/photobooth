@@ -621,8 +621,8 @@ class PrintQueueCommandTests(unittest.IsolatedAsyncioTestCase):
                    AsyncMock(return_value="status")), \
              patch("backend.main._active_event_name", return_value="event"), \
              patch("backend.main._start_locked", return_value=False):
-            (Path(tmpdir) / "event_history.json").write_text(
-                history, encoding="utf-8")
+            (Path(tmpdir) / "event_history.json").write_bytes(
+                history.replace("\n", "\r\n").encode("utf-8"))
             result = await main.handle_disk_command(command)
             response, _post_action = yadisk_control._response(command, result)
 
