@@ -455,6 +455,42 @@ class DiskUpdateDownloadTests(unittest.TestCase):
         self.assertEqual([item[3] for item in progress if item[0] == 0], [1, 2])
         sleep.assert_called_once_with(0.0)
 
+    def test_cancel_stops_active_download_and_removes_partial_files(self):
+        payload = b"update zip bytes"
+        artifact = {
+            "path": "/updates/artifacts/app_bundle/app.zip",
+            "bundle_path": "/updates/artifacts/app_bundle",
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        api_response = io.BytesIO(
+            json.dumps({"href": "https://download.test/app"}).encode()
+        )
+        file_response = io.BytesIO(folder_archive(
+            "app_bundle", "app.zip", payload))
+        cancel_event = app.threading.Event()
+
+        def cancel_after_progress(downloaded, *_args):
+            if downloaded:
+                cancel_event.set()
+
+        with TemporaryDirectory() as tmpdir, \
+             patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch("backend.yadisk_updates._request", return_value=api_response), \
+             patch.object(urllib.request, "urlopen", return_value=file_response):
+            destination = Path(tmpdir) / "app.zip"
+            with self.assertRaises(yadisk_updates.UpdateCancelled):
+                yadisk_updates.download_artifact(
+                    artifact,
+                    destination,
+                    progress=cancel_after_progress,
+                    cancel_event=cancel_event,
+                )
+
+            self.assertFalse(destination.exists())
+            self.assertFalse(destination.with_name(
+                destination.name + ".folder.zip").exists())
+
     def test_does_not_retry_permanent_http_error(self):
         status = {
             "path": "/photobooth_system/updates/artifacts/test-full_bundle/test-full.zip",

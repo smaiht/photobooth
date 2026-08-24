@@ -95,7 +95,7 @@ def _build_loading_html():
                     style="border:0; padding:0.4vw 0.8vw; background:transparent;
                     color:#777; font-family:inherit; font-size:0.95vw;
                     font-weight:600; cursor:pointer">
-                Повторить проверку
+                Повторить заново
             </button>
         </div>
     </div>
@@ -125,7 +125,7 @@ def _build_loading_html():
             setProgress('Запуск без обновления...');
             window.pywebview.api.skip_update();
         }} else {{
-            setProgress('Проверка запускается заново...');
+            setProgress('Обновление запускается заново...');
             window.pywebview.api.retry_update();
         }}
     }}
@@ -1025,7 +1025,12 @@ def _format_download_progress(
     return text
 
 
-def _download_update_archive(name: str, artifact: dict, destination: Path) -> int:
+def _download_update_archive(
+    name: str,
+    artifact: dict,
+    destination: Path,
+    cancel_event=None,
+) -> int:
     from backend.yadisk_updates import download_artifact
 
     downloaded_by_attempt: dict[int, int] = {}
@@ -1071,6 +1076,7 @@ def _download_update_archive(name: str, artifact: dict, destination: Path) -> in
         progress=report_progress,
         on_retry=report_retry,
         verify_sha256=name == "full",
+        cancel_event=cancel_event,
     )
     elapsed = max(time.monotonic() - started, 0.001)
     log.info(
@@ -1112,7 +1118,7 @@ def _apply_stage_in_process(
 
 def _update_from_disk(cancel_event=None) -> str | None:
     """Download and install changed release folders, or full for a clean install."""
-    from backend.yadisk_updates import read_status
+    from backend.yadisk_updates import UpdateCancelled, read_status
 
     app_dir = Path(__file__).resolve().parent
     config = json.loads(
@@ -1144,10 +1150,10 @@ def _update_from_disk(cancel_event=None) -> str | None:
         cancel_event=cancel_event,
     )
     if cancel_event is not None:
-        _ui("hideUpdateControls()")
         if cancel_event.is_set():
             return "cancelled"
     if not status:
+        _ui("hideUpdateControls()")
         log.info("Disk update: status.json not available")
         _ui_log("На Диске нет обновлений")
         return None
@@ -1157,6 +1163,7 @@ def _update_from_disk(cancel_event=None) -> str | None:
     installed = _read_update_versions(hash_path)
     selected, target_versions = _select_update_archives(artifacts, installed)
     if not selected:
+        _ui("hideUpdateControls()")
         if installed != target_versions and len(target_versions) > 1:
             _write_update_versions(hash_path, target_versions)
             log.info("Disk update: migrated local hash to component mapping")
@@ -1187,9 +1194,17 @@ def _update_from_disk(cancel_event=None) -> str | None:
                 "Disk update: downloading %s %s (%.2f MiB)",
                 name, artifact["sha256"][:16], artifact["size"] / 1048576,
             )
-            _download_update_archive(name, artifact, destination)
+            _download_update_archive(
+                name,
+                artifact,
+                destination,
+                cancel_event=cancel_event,
+            )
             archive_items.append((name, destination))
 
+        if cancel_event is not None and cancel_event.is_set():
+            raise UpdateCancelled
+        _ui("hideUpdateControls()")
         _ui_log("Проверка и подготовка архивов...")
         prepare_started = time.monotonic()
         extracted_files = _prepare_update_stage(archive_items, stage_path)
@@ -1227,6 +1242,9 @@ def _update_from_disk(cancel_event=None) -> str | None:
         log.info("Disk update: installed components %s", ",".join(apply_components))
         _ui_log("Обновление установлено!")
         return "restart"
+    except UpdateCancelled:
+        log.info("Disk update: active download stopped by user")
+        return "cancelled"
     finally:
         for temp_path in temp_paths:
             try:
@@ -1262,7 +1280,7 @@ def auto_update():
             update_action = _update_from_disk(_loading_api.event)
             if update_action == "cancelled":
                 if _loading_api.action == "retry":
-                    log.info("Disk update: status check restarted by user")
+                    log.info("Disk update: restarted by user")
                     _loading_api.reset()
                     continue
                 log.info("Disk update: skipped by user")

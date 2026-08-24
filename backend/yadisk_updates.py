@@ -41,12 +41,21 @@ class ArtifactIntegrityError(ValueError):
     """Downloaded bytes do not match the published artifact metadata."""
 
 
+class UpdateCancelled(Exception):
+    """The user stopped the startup update."""
+
+
 class StatusNotFound(FileNotFoundError):
     """The API confirms that the published status pointer does not exist."""
 
 
 class StatusStorageLinkError(ConnectionError):
     """A temporary folder download could not serve status.json."""
+
+
+def _raise_if_cancelled(cancel_event) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise UpdateCancelled
 
 
 def normalize_folder(folder: str) -> str:
@@ -271,14 +280,18 @@ def _download_artifact_once(
     attempt: int,
     attempts: int,
     verify_sha256: bool,
+    cancel_event=None,
 ) -> tuple[int, str]:
     path = artifact["path"]
     bundle_path = artifact["bundle_path"]
     size = artifact["size"]
     expected_sha = artifact["sha256"]
+    _raise_if_cancelled(cancel_event)
     if progress:
         progress(0, size, 0.0, attempt, attempts)
+    _raise_if_cancelled(cancel_event)
     link = _download_link(bundle_path, token)
+    _raise_if_cancelled(cancel_event)
     storage_host = urllib.parse.urlsplit(link).hostname or "unknown"
     log.info(
         "Disk update: storage host %s (attempt %d/%d)",
@@ -301,7 +314,9 @@ def _download_artifact_once(
         with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
             with folder_archive.open("wb") as output:
                 while True:
+                    _raise_if_cancelled(cancel_event)
                     chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                    _raise_if_cancelled(cancel_event)
                     if not chunk:
                         break
                     archive_total += len(chunk)
@@ -336,7 +351,9 @@ def _download_artifact_once(
                         "update artifact has the wrong declared size")
                 with archive.open(member) as source, destination.open("wb") as output:
                     while True:
+                        _raise_if_cancelled(cancel_event)
                         chunk = source.read(DOWNLOAD_CHUNK_SIZE)
+                        _raise_if_cancelled(cancel_event)
                         if not chunk:
                             break
                         total += len(chunk)
@@ -372,6 +389,7 @@ def download_artifact(
     on_retry: RetryCallback | None = None,
     retry_delays: Sequence[float] = DOWNLOAD_RETRY_DELAYS,
     verify_sha256: bool = True,
+    cancel_event=None,
 ) -> tuple[int, str]:
     """Download and verify an artifact, retrying transient storage failures.
 
@@ -404,6 +422,7 @@ def download_artifact(
         raise ValueError("invalid update retry delay")
     attempts = len(delays) + 1
     for attempt in range(1, attempts + 1):
+        _raise_if_cancelled(cancel_event)
         destination.unlink(missing_ok=True)
         try:
             return _download_artifact_once(
@@ -414,7 +433,11 @@ def download_artifact(
                 attempt=attempt,
                 attempts=attempts,
                 verify_sha256=verify_sha256,
+                cancel_event=cancel_event,
             )
+        except UpdateCancelled:
+            destination.unlink(missing_ok=True)
+            raise
         except Exception as exc:
             destination.unlink(missing_ok=True)
             if (attempt >= attempts
@@ -423,6 +446,10 @@ def download_artifact(
             delay = delays[attempt - 1]
             if on_retry:
                 on_retry(attempt, attempts, delay, exc)
-            time.sleep(delay)
+            if cancel_event is not None:
+                if cancel_event.wait(delay):
+                    raise UpdateCancelled
+            else:
+                time.sleep(delay)
 
     raise AssertionError("unreachable")
