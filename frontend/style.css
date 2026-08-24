@@ -512,6 +512,45 @@ html, body {
     transition: opacity 0.18s ease, transform 0.18s ease;
 }
 
+.pose-card.pose-card-target {
+    visibility: hidden;
+}
+
+#pose-intro {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1vw;
+    padding: 4vh 3vw;
+    overflow: hidden;
+    pointer-events: none;
+    background: rgba(255, 255, 255, 0.9);
+    transition: background-color 0.2s ease;
+}
+
+#pose-intro[hidden] {
+    display: none;
+}
+
+#pose-intro.moving {
+    background: transparent;
+}
+
+.pose-intro-card {
+    flex: 0 1 auto;
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 21.5vw;
+    max-height: 64vh;
+    transform-origin: center;
+    filter: drop-shadow(0 0.45vh 0.9vh rgba(0, 0, 0, 0.28));
+    will-change: transform;
+}
+
 #lens-hint {
     position: absolute;
     left: 0;

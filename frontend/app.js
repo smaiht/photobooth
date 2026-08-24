@@ -20,6 +20,7 @@ const poseRails = {
     left: document.getElementById("pose-rail-left"),
     right: document.getElementById("pose-rail-right"),
 };
+const poseIntro = document.getElementById("pose-intro");
 const idlePoseField = document.getElementById("idle-pose-field");
 const idlePoseRows = Array.from(document.querySelectorAll(".idle-pose-row"));
 const idleSessionInfo = document.getElementById("idle-session-info");
@@ -94,6 +95,8 @@ let idlePoseGroups = [];
 let shootingPosePool = [];
 const shootingPoseSelections = new Map();
 let renderedPoseSignature = "";
+let poseIntroTimer = null;
+let poseIntroRun = 0;
 
 const IDLE_POSE_GROUP_COUNT = 2;
 
@@ -121,6 +124,77 @@ function takeShootingPoseSelection(photoIndex, count) {
     const selection = shootingPosePool.splice(0, count);
     shootingPoseSelections.set(photoIndex, selection);
     return selection;
+}
+
+function clearPoseIntro() {
+    poseIntroRun++;
+    clearTimeout(poseIntroTimer);
+    poseIntroTimer = null;
+    poseIntro.querySelectorAll(".pose-intro-card").forEach(card => {
+        card.getAnimations().forEach(animation => animation.cancel());
+    });
+    poseIntro.replaceChildren();
+    poseIntro.classList.remove("moving");
+    poseIntro.hidden = true;
+    Object.values(poseRails).forEach(rail => {
+        rail.querySelectorAll(".pose-card-target").forEach(card => {
+            card.classList.remove("pose-card-target");
+        });
+    });
+}
+
+function showPoseIntro(urls) {
+    clearPoseIntro();
+    const targets = [
+        ...poseRails.left.querySelectorAll(".pose-card"),
+        ...poseRails.right.querySelectorAll(".pose-card"),
+    ];
+    if (!urls.length || targets.length !== urls.length) return;
+
+    const run = poseIntroRun;
+    const cards = urls.map(url => {
+        const card = document.createElement("img");
+        card.className = "pose-intro-card";
+        card.src = url;
+        card.alt = "";
+        card.draggable = false;
+        card.decoding = "async";
+        return card;
+    });
+    targets.forEach(card => card.classList.add("pose-card-target"));
+    poseIntro.replaceChildren(...cards);
+    poseIntro.hidden = false;
+
+    poseIntroTimer = setTimeout(() => {
+        if (run !== poseIntroRun) return;
+        poseIntro.classList.add("moving");
+        const animations = cards.map((card, index) => {
+            const from = card.getBoundingClientRect();
+            const to = targets[index].getBoundingClientRect();
+            if (!from.width || !from.height || !to.width || !to.height) {
+                return null;
+            }
+            const x = to.left + to.width / 2 - from.left - from.width / 2;
+            const y = to.top + to.height / 2 - from.top - from.height / 2;
+            const scale = Math.min(to.width / from.width, to.height / from.height);
+            return card.animate([
+                { transform: "translate3d(0, 0, 0) scale(1)" },
+                { transform: `translate3d(${x}px, ${y}px, 0) scale(${scale})` },
+            ], {
+                duration: 1000,
+                easing: "cubic-bezier(0.22, 0.75, 0.25, 1)",
+                fill: "forwards",
+            });
+        }).filter(Boolean);
+
+        if (!animations.length) {
+            clearPoseIntro();
+            return;
+        }
+        Promise.all(animations.map(animation => animation.finished)).then(() => {
+            if (run === poseIntroRun) clearPoseIntro();
+        }).catch(() => {});
+    }, 2000);
 }
 
 function renderIdlePoseBackdrop() {
@@ -211,7 +285,7 @@ function syncTechnicalEvent(data = {}) {
     }
 }
 
-function renderPoseExamples(photoIndex = 0) {
+function renderPoseExamples(photoIndex = 0, animate = false) {
     const parsedIndex = Number(photoIndex);
     const safeIndex = Number.isFinite(parsedIndex)
         ? Math.max(0, Math.floor(parsedIndex))
@@ -221,24 +295,27 @@ function renderPoseExamples(photoIndex = 0) {
 
     const selectedUrls = takeShootingPoseSelection(safeIndex, imagesPerShot);
     const signature = `${safeIndex}:${poseExamplesPerSide}:${selectedUrls.join("\n")}`;
-    if (signature === renderedPoseSignature) return;
-    renderedPoseSignature = signature;
+    if (signature !== renderedPoseSignature) {
+        clearPoseIntro();
+        renderedPoseSignature = signature;
 
-    Object.entries(poseRails).forEach(([side, rail]) => {
-        const sideOffset = side === "left" ? 0 : poseExamplesPerSide;
-        const cards = selectedUrls
-            .slice(sideOffset, sideOffset + poseExamplesPerSide)
-            .map((url, index) => {
-                const card = document.createElement("img");
-                card.className = "pose-card";
-                card.src = url;
-                card.alt = `Пример позы ${sideOffset + index + 1}`;
-                card.draggable = false;
-                card.decoding = "async";
-                return card;
-            });
-        rail.replaceChildren(...cards);
-    });
+        Object.entries(poseRails).forEach(([side, rail]) => {
+            const sideOffset = side === "left" ? 0 : poseExamplesPerSide;
+            const cards = selectedUrls
+                .slice(sideOffset, sideOffset + poseExamplesPerSide)
+                .map((url, index) => {
+                    const card = document.createElement("img");
+                    card.className = "pose-card";
+                    card.src = url;
+                    card.alt = `Пример позы ${sideOffset + index + 1}`;
+                    card.draggable = false;
+                    card.decoding = "async";
+                    return card;
+                });
+            rail.replaceChildren(...cards);
+        });
+    }
+    if (animate) showPoseIntro(selectedUrls);
 }
 
 function configurePoseExamples(cfg) {
@@ -510,6 +587,7 @@ function _doSwitch(state, data) {
     const key = core.screenForState(state);
     if (key && screens[key]) screens[key].hidden = false;
     setLiveView(key === "shooting");
+    if (key !== "shooting") clearPoseIntro();
     if (key === "done") renderDoneTitle(data);
 
     if (key === "no_camera") {
@@ -528,7 +606,7 @@ function _doSwitch(state, data) {
         currentShootingPhotoIndex = photoIndex;
         const idx = photoIndex + 1;
         photoCounter.textContent = `${idx} / ${data.total ?? 4}`;
-        renderPoseExamples(photoIndex);
+        renderPoseExamples(photoIndex, true);
     }
 
     // New session — hide QR
