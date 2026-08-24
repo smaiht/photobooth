@@ -614,17 +614,12 @@ html, body {
     gap: 1.2vw;
 }
 
-.template-skip-group { margin-left: auto; }
-
-.template-tool {
+.template-tools > #template-multi,
+.template-tools > #template-skip {
     flex: 0 0 29.2vw;
     width: 29.2vw;
-    display: flex;
-    background: transparent;
 }
-.template-tool[hidden] {
-    display: none;
-}
+.template-tools > #template-skip { margin-left: auto; }
 
 .template-tool-label {
     flex: 1 1 auto;
@@ -638,8 +633,7 @@ html, body {
 }
 
 #template-skip,
-#template-multi,
-#template-multi-cta {
+#template-multi {
     --tool-bg: rgba(255, 255, 255, 0.82);
     --tool-border: rgba(49, 45, 40, 0.1);
     z-index: 2;
@@ -670,13 +664,11 @@ html, body {
     --tool-icon: #c75263;
     --tool-icon-bg: #f9e7ea;
 }
-#template-multi,
-#template-multi-cta {
+#template-multi {
     --tool-icon: #397c5a;
     --tool-icon-bg: #e4f1e9;
 }
-#template-multi[hidden],
-#template-multi-cta[hidden] { display: none; }
+#template-multi[hidden] { display: none; }
 
 .template-tool-icon {
     flex: 0 0 3.25vw;
@@ -693,31 +685,53 @@ html, body {
     height: 2.05vw;
 }
 #template-skip:active,
-#template-multi:active,
-#template-multi-cta:active {
+#template-multi:active {
     filter: brightness(0.9);
     transform: scale(0.99);
 }
 #template-skip:disabled,
-#template-multi:disabled,
-#template-multi-cta:disabled { opacity: 0.45; }
+#template-multi:disabled { opacity: 0.45; }
 
 #template-multi {
     z-index: 2;
 }
-#screen-template:not(.multi-select) #template-multi { display: none; }
-#screen-template.multi-select #template-multi {
-    position: absolute;
-    top: -5.35vw;
-    left: 0;
-}
 #template-multi[aria-pressed="true"] {
-    --tool-bg: #397c5a;
-    --tool-border: #397c5a;
-    --tool-icon: #fff;
-    --tool-icon-bg: rgba(255, 255, 255, 0.16);
-    color: #fff;
-    box-shadow: 0 0.45vw 1.4vw rgba(57, 124, 90, 0.22);
+    --tool-bg: rgba(255, 255, 255, 0.78);
+    --tool-border: rgba(57, 124, 90, 0.16);
+    --tool-icon: #397c5a;
+    --tool-icon-bg: #deede4;
+    color: #294c3a;
+    box-shadow: 0 0.32vw 1vw rgba(50, 83, 65, 0.1);
+}
+.template-multi-switch {
+    flex: 0 0 3.35vw;
+    width: 3.35vw;
+    height: 1.95vw;
+    padding: 0.22vw;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    background: #d2d0cb;
+    box-shadow: inset 0 0.1vw 0.25vw rgba(54, 51, 47, 0.18);
+    transition: background 0.15s ease;
+}
+.template-multi-switch::after {
+    content: "";
+    width: 1.51vw;
+    height: 1.51vw;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0.12vw 0.35vw rgba(20, 54, 36, 0.25);
+    transform: translateX(0);
+    transition: transform 0.15s ease;
+}
+#template-multi[aria-pressed="true"] .template-multi-switch {
+    background: #397c5a;
+    box-shadow: inset 0 0.1vw 0.25vw rgba(29, 69, 48, 0.22);
+}
+#template-multi[aria-pressed="true"] .template-multi-switch::after {
+    transform: translateX(1.4vw);
 }
 
 /* Counter badge over the middle of a preview. The layer covers only the preview
@@ -875,17 +889,20 @@ html, body {
     font-weight: 700;
     text-align: left;
 }
-#screen-template.multi-select .template-title::before {
+#screen-template:has(#template-multi:not([hidden])) .template-title::before {
     content: "";
     position: absolute;
     z-index: -1;
-    top: -6vw;
-    right: -0.7vw;
-    bottom: -0.7vw;
-    left: -0.7vw;
-    border: 0.18vw solid rgba(57, 124, 90, 0.78);
-    border-radius: 1.3vw;
-    box-shadow: 0 0 1.6vw rgba(57, 124, 90, 0.13);
+    top: var(--multi-card-top, -7.35vw);
+    right: -1.8vw;
+    bottom: -1vw;
+    left: -1.8vw;
+    border: 0.08vw solid rgba(57, 124, 90, 0.2);
+    border-radius: 1.6vw;
+    background: linear-gradient(145deg,
+        rgba(224, 240, 230, 0.92),
+        rgba(247, 250, 248, 0.9));
+    box-shadow: 0 0.65vw 1.9vw rgba(50, 83, 65, 0.13);
     pointer-events: none;
 }
 .template-title-normal,
