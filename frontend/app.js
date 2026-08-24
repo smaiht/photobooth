@@ -29,7 +29,6 @@ const idleStartButton = document.getElementById("idle-start-button");
 const templateTimer = document.getElementById("template-timer");
 const templateOptions = document.getElementById("template-options");
 const templateSkip = document.getElementById("template-skip");
-const templateMultiGroup = document.getElementById("template-multi-group");
 const templateMulti = document.getElementById("template-multi");
 const templateMultiCta = document.getElementById("template-multi-cta");
 const templatePrint = document.getElementById("template-print");
@@ -697,7 +696,7 @@ function syncMultiPrintConfig(data = {}) {
     multiPrintMaxSheets = Number.isFinite(configuredMax)
         ? Math.max(1, configuredMax)
         : 1;
-    templateMultiGroup.hidden = !multiPrintAvailable;
+    templateMulti.hidden = !multiPrintAvailable;
     templateMultiCta.hidden = !multiPrintAvailable;
     // The state poll re-runs this every second, so a locked-in selection must
     // not get its controls back.
@@ -857,7 +856,7 @@ function resetTemplateSelection() {
     multiSelectActive = false;
     screens.template.classList.remove("multi-select");
     templateMulti.setAttribute("aria-pressed", "false");
-    templateMultiGroup.hidden = true;
+    templateMulti.hidden = true;
     templateMultiCta.hidden = true;
     templatePrint.hidden = true;
     templatePrint.disabled = true;

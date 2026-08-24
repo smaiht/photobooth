@@ -86,26 +86,6 @@
         <!-- TEMPLATE SELECT -->
         <div class="screen" id="screen-template" hidden>
             <div class="template-tools">
-                <div class="template-tool template-multi-group"
-                     id="template-multi-group" hidden>
-                    <button id="template-multi" type="button"
-                            aria-pressed="false" aria-label="Несколько копий">
-                        <!-- Two sheets: the front one is a full rectangle,
-                             the back one only its visible corner. -->
-                        <span class="template-tool-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" fill="none" focusable="false">
-                                <rect x="3" y="8" width="13" height="13" rx="2.4"
-                                      stroke="currentColor" stroke-width="2"/>
-                                <path d="M8 8V7a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1"
-                                      stroke="currentColor" stroke-width="2"
-                                      stroke-linecap="round"/>
-                            </svg>
-                        </span>
-                        <span class="template-tool-label" aria-hidden="true">
-                            НЕСКОЛЬКО КОПИЙ
-                        </span>
-                    </button>
-                </div>
                 <div class="template-tool template-skip-group">
                     <button id="template-skip" type="button"
                             aria-label="Фоткать заново">
@@ -124,6 +104,22 @@
             </div>
             <div class="template-options-row">
                 <div class="template-title">
+                    <button id="template-multi" type="button" hidden
+                            aria-pressed="false"
+                            aria-label="Выключить режим «Несколько копий»">
+                        <span class="template-tool-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24" fill="none" focusable="false">
+                                <rect x="3" y="8" width="13" height="13" rx="2.4"
+                                      stroke="currentColor" stroke-width="2"/>
+                                <path d="M8 8V7a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1"
+                                      stroke="currentColor" stroke-width="2"
+                                      stroke-linecap="round"/>
+                            </svg>
+                        </span>
+                        <span class="template-tool-label" aria-hidden="true">
+                            НЕСКОЛЬКО КОПИЙ
+                        </span>
+                    </button>
                     <span class="template-title-normal">
                         <span class="template-title-normal-heading">ЧТО<br>ПЕЧАТАЕМ?</span>
                         <span class="template-title-hint">Выберите вариант или включите режим</span>
