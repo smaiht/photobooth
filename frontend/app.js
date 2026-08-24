@@ -1,6 +1,10 @@
 const core = window.PhotoboothCore;
 const previewRoute = core.previewRoute(location.hash);
 
+const POSE_INTRO_HOLD_MS = 2000;
+const TEST_POSE_INTRO_HOLD_MS = 1000;
+const POSE_INTRO_MOVE_MS = 1000;
+
 const screens = {
     no_camera: document.getElementById("screen-no-camera"),
     idle: document.getElementById("screen-idle"),
@@ -143,7 +147,7 @@ function clearPoseIntro() {
     });
 }
 
-function showPoseIntro(urls) {
+function showPoseIntro(urls, holdMs) {
     clearPoseIntro();
     const targets = [
         ...poseRails.left.querySelectorAll(".pose-card"),
@@ -181,7 +185,7 @@ function showPoseIntro(urls) {
                 { transform: "translate3d(0, 0, 0) scale(1)" },
                 { transform: `translate3d(${x}px, ${y}px, 0) scale(${scale})` },
             ], {
-                duration: 1000,
+                duration: POSE_INTRO_MOVE_MS,
                 easing: "cubic-bezier(0.22, 0.75, 0.25, 1)",
                 fill: "forwards",
             });
@@ -194,7 +198,7 @@ function showPoseIntro(urls) {
         Promise.all(animations.map(animation => animation.finished)).then(() => {
             if (run === poseIntroRun) clearPoseIntro();
         }).catch(() => {});
-    }, 2000);
+    }, holdMs);
 }
 
 function renderIdlePoseBackdrop() {
@@ -285,7 +289,7 @@ function syncTechnicalEvent(data = {}) {
     }
 }
 
-function renderPoseExamples(photoIndex = 0, animate = false) {
+function renderPoseExamples(photoIndex = 0, introHoldMs = 0) {
     const parsedIndex = Number(photoIndex);
     const safeIndex = Number.isFinite(parsedIndex)
         ? Math.max(0, Math.floor(parsedIndex))
@@ -315,7 +319,7 @@ function renderPoseExamples(photoIndex = 0, animate = false) {
             rail.replaceChildren(...cards);
         });
     }
-    if (animate) showPoseIntro(selectedUrls);
+    if (introHoldMs > 0) showPoseIntro(selectedUrls, introHoldMs);
 }
 
 function configurePoseExamples(cfg) {
@@ -606,7 +610,10 @@ function _doSwitch(state, data) {
         currentShootingPhotoIndex = photoIndex;
         const idx = photoIndex + 1;
         photoCounter.textContent = `${idx} / ${data.total ?? 4}`;
-        renderPoseExamples(photoIndex, true);
+        const introHoldMs = data.test_session
+            ? TEST_POSE_INTRO_HOLD_MS
+            : POSE_INTRO_HOLD_MS;
+        renderPoseExamples(photoIndex, introHoldMs);
     }
 
     // New session — hide QR

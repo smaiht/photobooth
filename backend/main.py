@@ -1134,6 +1134,7 @@ async def _run_session(test_session: bool = False):
             "total": num_photos,
             "countdown_seconds": countdown_seconds,
             "countdown_sound_seconds": countdown_sound_seconds,
+            "test_session": test_session,
         })
         if pre_countdown_delay > 0:
             await asyncio.sleep(pre_countdown_delay)
