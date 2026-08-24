@@ -879,6 +879,7 @@ html, body {
 .template-title {
     position: relative;
     isolation: isolate;
+    align-self: stretch;
     flex: 0 0 var(--template-column);
     width: var(--template-column);
     display: flex;
@@ -1159,7 +1160,6 @@ html, body {
 
 .photo-choice-panel {
     padding-top: 1.6vh;
-    border-top: 0.08vw solid rgba(47, 43, 38, 0.13);
     flex: 0 0 auto;
     width: 90vw;
     display: flex;
