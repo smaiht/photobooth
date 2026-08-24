@@ -106,24 +106,6 @@
                         </span>
                     </button>
                 </div>
-                <div class="template-tool template-zoom-group">
-                    <!-- Magnifier is available when per-photo previews exist. -->
-                    <button id="template-zoom" type="button" hidden
-                            aria-label="Рассмотреть кадры" aria-expanded="false"
-                            aria-controls="photo-viewer">
-                        <span class="template-tool-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" fill="none" focusable="false">
-                                <circle cx="10.5" cy="10.5" r="6.5"
-                                        stroke="currentColor" stroke-width="2.2"/>
-                                <path d="M15.5 15.5 21 21" stroke="currentColor"
-                                      stroke-width="2.2" stroke-linecap="round"/>
-                            </svg>
-                        </span>
-                        <span class="template-tool-label" aria-hidden="true">
-                            УВЕЛИЧИТЬ
-                        </span>
-                    </button>
-                </div>
                 <div class="template-tool template-skip-group">
                     <button id="template-skip" type="button"
                             aria-label="Фоткать заново">
@@ -144,12 +126,27 @@
                 <div class="template-title">
                     <span class="template-title-normal">
                         <span class="template-title-normal-heading">ЧТО<br>ПЕЧАТАЕМ?</span>
-                        <span class="template-title-hint">Нажмите на нужный вариант</span>
+                        <span class="template-title-hint">Выберите вариант или включите режим</span>
+                        <button id="template-multi-cta" type="button" hidden
+                                aria-label="Включить режим «Несколько копий»">
+                            <span class="template-tool-icon" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" focusable="false">
+                                    <rect x="3" y="8" width="13" height="13" rx="2.4"
+                                          stroke="currentColor" stroke-width="2"/>
+                                    <path d="M8 8V7a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1"
+                                          stroke="currentColor" stroke-width="2"
+                                          stroke-linecap="round"/>
+                                </svg>
+                            </span>
+                            <span class="template-tool-label" aria-hidden="true">
+                                НЕСКОЛЬКО КОПИЙ
+                            </span>
+                        </button>
                     </span>
                     <span class="template-title-multi">
                         <span class="template-title-multi-heading">СКОЛЬКО<br>ПЕЧАТАЕМ?</span>
                         <span class="template-title-hint">
-                            Нажимайте на нужный вариант или
+                            Добавьте копии
                             <span class="template-plus-icon" aria-hidden="true">+</span>
                         </span>
                     </span>
@@ -173,6 +170,14 @@
             <div id="template-timer"></div>
             <section class="photo-viewer" id="photo-viewer" hidden
                      aria-label="Просмотр кадров">
+                <button class="photo-viewer-close" id="photo-viewer-close"
+                        type="button" aria-label="Закрыть просмотр">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"
+                         focusable="false">
+                        <path d="M5 5 19 19M19 5 5 19" stroke="currentColor"
+                              stroke-width="2.4" stroke-linecap="round"/>
+                    </svg>
+                </button>
                 <div class="photo-viewer-stage">
                     <button class="photo-viewer-nav prev" id="photo-viewer-prev"
                             type="button" aria-label="Предыдущий кадр">

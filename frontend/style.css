@@ -610,7 +610,7 @@ html, body {
     width: 90vw;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
     gap: 1.2vw;
 }
 
@@ -620,8 +620,7 @@ html, body {
     display: flex;
     background: transparent;
 }
-.template-tool[hidden],
-.template-zoom-group:has(#template-zoom[hidden]) {
+.template-tool[hidden] {
     display: none;
 }
 
@@ -637,8 +636,8 @@ html, body {
 }
 
 #template-skip,
-#template-zoom,
-#template-multi {
+#template-multi,
+#template-multi-cta {
     --tool-bg: rgba(255, 255, 255, 0.82);
     --tool-border: rgba(49, 45, 40, 0.1);
     z-index: 2;
@@ -669,14 +668,12 @@ html, body {
     --tool-icon: #c75263;
     --tool-icon-bg: #f9e7ea;
 }
-#template-zoom {
-    --tool-icon: #b76a2d;
-    --tool-icon-bg: #f8ecdd;
-}
-#template-multi {
+#template-multi,
+#template-multi-cta {
     --tool-icon: #397c5a;
     --tool-icon-bg: #e4f1e9;
 }
+#template-multi-cta[hidden] { display: none; }
 
 .template-tool-icon {
     flex: 0 0 3.25vw;
@@ -693,17 +690,15 @@ html, body {
     height: 2.05vw;
 }
 #template-skip:active,
-#template-zoom:active,
-#template-multi:active {
+#template-multi:active,
+#template-multi-cta:active {
     filter: brightness(0.9);
     transform: scale(0.99);
 }
 #template-skip:disabled,
-#template-zoom:disabled,
-#template-multi:disabled { opacity: 0.45; }
+#template-multi:disabled,
+#template-multi-cta:disabled { opacity: 0.45; }
 
-/* The multi-copy toggle stays below the viewer overlay. The magnifier is the
-   only tool above it because the same button also closes that overlay. */
 #template-multi {
     z-index: 2;
 }
@@ -993,12 +988,6 @@ html, body {
     color: #fff;
 }
 
-/* The magnifier also closes the viewer, so it stays above that overlay. */
-#template-zoom {
-    z-index: 12;
-}
-#template-zoom[hidden] { display: none; }
-
 /* Photo viewer: an overlay inside the template screen, not a separate screen. */
 .photo-viewer {
     position: absolute;
@@ -1014,6 +1003,27 @@ html, body {
     animation: photo-viewer-reveal 0.18s ease-out;
 }
 .photo-viewer[hidden] { display: none; }
+
+.photo-viewer-close {
+    position: absolute;
+    z-index: 2;
+    top: 2.2vw;
+    right: 2.2vw;
+    width: 4.6vw;
+    height: 4.6vw;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+.photo-viewer-close:active { background: rgba(255, 255, 255, 0.28); }
+.photo-viewer-close svg { width: 2.3vw; height: 2.3vw; }
 
 @keyframes photo-viewer-reveal {
     from { opacity: 0; }
@@ -1231,20 +1241,43 @@ html, body {
     border-radius: 0.72vw;
 }
 
-.photo-choice-number {
+.photo-choice-expand {
     position: absolute;
-    top: 0.75vw;
-    left: 0.75vw;
-    width: 2.65vw;
-    height: 2.65vw;
+    z-index: 4;
+    top: -0.25vw;
+    right: -0.25vw;
+    width: 4.8vw;
+    height: 4.8vw;
+    padding: 0;
+    border: 0;
+    border-radius: 1.3vw;
     display: grid;
     place-items: center;
-    border-radius: 50%;
-    background: #fff;
-    color: #222;
-    box-shadow: 0 0.25vw 0.75vw rgba(0, 0, 0, 0.18);
-    font-size: 1.3vw;
+    background: rgba(255, 255, 255, 0.94);
+    color: #292725;
+    box-shadow: 0 0.3vw 0.9vw rgba(0, 0, 0, 0.2);
+    cursor: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.12s ease, background 0.12s ease;
+}
+.photo-choice-expand:active {
+    transform: scale(0.92);
+    background: #e8e5df;
+}
+.photo-choice-expand:disabled { opacity: 0.5; }
+.photo-choice-expand svg {
+    width: 3.8vw;
+    height: 3.8vw;
+}
+.photo-choice-expand-number {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 1.4vw;
     font-weight: 700;
+    line-height: 1;
 }
 
 /* DONE */

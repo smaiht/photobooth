@@ -31,14 +31,15 @@ const templateOptions = document.getElementById("template-options");
 const templateSkip = document.getElementById("template-skip");
 const templateMultiGroup = document.getElementById("template-multi-group");
 const templateMulti = document.getElementById("template-multi");
+const templateMultiCta = document.getElementById("template-multi-cta");
 const templatePrint = document.getElementById("template-print");
 const templatePrintCount = document.getElementById("template-print-count");
 const photoChoicePanel = document.getElementById("photo-choice-panel");
 const photoChoiceOptions = document.getElementById("photo-choice-options");
 const frameOn = document.getElementById("frame-on");
 const frameOff = document.getElementById("frame-off");
-const templateZoom = document.getElementById("template-zoom");
 const photoViewer = document.getElementById("photo-viewer");
+const photoViewerClose = document.getElementById("photo-viewer-close");
 const photoViewerViewport = document.getElementById("photo-viewer-viewport");
 const photoViewerImage = document.getElementById("photo-viewer-image");
 const photoViewerPrev = document.getElementById("photo-viewer-prev");
@@ -568,6 +569,7 @@ function lockTemplateSelection() {
     setTemplateTimerText("");
     templateSkip.disabled = true;
     templateMulti.disabled = true;
+    templateMultiCta.disabled = true;
     templatePrint.disabled = true;
     templateOptions.querySelectorAll("button").forEach((item) => {
         item.disabled = true;
@@ -696,9 +698,11 @@ function syncMultiPrintConfig(data = {}) {
         ? Math.max(1, configuredMax)
         : 1;
     templateMultiGroup.hidden = !multiPrintAvailable;
+    templateMultiCta.hidden = !multiPrintAvailable;
     // The state poll re-runs this every second, so a locked-in selection must
     // not get its controls back.
     templateMulti.disabled = templateSkip.disabled;
+    templateMultiCta.disabled = templateSkip.disabled;
 }
 
 function setMultiSelect(active) {
@@ -717,6 +721,13 @@ templateMulti.addEventListener("click", (event) => {
     event.stopPropagation();
     if (currentState !== "template_select" || templateMulti.disabled) return;
     setMultiSelect(!multiSelectActive);
+});
+
+templateMultiCta.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (currentState !== "template_select" || templateMultiCta.disabled) return;
+    setMultiSelect(true);
 });
 
 templatePrint.addEventListener("click", (event) => {
@@ -840,7 +851,6 @@ function resetTemplateSelection() {
     renderedTemplateSignature = "";
     closePhotoViewer();
     viewerFrames = [];
-    templateZoom.hidden = true;
     resetPhotoChoice();
     templateOptions.replaceChildren();
     printBasket.clear();
@@ -848,6 +858,7 @@ function resetTemplateSelection() {
     screens.template.classList.remove("multi-select");
     templateMulti.setAttribute("aria-pressed", "false");
     templateMultiGroup.hidden = true;
+    templateMultiCta.hidden = true;
     templatePrint.hidden = true;
     templatePrint.disabled = true;
     templatePrintCount.textContent = "0";
@@ -874,7 +885,7 @@ function renderPhotoChoices() {
     photoChoiceOptions.replaceChildren();
     if (!photoChoiceTemplate) return;
 
-    photoChoiceTemplate.photo_previews.forEach((choice) => {
+    photoChoiceTemplate.photo_previews.forEach((choice, position) => {
         const photoNumber = choice.photo_index + 1;
         const button = document.createElement("button");
         button.type = "button";
@@ -889,9 +900,27 @@ function renderPhotoChoices() {
         preview.draggable = false;
 
         const number = document.createElement("span");
-        number.className = "photo-choice-number";
+        number.className = "photo-choice-expand-number";
         number.textContent = photoNumber;
-        button.append(preview, number);
+        button.appendChild(preview);
+
+        const expand = document.createElement("button");
+        expand.type = "button";
+        expand.className = "photo-choice-expand";
+        expand.setAttribute("aria-label", `Увеличить фото ${photoNumber}`);
+        expand.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"
+                 focusable="false">
+                <path d="M8 8 4 4m0 0h4M4 4v4M16 8l4-4m0 0h-4m4 0v4M8 16l-4 4m0 0v-4m0 4h4M16 16l4 4m0 0v-4m0 4h-4"
+                      stroke="currentColor" stroke-width="1.9"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+        expand.appendChild(number);
+        expand.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openPhotoViewer(position);
+        });
         const printItem = {
             template: photoChoiceTemplate.name,
             photo_index: choice.photo_index,
@@ -912,7 +941,7 @@ function renderPhotoChoices() {
         });
         const tile = document.createElement("div");
         tile.className = "photo-choice-tile";
-        tile.append(button, createPrintBadge(printItem));
+        tile.append(button, expand, createPrintBadge(printItem));
         photoChoiceOptions.appendChild(tile);
     });
     renderBasket();
@@ -930,7 +959,7 @@ frameOff.addEventListener("click", () => {
     renderPhotoChoices();
 });
 
-// --- Photo viewer (magnifier) ---
+// --- Fullscreen photo viewer ---
 // Frames come from the photo_choice template: it is the only one that produces
 // per-photo previews, and those previews are what makes the viewer open
 // instantly. Without such a template the magnifier stays hidden.
@@ -981,38 +1010,27 @@ function renderViewerThumbs() {
     });
 }
 
-function openPhotoViewer() {
+function openPhotoViewer(index = 0) {
     if (!viewerFrames.length) return;
     photoViewer.hidden = false;
-    templateZoom.setAttribute("aria-expanded", "true");
     renderViewerThumbs();
-    showViewerFrame(0);
+    showViewerFrame(index);
 }
 
 function closePhotoViewer() {
     if (photoViewer.hidden) return;
     photoViewer.hidden = true;
-    templateZoom.setAttribute("aria-expanded", "false");
     resetViewerTransform();
     // Drop the full-size bitmap instead of keeping it alive behind the screen.
     photoViewerImage.removeAttribute("src");
     photoViewerThumbs.replaceChildren();
 }
 
-function togglePhotoViewer() {
-    if (photoViewer.hidden) {
-        openPhotoViewer();
-    } else {
-        closePhotoViewer();
-    }
-}
-
 function configurePhotoViewer(options) {
     viewerFrames = core.buildViewerFrames(options);
-    templateZoom.hidden = viewerFrames.length === 0;
 }
 
-templateZoom.addEventListener("click", togglePhotoViewer);
+photoViewerClose.addEventListener("click", closePhotoViewer);
 photoViewerPrev.addEventListener("click", () => showViewerFrame(viewerIndex - 1));
 photoViewerNext.addEventListener("click", () => showViewerFrame(viewerIndex + 1));
 
@@ -1147,13 +1165,13 @@ function endViewerPointer(event) {
 photoViewerViewport.addEventListener("pointerup", endViewerPointer);
 photoViewerViewport.addEventListener("pointercancel", endViewerPointer);
 
-// Any tap on the dark backdrop closes the viewer; the magnifier button itself
-// toggles it back. Taps over the photo are handled by the gesture code, which
-// tells a tap apart from a swipe or a pan.
+// Any tap on the dark backdrop closes the viewer. Taps over the photo are
+// handled by the gesture code, which tells a tap apart from a swipe or a pan.
 photoViewer.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target || target.closest(
-        ".photo-viewer-viewport, .photo-viewer-nav, .photo-viewer-thumbs",
+        ".photo-viewer-viewport, .photo-viewer-nav, .photo-viewer-thumbs, "
+        + ".photo-viewer-close",
     )) return;
     closePhotoViewer();
 });
