@@ -69,6 +69,14 @@ const serviceConfigPage = document.getElementById("service-config-page");
 const serviceConfigFields = document.getElementById("service-config-fields");
 const serviceConfigDiscard = document.getElementById("service-config-discard");
 const serviceConfigApply = document.getElementById("service-config-apply");
+const serviceUnlockPage = document.getElementById("service-unlock-page");
+const serviceUnlockCurrent = document.getElementById("service-unlock-current");
+const serviceUnlockInput = document.getElementById("service-unlock-input");
+const serviceUnlockMinus = document.getElementById("service-unlock-minus");
+const serviceUnlockPlus = document.getElementById("service-unlock-plus");
+const serviceUnlockPresets = document.getElementById("service-unlock-presets");
+const serviceUnlockCancel = document.getElementById("service-unlock-cancel");
+const serviceUnlockSave = document.getElementById("service-unlock-save");
 const serviceEditorPage = document.getElementById("service-editor-page");
 const serviceEditorComment = document.getElementById("service-editor-comment");
 const serviceEditorOptions = document.getElementById("service-editor-options");
@@ -81,6 +89,7 @@ const btnConfigCamera = document.getElementById("btn-config-camera");
 const btnTestSession = document.getElementById("btn-test-session");
 const btnBoothUnblock = document.getElementById("btn-booth-unblock");
 const btnBoothBlock = document.getElementById("btn-booth-block");
+const btnClearAll = document.getElementById("btn-clear-all");
 const btnClearPrintQueue = document.getElementById("btn-clear-print-queue");
 const btnClearPhotos = document.getElementById("btn-clear-photos");
 const btnClearPrintJobs = document.getElementById("btn-clear-print-jobs");
@@ -1547,6 +1556,7 @@ function showServiceHome() {
     updateServiceLabels();
     serviceHome.hidden = false;
     serviceConfigPage.hidden = true;
+    serviceUnlockPage.hidden = true;
     serviceEditorPage.hidden = true;
     serviceBack.hidden = true;
     serviceTitle.textContent = "СЕРВИС";
@@ -1556,11 +1566,34 @@ function showServiceHome() {
 function showConfigPage() {
     serviceHome.hidden = true;
     serviceConfigPage.hidden = false;
+    serviceUnlockPage.hidden = true;
     serviceEditorPage.hidden = true;
     serviceBack.hidden = false;
     serviceTitle.textContent = serviceSection === "application"
         ? "КОНФИГ ПРИЛОЖЕНИЯ"
         : "КОНФИГ КАМЕРЫ";
+    serviceModal.querySelector(".service-dialog").scrollTop = 0;
+}
+
+function setUnlockSessions(value) {
+    const number = Number(value);
+    serviceUnlockInput.value = Math.min(
+        1000,
+        Math.max(1, Number.isFinite(number) ? Math.round(number) : 1),
+    );
+}
+
+function showUnlockPage() {
+    const remaining = serviceConfig?.unlock_sessions_remaining || 0;
+    serviceUnlockCurrent.textContent =
+        `Текущий остаток разрешённых сессий: ${remaining}`;
+    setUnlockSessions(Math.max(1, remaining));
+    serviceHome.hidden = true;
+    serviceConfigPage.hidden = true;
+    serviceEditorPage.hidden = true;
+    serviceUnlockPage.hidden = false;
+    serviceBack.hidden = false;
+    serviceTitle.textContent = "РАЗБЛОКИРОВКА";
     serviceModal.querySelector(".service-dialog").scrollTop = 0;
 }
 
@@ -1678,6 +1711,7 @@ function openFieldEditor(field) {
 
     serviceHome.hidden = true;
     serviceConfigPage.hidden = true;
+    serviceUnlockPage.hidden = true;
     serviceEditorPage.hidden = false;
     serviceBack.hidden = false;
     serviceTitle.textContent = field.key;
@@ -1710,7 +1744,7 @@ function saveEditedField() {
 function renderConfigTable() {
     serviceConfigFields.replaceChildren();
     configFields(serviceSection).forEach(field => {
-        const row = document.createElement("div");
+        const row = document.createElement("tr");
         row.className = "service-config-row";
         row.classList.toggle("is-changed",
             Object.prototype.hasOwnProperty.call(
@@ -1744,16 +1778,6 @@ async function openConfig(section) {
     }
 }
 
-function draftSummary() {
-    const lines = [];
-    for (const section of ["application", "camera"]) {
-        for (const [key, value] of Object.entries(serviceDraft[section])) {
-            lines.push(`${key} → ${valueText(value)}`);
-        }
-    }
-    return lines.join("\n");
-}
-
 async function reloadDraftAfterError() {
     const wanted = {
         application: { ...serviceDraft.application },
@@ -1774,8 +1798,6 @@ async function reloadDraftAfterError() {
 
 async function applyConfigDraft() {
     if (!draftCount()) return;
-    if (!window.confirm(
-        `Применить изменения и перезапустить?\n\n${draftSummary()}`)) return;
     serviceConfigApply.disabled = true;
     showServiceToast("Сохранение конфига…", 30000);
     try {
@@ -1788,8 +1810,7 @@ async function applyConfigDraft() {
         if (!res.ok || data.status !== "ok") {
             throw new Error(data.message || "Конфиг не изменён");
         }
-        clearDraft();
-        closeServiceModal(true);
+        closeServiceModal();
         showServiceToast("Конфиг сохранён. Приложение перезапускается…", 10000);
     } catch (e) {
         showServiceToast(e.message || "Конфиг не изменён", 10000);
@@ -1837,16 +1858,11 @@ function openServiceModal() {
     loadServiceConfig().catch(() => {});
 }
 
-function closeServiceModal(force = false) {
-    if (!serviceModal) return false;
-    if (!force && draftCount()
-            && !window.confirm("Отменить несохранённые изменения конфига?")) {
-        return false;
-    }
+function closeServiceModal() {
+    if (!serviceModal) return;
     clearDraft();
     serviceEditedField = null;
     serviceModal.hidden = true;
-    return true;
 }
 
 // 2 taps in the top-left corner, then 2 in the top-right corner.
@@ -1901,7 +1917,6 @@ btnConfigApp?.addEventListener("click", () => openConfig("application"));
 btnConfigCamera?.addEventListener("click", () => openConfig("camera"));
 serviceConfigApply?.addEventListener("click", applyConfigDraft);
 serviceConfigDiscard?.addEventListener("click", () => {
-    if (draftCount() && !window.confirm("Отменить все изменения?")) return;
     clearDraft();
     renderConfigTable();
 });
@@ -1917,57 +1932,71 @@ serviceEditorInput?.addEventListener("keydown", e => {
     }
 });
 
+serviceUnlockMinus?.addEventListener("click", () => {
+    setUnlockSessions(Number(serviceUnlockInput.value) - 1);
+});
+serviceUnlockPlus?.addEventListener("click", () => {
+    setUnlockSessions(Number(serviceUnlockInput.value) + 1);
+});
+serviceUnlockInput?.addEventListener("change", () => {
+    setUnlockSessions(serviceUnlockInput.value);
+});
+serviceUnlockPresets?.addEventListener("click", e => {
+    const button = e.target.closest?.("button[data-sessions]");
+    if (button) setUnlockSessions(button.dataset.sessions);
+});
+serviceUnlockCancel?.addEventListener("click", showServiceHome);
+serviceUnlockSave?.addEventListener("click", async () => {
+    const sessions = Number(serviceUnlockInput.value);
+    if (!Number.isInteger(sessions) || sessions < 1 || sessions > 1000) {
+        showServiceToast("Нужно целое число от 1 до 1000");
+        return;
+    }
+    if (await runLocalServiceAction("unblock", { sessions })) {
+        showServiceHome();
+    }
+});
+serviceUnlockInput?.addEventListener("keydown", e => {
+    if (e.key === "Enter") serviceUnlockSave.click();
+});
+
 btnTestSession?.addEventListener("click", () => {
-    if (!closeServiceModal()) return;
+    closeServiceModal();
     send({ type: "start_session", test_session: true });
 });
 btnBoothUnblock?.addEventListener("click", async () => {
     try {
-        const data = await loadServiceConfig();
-        const raw = window.prompt(
-            "Количество следующих разрешённых сессий (1–1000)",
-            Math.max(1, data.unlock_sessions_remaining || 1),
-        );
-        if (raw === null) return;
-        if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > 1000) {
-            showServiceToast("Нужно целое число от 1 до 1000");
-            return;
-        }
-        await runLocalServiceAction("unblock", { sessions: Number(raw) });
+        await loadServiceConfig();
+        showUnlockPage();
     } catch (e) {
         showServiceToast(e.message || "Данные не загружены");
     }
 });
 btnBoothBlock?.addEventListener("click", () => {
-    if (window.confirm("Заблокировать запуск новых сессий?")) {
-        runLocalServiceAction("unblock", { sessions: 0 });
-    }
+    runLocalServiceAction("unblock", { sessions: 0 });
 });
 
-const destructiveActions = [
-    [btnClearPrintQueue, "clear_print_queue", "Очистить очереди печати?"],
-    [btnClearPhotos, "clear_photos", "Очистить локальную папку photos?"],
-    [btnClearPrintJobs, "clear_print_jobs", "Очистить локальную папку photos_print_jobs?"],
-    [btnClearLogs, "clear_logs", "Очистить логи фотобудки?"],
+const cleanupActions = [
+    [btnClearAll, "clear_all"],
+    [btnClearPrintQueue, "clear_print_queue"],
+    [btnClearPhotos, "clear_photos"],
+    [btnClearPrintJobs, "clear_print_jobs"],
+    [btnClearLogs, "clear_logs"],
 ];
-destructiveActions.forEach(([button, command, question]) => {
-    button?.addEventListener("click", () => {
-        if (window.confirm(question)) runLocalServiceAction(command);
-    });
+cleanupActions.forEach(([button, command]) => {
+    button?.addEventListener("click", () => runLocalServiceAction(command));
 });
 
 btnSysLock?.addEventListener("click", () => triggerSystemAction("lock", "Блокировка экрана"));
 btnSysTaskmgr?.addEventListener("click", () => triggerSystemAction("taskmgr", "Диспетчер задач"));
 btnSysKeyboard?.addEventListener("click", () => triggerSystemAction("keyboard", "Экранная клавиатура"));
 btnAppRestart?.addEventListener("click", () => {
-    if (!closeServiceModal()) return;
+    closeServiceModal();
     showServiceToast("Приложение перезапускается…", 10000);
     fetch("/api/restart", { method: "POST" }).catch(() => {});
 });
 btnSysLogoff?.addEventListener("click", () => {
-    if (window.confirm("Выйти из системы?")) {
-        triggerSystemAction("logoff", "Выход из системы");
-    }
+    triggerSystemAction("logoff", "Выход из системы");
 });
 
 window.addEventListener("keydown", e => {
@@ -1976,6 +2005,9 @@ window.addEventListener("keydown", e => {
     if (!serviceEditorPage.hidden) {
         serviceEditedField = null;
         showConfigPage();
-    } else if (!serviceConfigPage.hidden) showServiceHome();
-    else closeServiceModal();
+    } else if (!serviceConfigPage.hidden || !serviceUnlockPage.hidden) {
+        showServiceHome();
+    } else {
+        closeServiceModal();
+    }
 });

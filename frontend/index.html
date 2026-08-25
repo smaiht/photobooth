@@ -236,6 +236,7 @@
                     <section class="service-section">
                         <h2 class="service-section-title">Очистка</h2>
                         <div class="service-grid">
+                            <button id="btn-clear-all" class="service-btn service-btn-danger service-btn-wide" type="button">Очистить всё</button>
                             <button id="btn-clear-print-queue" class="service-btn service-btn-danger" type="button">Очистить очереди печати</button>
                             <button id="btn-clear-photos" class="service-btn service-btn-danger" type="button">Очистить photos</button>
                             <button id="btn-clear-print-jobs" class="service-btn service-btn-danger" type="button">Очистить photos_print_jobs</button>
@@ -270,6 +271,24 @@
                     <div class="service-config-footer">
                         <button id="service-config-discard" class="service-btn" type="button">Отменить изменения</button>
                         <button id="service-config-apply" class="service-btn service-btn-apply" type="button" disabled>Применить и перезапустить</button>
+                    </div>
+                </div>
+
+                <div id="service-unlock-page" class="service-page" hidden>
+                    <div id="service-unlock-current" class="service-unlock-current"></div>
+                    <div class="service-number-control">
+                        <button id="service-unlock-minus" class="service-btn service-number-button" type="button" aria-label="Уменьшить">−</button>
+                        <input id="service-unlock-input" type="number" inputmode="numeric" min="1" max="1000" step="1" value="1">
+                        <button id="service-unlock-plus" class="service-btn service-number-button" type="button" aria-label="Увеличить">+</button>
+                    </div>
+                    <div id="service-unlock-presets" class="service-unlock-presets">
+                        <button class="service-btn" type="button" data-sessions="1">1</button>
+                        <button class="service-btn" type="button" data-sessions="10">10</button>
+                        <button class="service-btn" type="button" data-sessions="100">100</button>
+                    </div>
+                    <div class="service-config-footer">
+                        <button id="service-unlock-cancel" class="service-btn" type="button">Отмена</button>
+                        <button id="service-unlock-save" class="service-btn service-btn-apply" type="button">Разблокировать</button>
                     </div>
                 </div>
 

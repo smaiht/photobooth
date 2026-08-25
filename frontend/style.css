@@ -56,9 +56,9 @@ html, body {
 .screen[hidden] { display: none; }
 
 /* NO CAMERA */
-#screen-no-camera { gap: 2vh; }
+#screen-no-camera { gap: 2vh; text-align: center; }
 .error-msg { font-size: 4vw; font-weight: 700; }
-.error-sub { font-size: 2vw; opacity: 0.5; }
+.error-sub { font-size: 2vw; opacity: 0.5; text-align: center; }
 
 /* IDLE */
 #screen-idle {
@@ -773,9 +773,6 @@ html, body {
     transform: translateX(1.4vw);
 }
 
-/* Counter badge over the middle of a preview. The layer covers only the preview
-   area, so a caption underneath cannot pull the badge off the photo. Hidden
-   until multi-select is on, so the plain one-tap screen looks as before. */
 .print-badge-layer {
     display: none;
     z-index: 3;
@@ -786,6 +783,11 @@ html, body {
     /* Matches .template-preview and .photo-choice-btn: both are 3:2. */
     aspect-ratio: 3 / 2;
     pointer-events: none;
+}
+.template-tile .print-badge-layer {
+    top: 1.1vw;
+    left: 1.1vw;
+    right: 1.1vw;
 }
 
 #screen-template.multi-select .print-badge-layer {
@@ -924,26 +926,35 @@ html, body {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    justify-content: center;
-    gap: 2vh;
+    justify-content: space-between;
+    gap: 1.5vh;
+    padding-top: 0.6vw;
+    padding-bottom: 0.6vw;
     font-weight: 700;
     text-align: left;
 }
-#screen-template:has(#template-multi:not([hidden])) .template-title::before {
+.template-title::before {
     content: "";
     position: absolute;
     z-index: -1;
-    top: var(--multi-card-top, -7.35vw);
-    right: -1.8vw;
-    bottom: -1vw;
-    left: -1.8vw;
-    border: 0.08vw solid rgba(57, 124, 90, 0.2);
-    border-radius: 1.6vw;
-    background: linear-gradient(145deg,
-        rgba(224, 240, 230, 0.92),
-        rgba(247, 250, 248, 0.9));
-    box-shadow: 0 0.65vw 1.9vw rgba(50, 83, 65, 0.13);
+    top: -1.2vw;
+    right: -1.6vw;
+    bottom: -1.2vw;
+    left: -1.6vw;
+    border: 0.14vw solid #70c697;
+    border-radius: 1.8vw;
+    background: linear-gradient(155deg, #cbedd8 0%, #e6f7ee 100%);
+    box-shadow: 0 0.8vw 2.6vw rgba(28, 85, 54, 0.16);
     pointer-events: none;
+    transition: top 0.2s ease, background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+#screen-template:has(#template-multi:not([hidden])) .template-title::before {
+    top: var(--multi-card-top, -7.35vw);
+}
+#screen-template.multi-select .template-title::before {
+    border-color: #3ca368;
+    background: linear-gradient(155deg, #b8e9cb 0%, #d7f4e3 100%);
+    box-shadow: 0 1vw 3.2vw rgba(25, 80, 50, 0.24);
 }
 .template-title-normal,
 .template-title-multi {
@@ -958,9 +969,11 @@ html, body {
 }
 .template-title-normal-heading,
 .template-title-multi-heading {
-    font-size: 4.3vw;
+    font-size: 3.8vw;
+    font-weight: 800;
     letter-spacing: -0.035em;
     line-height: 1.05;
+    color: #0c2b18;
 }
 .template-title-multi {
     display: none;
@@ -969,10 +982,10 @@ html, body {
     gap: 0.4vw;
 }
 .template-title-hint {
-    font-size: 1.8vw;
-    font-weight: 500;
+    font-size: 1.6vw;
+    font-weight: 700;
     line-height: 1.3;
-    color: #77726b;
+    color: #1e613b;
 }
 .template-plus-icon {
     flex: 0 0 auto;
@@ -981,7 +994,7 @@ html, body {
     border-radius: 50%;
     display: inline-grid;
     place-items: center;
-    background: #222;
+    background: #0c2b18;
     color: #fff;
     font-family: Arial, sans-serif;
     font-size: 1.35vw;
@@ -1002,9 +1015,18 @@ html, body {
     position: relative;
     flex: 0 0 var(--template-column);
     width: var(--template-column);
-    display: grid;
     min-width: 0;
     isolation: isolate;
+    background: #ffffff;
+    border-radius: 1.4vw;
+    border: 0.1vw solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 0.8vw 2.4vw rgba(53, 47, 40, 0.08);
+    padding: 1.1vw;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.template-tile:active {
+    transform: scale(0.98);
+    box-shadow: 0 0.4vw 1.2vw rgba(53, 47, 40, 0.06);
 }
 .template-btn {
     appearance: none;
@@ -1012,21 +1034,19 @@ html, body {
     background: transparent;
     border: 0;
     padding: 0;
+    width: 100%;
+    height: 100%;
     color: #222;
     font-family: inherit;
-    font-size: 1.5vw;
-    font-weight: 650;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-    transition: color 0.2s, transform 0.2s;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.55vw;
+    justify-content: space-between;
+    gap: 0.7vw;
 }
-
-.template-btn:active { transform: scale(0.98); }
 .template-btn:disabled { opacity: 0.65; }
 
 .template-preview {
@@ -1034,17 +1054,24 @@ html, body {
     width: 100%;
     aspect-ratio: 3 / 2;
     object-fit: contain;
-    border-radius: 0.85vw;
-    box-shadow: 0 0.55vw 1.6vw rgba(53, 47, 40, 0.11);
+    border-radius: 0.72vw;
 }
 
 .template-caption {
-    min-height: 2.35vw;
+    width: 100%;
+    min-height: 2.4vw;
     display: flex;
     flex-direction: row;
     align-items: center;
     justify-content: center;
-    gap: 0.8vw;
+}
+
+.template-caption-label {
+    font-size: 1.85vw;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    text-transform: uppercase;
+    color: #1a1a1a;
 }
 
 #template-timer {
@@ -1198,13 +1225,17 @@ html, body {
 }
 
 .photo-choice-panel {
-    padding-top: 1.6vh;
     flex: 0 0 auto;
     width: 90vw;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1.2vh;
+    gap: 1.4vh;
+    padding: 1.3vw 1.5vw 1.5vw 1.5vw;
+    background: #ffffff;
+    border-radius: 1.4vw;
+    border: 0.1vw solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 0.8vw 2.4vw rgba(53, 47, 40, 0.08);
     animation: photo-choice-reveal 0.22s ease-out;
 }
 .photo-choice-panel[hidden] { display: none; }
@@ -1222,19 +1253,20 @@ html, body {
 
 .photo-choice-header {
     flex: 0 0 auto;
-    width: 88vw;
-    min-height: 3.5vw;
+    width: 100%;
+    min-height: 3.2vw;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 2vw;
-    padding-inline: 0.25vw;
+    padding-inline: 0.2vw;
 }
 
 .photo-choice-header h2 {
-    font-size: 2vw;
-    font-weight: 700;
+    font-size: 1.8vw;
+    font-weight: 800;
     letter-spacing: -0.02em;
+    color: #111;
 }
 
 .frame-segments {
@@ -1276,22 +1308,25 @@ html, body {
 
 .photo-choice-options {
     flex: 0 0 auto;
-    width: 88vw;
+    width: 100%;
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 1.2vw;
+    justify-content: space-between;
+    gap: 1.1vw;
 }
 
 /* Same sibling wrapper as the template tiles, for the same nested-button
    reason. It owns the width the button used to claim. */
 .photo-choice-tile {
     position: relative;
-    flex: 0 0 calc((100% - 3.6vw) / 4);
-    width: calc((100% - 3.6vw) / 4);
+    flex: 1 1 0;
     min-width: 0;
     display: grid;
     isolation: isolate;
+    transition: transform 0.12s ease;
+}
+.photo-choice-tile:active {
+    transform: scale(0.98);
 }
 .photo-choice-btn {
     position: relative;
@@ -1303,13 +1338,10 @@ html, body {
     padding: 0;
     border-radius: 0.72vw;
     overflow: hidden;
-    background: transparent;
-    box-shadow: 0 0.45vw 1.4vw rgba(53, 47, 40, 0.1);
+    background: #f3f1ee;
+    box-shadow: 0 0.35vw 1vw rgba(53, 47, 40, 0.07);
     cursor: none;
     touch-action: manipulation;
-}
-.photo-choice-btn:active {
-    transform: scale(0.98);
 }
 .photo-choice-btn:disabled { opacity: 0.65; }
 
@@ -1324,18 +1356,19 @@ html, body {
 .photo-choice-expand {
     position: absolute;
     z-index: 4;
-    top: -0.25vw;
-    right: -0.25vw;
-    width: 4.8vw;
-    height: 4.8vw;
+    top: 0;
+    right: 0;
+    width: 4.2vw;
+    height: 4.2vw;
     padding: 0;
     border: 0;
-    border-radius: 1.3vw;
+    border-radius: 0 0.72vw 0 0.6vw;
     display: grid;
     place-items: center;
-    background: rgba(255, 255, 255, 0.94);
-    color: #292725;
-    box-shadow: 0 0.3vw 0.9vw rgba(0, 0, 0, 0.2);
+    background: rgba(255, 255, 255, 0.88);
+    backdrop-filter: blur(4px);
+    color: #222;
+    box-shadow: none;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
@@ -1347,15 +1380,15 @@ html, body {
 }
 .photo-choice-expand:disabled { opacity: 0.5; }
 .photo-choice-expand svg {
-    width: 3.8vw;
-    height: 3.8vw;
+    width: 3.2vw;
+    height: 3.2vw;
 }
 .photo-choice-expand-number {
     position: absolute;
     inset: 0;
     display: grid;
     place-items: center;
-    font-size: 1.4vw;
+    font-size: 1.3vw;
     font-weight: 700;
     line-height: 1;
 }
@@ -1493,9 +1526,10 @@ html, body {
 }
 
 .service-dialog {
-    width: min(90vw, 560px);
-    max-height: 90vh;
-    overflow-y: auto;
+    box-sizing: border-box;
+    width: min(96vw, 1400px);
+    max-height: 94vh;
+    overflow: auto;
     background: #1e1e24;
     color: #fff;
     border-radius: 20px;
@@ -1574,8 +1608,12 @@ html, body {
 
 .service-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 14px;
+}
+
+.service-btn-wide {
+    grid-column: 1 / -1;
 }
 
 #network-adapters:empty {
@@ -1723,7 +1761,7 @@ html, body {
 }
 
 .service-config-key {
-    overflow-wrap: anywhere;
+    white-space: nowrap;
     font-size: 16px;
     font-weight: 600;
 }
@@ -1733,6 +1771,7 @@ html, body {
     padding: 12px;
     flex-direction: column;
     align-items: flex-end;
+    overflow-wrap: break-word;
     color: #69f0ae;
     font-size: 17px;
 }
@@ -1752,8 +1791,12 @@ html, body {
 
 .service-option-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 12px;
+}
+
+.service-option {
+    overflow-wrap: break-word;
 }
 
 .service-option.is-selected {
@@ -1773,6 +1816,52 @@ html, body {
     font-size: 22px;
     font-weight: 600;
     line-height: 1.2;
+}
+
+.service-unlock-current {
+    margin-bottom: 20px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 18px;
+    text-align: center;
+}
+
+.service-number-control {
+    width: min(100%, 640px);
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 90px minmax(160px, 1fr) 90px;
+    gap: 14px;
+}
+
+.service-number-button {
+    font-size: 36px;
+}
+
+#service-unlock-input {
+    box-sizing: border-box;
+    width: 100%;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 14px;
+    background: #111116;
+    color: #fff;
+    font-family: inherit;
+    font-size: 34px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.service-unlock-presets {
+    width: min(100%, 640px);
+    margin: 14px auto 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+}
+
+#service-unlock-page .service-config-footer {
+    width: min(100%, 640px);
+    margin-right: auto;
+    margin-left: auto;
 }
 
 /* Service Toast */

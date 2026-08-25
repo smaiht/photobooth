@@ -85,13 +85,17 @@ STATUS_REPORT_INTERVAL_SECONDS = 30 * 60
 MAX_UNLOCK_SESSIONS = 1000
 DEFAULT_MULTI_PRINT_MAX_SHEETS = 6
 MAX_MULTI_PRINT_SHEETS = 20
-LOCAL_SERVICE_ACTIONS = frozenset({
-    "unblock",
+LOCAL_CLEAR_ACTIONS = (
     "clear_print_queue",
     "clear_photos",
     "clear_print_jobs",
     "clear_logs",
-})
+)
+LOCAL_SERVICE_ACTIONS = frozenset((
+    "unblock",
+    "clear_all",
+    *LOCAL_CLEAR_ACTIONS,
+))
 
 _event_history_ready = False
 
@@ -1637,6 +1641,23 @@ async def service_action(payload: dict):
             "message": f"Неизвестное сервисное действие: {command_name}",
         }
     # Call the booth handler directly; no control channel or VPS is involved.
+    if command_name == "clear_all":
+        errors = []
+        for clear_command in LOCAL_CLEAR_ACTIONS:
+            result = await handle_disk_command({
+                "command_id": uuid.uuid4().hex,
+                "command": clear_command,
+                "data": None,
+            })
+            if result.get("status") != "ok":
+                errors.append(result.get("message", clear_command))
+        return {
+            "status": "error" if errors else "ok",
+            "message": (
+                "Не всё очищено: " + " | ".join(errors)
+                if errors else "Полная очистка завершена"
+            ),
+        }
     command = {
         "command_id": uuid.uuid4().hex,
         "command": command_name,
