@@ -37,7 +37,6 @@ const templateSkip = document.getElementById("template-skip");
 const templateMulti = document.getElementById("template-multi");
 const templatePrint = document.getElementById("template-print");
 const templatePrintCount = document.getElementById("template-print-count");
-const templateTitle = document.querySelector(".template-title");
 const photoChoicePanel = document.getElementById("photo-choice-panel");
 const photoChoiceOptions = document.getElementById("photo-choice-options");
 const frameOn = document.getElementById("frame-on");
@@ -656,7 +655,6 @@ function _doSwitch(state, data) {
         templateSkip.disabled = false;
         syncMultiPrintConfig(data);
         renderTemplateOptions(data.templates);
-        syncMultiCardTop();
         startTemplateTimer(data.timeout ?? config.template_select_timeout ?? 5);
     } else {
         clearInterval(templateTimeout);
@@ -817,17 +815,6 @@ function syncMultiPrintConfig(data = {}) {
     templateMulti.disabled = templateSkip.disabled;
 }
 
-function syncMultiCardTop() {
-    if (templateMulti.hidden) {
-        templateTitle.style.removeProperty("--multi-card-top");
-        return;
-    }
-    const toggleRect = templateMulti.getBoundingClientRect();
-    const titleRect = templateTitle.getBoundingClientRect();
-    const top = toggleRect.top - titleRect.top - toggleRect.height * 0.18;
-    templateTitle.style.setProperty("--multi-card-top", `${top}px`);
-}
-
 function setMultiSelect(active) {
     multiSelectActive = active === true && multiPrintAvailable;
     screens.template.classList.toggle("multi-select", multiSelectActive);
@@ -841,7 +828,6 @@ function setMultiSelect(active) {
     // would be impossible for the guest to check.
     if (!multiSelectActive) printBasket.clear();
     renderBasket();
-    syncMultiCardTop();
 }
 
 templateMulti.addEventListener("click", (event) => {
@@ -979,7 +965,6 @@ function resetTemplateSelection() {
     screens.template.classList.remove("multi-select");
     templateMulti.setAttribute("aria-pressed", "false");
     templateMulti.setAttribute("aria-label", "Включить режим «Несколько копий»");
-    templateTitle.style.removeProperty("--multi-card-top");
     templateMulti.hidden = true;
     templatePrint.hidden = true;
     templatePrint.disabled = true;
