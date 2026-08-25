@@ -431,7 +431,9 @@ html, body {
     .idle-tap-hand,
     .idle-tap-ring,
     .template-hero-orb-surface,
-    .template-hero-orb-backdrop {
+    .template-hero-orb-backdrop,
+    #template-print,
+    #template-print::after {
         animation-play-state: paused !important;
     }
 
@@ -654,13 +656,13 @@ html, body {
     inset: 0;
     z-index: 0;
     border-radius: 50%;
-    background: #ff6689;
+    background: #2752e7;
     animation: template-backdrop-breathe 3s ease-in-out infinite alternate;
     will-change: border-radius, clip-path, transform;
 }
 
 #screen-template.multi-select .template-hero-orb-backdrop {
-    background: #f54f7a;
+    background: #1d42c9;
 }
 
 .template-hero-orb-surface {
@@ -953,46 +955,65 @@ html, body {
     padding: 0.5vw 1.2vw;
     border: 0;
     border-radius: 999px;
-    background: #e74676;
+    background: #FF2973;
     color: #fff;
     font-family: inherit;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-    box-shadow: 0 0.45vw 1.4vw rgba(188, 39, 84, 0.24);
-    transition: transform 0.1s ease, box-shadow 0.1s ease;
+    box-shadow: 0 0.5vw 1.6vw rgba(255, 41, 115, 0.38);
+    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.15s ease;
 }
 #template-print[hidden] { display: none; }
 #template-print:active {
-    transform: scale(0.98);
-    box-shadow: 0 0.2vw 0.7vw rgba(188, 39, 84, 0.2);
+    transform: scale(0.96) !important;
+    box-shadow: 0 0.2vw 0.8vw rgba(255, 41, 115, 0.3);
 }
 #template-print:disabled {
     background: #e5e2dd;
     color: #99958f;
     box-shadow: none;
+    animation: none;
 }
+#template-print:not(:disabled) {
+    animation: template-print-active-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes template-print-active-pulse {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0.5vw 1.6vw rgba(255, 41, 115, 0.4), 0 0 0 0 rgba(255, 41, 115, 0.3);
+    }
+    50% {
+        transform: scale(1.025);
+        box-shadow: 0 0.7vw 2.2vw rgba(255, 41, 115, 0.55), 0 0 1.2vw rgba(255, 41, 115, 0.35);
+    }
+}
+
 #template-print::after {
     content: "";
     position: absolute;
-    inset: -0.12vw;
-    border: 0.12vw solid #e74676;
+    inset: 0;
+    border: 0.24vw solid #FF2973;
     border-radius: inherit;
     opacity: 0;
     pointer-events: none;
 }
 #template-print:not(:disabled)::after {
-    animation: template-print-ripple 1.4s ease-out infinite;
+    animation: template-print-ripple 1.6s cubic-bezier(0.1, 0.5, 0.2, 1) infinite;
 }
 
 @keyframes template-print-ripple {
     0% {
-        opacity: 0.65;
+        opacity: 0.85;
         transform: scale(1);
+    }
+    60% {
+        opacity: 0.4;
     }
     100% {
         opacity: 0;
-        transform: scale(1.14, 1.28);
+        transform: scale(1.18, 1.38);
     }
 }
 
