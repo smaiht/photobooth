@@ -544,8 +544,8 @@ html, body {
     display: block;
     width: auto;
     height: auto;
-    max-width: 21.5vw;
-    max-height: 64vh;
+    max-width: 22vw;
+    max-height: 80vh;
     transform-origin: center;
     filter: drop-shadow(0 0.45vh 0.9vh rgba(0, 0, 0, 0.28));
     will-change: transform;
