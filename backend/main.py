@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 
@@ -85,6 +85,13 @@ STATUS_REPORT_INTERVAL_SECONDS = 30 * 60
 MAX_UNLOCK_SESSIONS = 1000
 DEFAULT_MULTI_PRINT_MAX_SHEETS = 6
 MAX_MULTI_PRINT_SHEETS = 20
+LOCAL_SERVICE_ACTIONS = frozenset({
+    "unblock",
+    "clear_print_queue",
+    "clear_photos",
+    "clear_print_jobs",
+    "clear_logs",
+})
 
 _event_history_ready = False
 
@@ -1599,6 +1606,96 @@ def set_network(payload: dict):
         payload.get("name", ""),
         payload.get("enabled"),
     )
+
+
+@app.get("/api/service/config")
+def get_service_config():
+    try:
+        app_config = json.loads(
+            (ROOT_DIR / "config_app.json").read_text(encoding="utf-8"))
+        camera_config = json.loads(
+            (ROOT_DIR / "config_camera.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error": str(exc)}
+    if not isinstance(app_config, dict) or not isinstance(camera_config, dict):
+        return {"ok": False, "error": "Конфиг должен быть JSON-объектом"}
+    return {
+        "ok": True,
+        "application": app_config,
+        "camera": camera_config,
+        "start_locked": _start_locked(),
+        "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
+    }
+
+
+@app.post("/api/service/action")
+async def service_action(payload: dict):
+    command_name = str(payload.get("command") or "").strip()
+    if command_name not in LOCAL_SERVICE_ACTIONS:
+        return {
+            "status": "error",
+            "message": f"Неизвестное сервисное действие: {command_name}",
+        }
+    # Call the booth handler directly; no control channel or VPS is involved.
+    command = {
+        "command_id": uuid.uuid4().hex,
+        "command": command_name,
+        "data": payload.get("data"),
+    }
+    return await handle_disk_command(command)
+
+
+@app.post("/api/service/config/apply")
+async def apply_service_config(
+    payload: dict,
+    background_tasks: BackgroundTasks,
+):
+    app_changes = payload.get("application", {})
+    camera_changes = payload.get("camera", {})
+    if not isinstance(app_changes, dict) or not isinstance(camera_changes, dict):
+        return {
+            "status": "error",
+            "message": "Изменения конфига должны быть JSON-объектами",
+        }
+
+    submitted_count = len(app_changes) + len(camera_changes)
+    if not submitted_count:
+        return {
+            "status": "ok",
+            "message": "Изменений нет",
+            "restart": False,
+        }
+
+    processed_count = 0
+    sections = (
+        ("set_app_config", app_changes),
+        ("set_camera_config", camera_changes),
+    )
+    for command_name, section_changes in sections:
+        for field, value in section_changes.items():
+            result = await handle_disk_command({
+                "command_id": uuid.uuid4().hex,
+                "command": command_name,
+                "data": {"field": field, "value": value},
+            })
+            result.pop("_post_action", None)
+            if result.get("status") != "ok":
+                return {
+                    "status": "error",
+                    "message": (
+                        f"{result.get('message', 'Конфиг не изменён')}. "
+                        f"Полей до ошибки обработано: {processed_count}. "
+                        "Перезапуск не выполнен"
+                    ),
+                    "restart": False,
+                }
+            processed_count += 1
+    background_tasks.add_task(_do_restart)
+    return {
+        "status": "ok",
+        "message": f"Полей обработано: {processed_count}",
+        "restart": True,
+    }
 
 
 async def _do_restart():

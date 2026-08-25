@@ -60,10 +60,31 @@ const cameraStatusTitle = document.getElementById("camera-status-title");
 const cameraStatusSubtitle = document.getElementById("camera-status-subtitle");
 const tapLockStatus = document.querySelector(".tap-lock-status");
 const serviceModal = document.getElementById("service-modal");
+const serviceBack = document.getElementById("service-back");
+const serviceTitle = document.getElementById("service-title");
 const serviceClose = document.getElementById("service-close");
 const serviceToast = document.getElementById("service-toast");
+const serviceHome = document.getElementById("service-home");
+const serviceConfigPage = document.getElementById("service-config-page");
+const serviceConfigFields = document.getElementById("service-config-fields");
+const serviceConfigDiscard = document.getElementById("service-config-discard");
+const serviceConfigApply = document.getElementById("service-config-apply");
+const serviceEditorPage = document.getElementById("service-editor-page");
+const serviceEditorComment = document.getElementById("service-editor-comment");
+const serviceEditorOptions = document.getElementById("service-editor-options");
+const serviceEditorInput = document.getElementById("service-editor-input");
+const serviceEditorCancel = document.getElementById("service-editor-cancel");
+const serviceEditorSave = document.getElementById("service-editor-save");
 const networkAdapters = document.getElementById("network-adapters");
+const btnConfigApp = document.getElementById("btn-config-app");
+const btnConfigCamera = document.getElementById("btn-config-camera");
 const btnTestSession = document.getElementById("btn-test-session");
+const btnBoothUnblock = document.getElementById("btn-booth-unblock");
+const btnBoothBlock = document.getElementById("btn-booth-block");
+const btnClearPrintQueue = document.getElementById("btn-clear-print-queue");
+const btnClearPhotos = document.getElementById("btn-clear-photos");
+const btnClearPrintJobs = document.getElementById("btn-clear-print-jobs");
+const btnClearLogs = document.getElementById("btn-clear-logs");
 const btnSysLock = document.getElementById("btn-sys-lock");
 const btnSysTaskmgr = document.getElementById("btn-sys-taskmgr");
 const btnSysKeyboard = document.getElementById("btn-sys-keyboard");
@@ -1372,6 +1393,13 @@ if (previewMode) {
 
 // --- Service Menu ---
 let toastTimer = null;
+let serviceConfig = null;
+let serviceConfigPromise = null;
+let serviceSection = "application";
+let serviceEditedField = null;
+let serviceEditedValue = null;
+const serviceDraft = { application: {}, camera: {} };
+
 function showServiceToast(text, duration = 3000) {
     if (!serviceToast) return;
     serviceToast.textContent = text;
@@ -1380,6 +1408,15 @@ function showServiceToast(text, duration = 3000) {
     toastTimer = setTimeout(() => {
         serviceToast.hidden = true;
     }, duration);
+}
+
+function renderNetworkNotice(text, loading = false) {
+    if (!networkAdapters) return;
+    const notice = document.createElement("div");
+    notice.className = loading ? "service-loader" : "service-adapters-empty";
+    if (loading) notice.appendChild(document.createElement("span"));
+    notice.append(document.createTextNode(text));
+    networkAdapters.replaceChildren(notice);
 }
 
 function updateAdapterButton(button, enabled) {
@@ -1395,10 +1432,7 @@ function renderNetworkAdapters(adapters) {
     if (!networkAdapters) return;
     networkAdapters.replaceChildren();
     if (!adapters.length) {
-        const empty = document.createElement("div");
-        empty.className = "service-adapters-empty";
-        empty.textContent = "Сетевых адаптеров нет";
-        networkAdapters.appendChild(empty);
+        renderNetworkNotice("Сетевых адаптеров нет");
         return;
     }
     adapters.forEach(adapter => {
@@ -1414,7 +1448,6 @@ function renderNetworkAdapters(adapters) {
         const status = document.createElement("span");
         status.className = "service-btn-status";
         button.append(label, status);
-
         updateAdapterButton(button, adapter.enabled);
         button.addEventListener("click", () => {
             setNetworkAdapter(adapter.name, button.dataset.enabled !== "true");
@@ -1427,21 +1460,16 @@ async function refreshNetworkStatus() {
     try {
         const res = await fetch("/api/network/status");
         const data = await res.json();
-        if (!res.ok || !data.ok) {
-            throw new Error(data.error || "Ошибка статуса");
-        }
+        if (!res.ok || !data.ok) throw new Error(data.error || "Ошибка статуса");
         renderNetworkAdapters(data.adapters || []);
     } catch (e) {
-        if (networkAdapters) networkAdapters.replaceChildren();
+        renderNetworkNotice("Адаптеры не загружены");
         showServiceToast(`Сеть: ${e.message || "Ошибка запроса"}`);
     }
 }
 
 async function setNetworkAdapter(name, enabled) {
-    if (!name) {
-        showServiceToast("Имя адаптера не указано");
-        return;
-    }
+    if (!name) return;
     try {
         const res = await fetch("/api/network/set", {
             method: "POST",
@@ -1449,22 +1477,16 @@ async function setNetworkAdapter(name, enabled) {
             body: JSON.stringify({ name, enabled }),
         });
         const data = await res.json();
-        if (res.ok && data.ok) {
-            const statusText = data.enabled ? "ВКЛ" : "ВЫКЛ";
-            showServiceToast(`${data.name}: ${statusText}`);
-            if (networkAdapters) {
-                for (const button of networkAdapters.querySelectorAll("button[data-name]")) {
-                    if (button.dataset.name === data.name) {
-                        updateAdapterButton(button, data.enabled);
-                        break;
-                    }
-                }
+        if (!res.ok || !data.ok) throw new Error(data.error || "Ошибка");
+        showServiceToast(`${data.name}: ${data.enabled ? "ВКЛ" : "ВЫКЛ"}`);
+        for (const button of networkAdapters.querySelectorAll("button[data-name]")) {
+            if (button.dataset.name === data.name) {
+                updateAdapterButton(button, data.enabled);
+                break;
             }
-        } else {
-            showServiceToast(`${name}: ${data.error || "Ошибка"}`);
         }
     } catch (e) {
-        showServiceToast(`${name}: Ошибка запроса`);
+        showServiceToast(`${name}: ${e.message || "Ошибка запроса"}`);
     }
 }
 
@@ -1476,29 +1498,358 @@ async function triggerSystemAction(action, title) {
             body: JSON.stringify({ action }),
         });
         const data = await res.json();
-        if (data.ok) {
-            showServiceToast(`${title}: Выполнено`);
-        } else {
-            showServiceToast(`${title}: ${data.error || "Ошибка"}`);
-        }
+        showServiceToast(data.ok
+            ? `${title}: Выполнено`
+            : `${title}: ${data.error || "Ошибка"}`);
     } catch (e) {
         showServiceToast(`${title}: Ошибка`);
     }
 }
 
-function openServiceModal() {
-    if (!serviceModal) return;
-    serviceModal.hidden = false;
-    refreshNetworkStatus();
+function valueText(value) {
+    if (value === true) return "ВКЛ";
+    if (value === false) return "ВЫКЛ";
+    return String(value);
 }
 
-function closeServiceModal() {
+function sameValue(left, right) {
+    return left === right;
+}
+
+function draftCount() {
+    return Object.keys(serviceDraft.application).length
+        + Object.keys(serviceDraft.camera).length;
+}
+
+function clearDraft() {
+    for (const section of ["application", "camera"]) {
+        for (const key of Object.keys(serviceDraft[section])) {
+            delete serviceDraft[section][key];
+        }
+    }
+}
+
+function updateServiceLabels() {
+    const appCount = Object.keys(serviceDraft.application).length;
+    const cameraCount = Object.keys(serviceDraft.camera).length;
+    btnConfigApp.textContent = appCount
+        ? `Конфиг приложения · ${appCount}`
+        : "Конфиг приложения";
+    btnConfigCamera.textContent = cameraCount
+        ? `Конфиг камеры · ${cameraCount}`
+        : "Конфиг камеры";
+    btnBoothUnblock.textContent = serviceConfig
+        ? `Разблокировать на N · сейчас ${serviceConfig.unlock_sessions_remaining}`
+        : "Разблокировать на N";
+}
+
+function showServiceHome() {
+    updateServiceLabels();
+    serviceHome.hidden = false;
+    serviceConfigPage.hidden = true;
+    serviceEditorPage.hidden = true;
+    serviceBack.hidden = true;
+    serviceTitle.textContent = "СЕРВИС";
+    serviceModal.querySelector(".service-dialog").scrollTop = 0;
+}
+
+function showConfigPage() {
+    serviceHome.hidden = true;
+    serviceConfigPage.hidden = false;
+    serviceEditorPage.hidden = true;
+    serviceBack.hidden = false;
+    serviceTitle.textContent = serviceSection === "application"
+        ? "КОНФИГ ПРИЛОЖЕНИЯ"
+        : "КОНФИГ КАМЕРЫ";
+    serviceModal.querySelector(".service-dialog").scrollTop = 0;
+}
+
+async function loadServiceConfig(force = false) {
+    if (serviceConfig && !force) return serviceConfig;
+    if (!serviceConfigPromise) {
+        serviceConfigPromise = fetch("/api/service/config", { cache: "no-store" })
+            .then(res => res.json().then(data => ({ res, data })))
+            .then(({ res, data }) => {
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.error || "Конфиги не загружены");
+                }
+                serviceConfig = data;
+                updateServiceLabels();
+                return data;
+            })
+            .finally(() => {
+                serviceConfigPromise = null;
+            });
+    }
+    return serviceConfigPromise;
+}
+
+function configObject(section) {
+    return serviceConfig?.[section] || {};
+}
+
+function configFields(section) {
+    const config = configObject(section);
+    const keys = section === "application"
+        ? config._admin_editable_fields
+        : Object.keys(config).filter(key => !key.startsWith("_"));
+    if (!Array.isArray(keys)) throw new Error("Нет списка редактируемых полей");
+    return keys
+        .filter(key => ["boolean", "number", "string"].includes(typeof config[key]))
+        .map(key => ({
+            key,
+            value: config[key],
+            options: config[`_${key}_options`],
+            range: config[`_${key}_range`],
+            comment: config[`_${key}_comment`],
+        }));
+}
+
+function currentFieldValue(section, field) {
+    return Object.prototype.hasOwnProperty.call(serviceDraft[section], field.key)
+        ? serviceDraft[section][field.key]
+        : field.value;
+}
+
+function setDraftValue(section, field, value) {
+    if (sameValue(field.value, value)) {
+        delete serviceDraft[section][field.key];
+    } else {
+        serviceDraft[section][field.key] = value;
+    }
+    updateServiceLabels();
+    updateConfigFooter();
+}
+
+function updateConfigFooter() {
+    const count = draftCount();
+    serviceConfigApply.disabled = count === 0;
+    serviceConfigDiscard.disabled = count === 0;
+    serviceConfigApply.textContent = count
+        ? `Применить (${count}) и перезапустить`
+        : "Применить и перезапустить";
+}
+
+function openFieldEditor(field) {
+    serviceEditedField = field;
+    serviceEditedValue = currentFieldValue(serviceSection, field);
+    serviceEditorComment.textContent = field.comment || "";
+    serviceEditorComment.hidden = !field.comment;
+    serviceEditorOptions.replaceChildren();
+    serviceEditorInput.hidden = true;
+
+    let options = field.options;
+    if (!Array.isArray(options) && typeof field.value === "boolean") {
+        options = [true, false];
+    }
+    if (Array.isArray(options)) {
+        options.forEach(optionValue => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "service-btn service-option";
+            button.textContent = valueText(optionValue);
+            button.classList.toggle(
+                "is-selected", sameValue(optionValue, serviceEditedValue));
+            button.addEventListener("click", () => {
+                serviceEditedValue = optionValue;
+                for (const candidate of serviceEditorOptions.children) {
+                    candidate.classList.toggle("is-selected", candidate === button);
+                }
+            });
+            serviceEditorOptions.appendChild(button);
+        });
+    } else {
+        serviceEditorInput.hidden = false;
+        serviceEditorInput.type = typeof field.value === "number"
+            ? "number"
+            : "text";
+        serviceEditorInput.value = serviceEditedValue;
+        serviceEditorInput.step = Number.isInteger(field.value) ? "1" : "any";
+        serviceEditorInput.removeAttribute("min");
+        serviceEditorInput.removeAttribute("max");
+        if (Array.isArray(field.range)) {
+            serviceEditorInput.min = field.range[0];
+            serviceEditorInput.max = field.range[1];
+            if (field.range.length === 3) {
+                serviceEditorInput.step = field.range[2];
+            }
+        }
+    }
+
+    serviceHome.hidden = true;
+    serviceConfigPage.hidden = true;
+    serviceEditorPage.hidden = false;
+    serviceBack.hidden = false;
+    serviceTitle.textContent = field.key;
+    serviceModal.querySelector(".service-dialog").scrollTop = 0;
+}
+
+function saveEditedField() {
+    if (!serviceEditedField) return;
+    if (!serviceEditorInput.hidden) {
+        const raw = serviceEditorInput.value.trim();
+        if (!serviceEditorInput.checkValidity()) {
+            showServiceToast("Значение вне допустимого диапазона");
+            return;
+        }
+        serviceEditedValue = typeof serviceEditedField.value === "number"
+            ? Number(raw)
+            : raw;
+        if (!raw || (typeof serviceEditedValue === "number"
+                && !Number.isFinite(serviceEditedValue))) {
+            showServiceToast("Некорректное значение");
+            return;
+        }
+    }
+    setDraftValue(serviceSection, serviceEditedField, serviceEditedValue);
+    serviceEditedField = null;
+    renderConfigTable();
+    showConfigPage();
+}
+
+function renderConfigTable() {
+    serviceConfigFields.replaceChildren();
+    configFields(serviceSection).forEach(field => {
+        const row = document.createElement("div");
+        row.className = "service-config-row";
+        row.classList.toggle("is-changed",
+            Object.prototype.hasOwnProperty.call(
+                serviceDraft[serviceSection], field.key));
+        row.title = field.comment || "";
+
+        const key = document.createElement("td");
+        key.className = "service-config-key";
+        key.textContent = field.key;
+        const valueCell = document.createElement("td");
+        const value = document.createElement("button");
+        value.type = "button";
+        value.className = "service-btn service-config-value";
+        value.textContent = valueText(currentFieldValue(serviceSection, field));
+        value.addEventListener("click", () => openFieldEditor(field));
+        valueCell.appendChild(value);
+        row.append(key, valueCell);
+        serviceConfigFields.appendChild(row);
+    });
+    updateConfigFooter();
+}
+
+async function openConfig(section) {
+    try {
+        await loadServiceConfig();
+        serviceSection = section;
+        renderConfigTable();
+        showConfigPage();
+    } catch (e) {
+        showServiceToast(e.message || "Конфиг не загружен");
+    }
+}
+
+function draftSummary() {
+    const lines = [];
+    for (const section of ["application", "camera"]) {
+        for (const [key, value] of Object.entries(serviceDraft[section])) {
+            lines.push(`${key} → ${valueText(value)}`);
+        }
+    }
+    return lines.join("\n");
+}
+
+async function reloadDraftAfterError() {
+    const wanted = {
+        application: { ...serviceDraft.application },
+        camera: { ...serviceDraft.camera },
+    };
+    serviceConfig = null;
+    await loadServiceConfig(true);
+    clearDraft();
+    for (const section of ["application", "camera"]) {
+        for (const [key, value] of Object.entries(wanted[section])) {
+            if (!sameValue(configObject(section)[key], value)) {
+                serviceDraft[section][key] = value;
+            }
+        }
+    }
+    renderConfigTable();
+}
+
+async function applyConfigDraft() {
+    if (!draftCount()) return;
+    if (!window.confirm(
+        `Применить изменения и перезапустить?\n\n${draftSummary()}`)) return;
+    serviceConfigApply.disabled = true;
+    showServiceToast("Сохранение конфига…", 30000);
+    try {
+        const res = await fetch("/api/service/config/apply", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(serviceDraft),
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== "ok") {
+            throw new Error(data.message || "Конфиг не изменён");
+        }
+        clearDraft();
+        closeServiceModal(true);
+        showServiceToast("Конфиг сохранён. Приложение перезапускается…", 10000);
+    } catch (e) {
+        showServiceToast(e.message || "Конфиг не изменён", 10000);
+        try {
+            await reloadDraftAfterError();
+        } catch (_reloadError) {
+            renderConfigTable();
+        }
+    }
+}
+
+async function runLocalServiceAction(command, data = null) {
+    showServiceToast("Выполняется…", 30000);
+    try {
+        const res = await fetch("/api/service/action", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ command, data }),
+        });
+        const result = await res.json();
+        if (!res.ok || result.status !== "ok") {
+            throw new Error(result.message || "Ошибка");
+        }
+        showServiceToast(result.message || "Выполнено", 5000);
+        if (serviceConfig && "unlock_sessions_remaining" in result) {
+            serviceConfig.unlock_sessions_remaining = result.unlock_sessions_remaining;
+            updateServiceLabels();
+        }
+        return true;
+    } catch (e) {
+        showServiceToast(e.message || "Ошибка запроса", 8000);
+        return false;
+    }
+}
+
+function openServiceModal() {
     if (!serviceModal) return;
+    serviceConfig = null;
+    serviceEditedField = null;
+    clearDraft();
+    showServiceHome();
+    renderNetworkNotice("Загрузка адаптеров…", true);
+    serviceModal.hidden = false;
+    refreshNetworkStatus();
+    loadServiceConfig().catch(() => {});
+}
+
+function closeServiceModal(force = false) {
+    if (!serviceModal) return false;
+    if (!force && draftCount()
+            && !window.confirm("Отменить несохранённые изменения конфига?")) {
+        return false;
+    }
+    clearDraft();
+    serviceEditedField = null;
     serviceModal.hidden = true;
+    return true;
 }
 
 // 2 taps in the top-left corner, then 2 in the top-right corner.
-// This only observes pointer events; it never covers or blocks the real UI.
 let secretTapsLeft = 0;
 let secretTapsRight = 0;
 let secretTapTimer = null;
@@ -1534,41 +1885,97 @@ window.addEventListener("pointerdown", (e) => {
     }
 }, { capture: true });
 
-if (serviceClose) serviceClose.addEventListener("click", closeServiceModal);
-if (serviceModal) {
-    serviceModal.addEventListener("click", (e) => {
-        if (e.target === serviceModal) closeServiceModal();
-    });
-}
-
-if (btnTestSession) {
-    btnTestSession.addEventListener("click", () => {
-        if (send({ type: "start_session", test_session: true })) {
-            closeServiceModal();
-        }
-    });
-}
-if (btnSysLock) btnSysLock.addEventListener("click", () => triggerSystemAction("lock", "Блокировка экрана"));
-if (btnSysTaskmgr) btnSysTaskmgr.addEventListener("click", () => triggerSystemAction("taskmgr", "Диспетчер задач"));
-if (btnSysKeyboard) btnSysKeyboard.addEventListener("click", () => triggerSystemAction("keyboard", "Экранная клавиатура"));
-if (btnAppRestart) {
-    btnAppRestart.addEventListener("click", () => {
-        closeServiceModal();
-        showServiceToast("Приложение перезапускается…", 10000);
-        fetch("/api/restart", { method: "POST" }).catch(() => {});
-    });
-}
-if (btnSysLogoff) {
-    btnSysLogoff.addEventListener("click", () => {
-        if (window.confirm("Выйти из системы?")) {
-            triggerSystemAction("logoff", "Выход из системы");
-        }
-    });
-}
-
-window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && serviceModal && !serviceModal.hidden) {
-        e.preventDefault();
-        closeServiceModal();
+serviceClose?.addEventListener("click", () => closeServiceModal());
+serviceBack?.addEventListener("click", () => {
+    if (!serviceEditorPage.hidden) {
+        serviceEditedField = null;
+        showConfigPage();
+    } else {
+        showServiceHome();
     }
+});
+serviceModal?.addEventListener("click", e => {
+    if (e.target === serviceModal) closeServiceModal();
+});
+btnConfigApp?.addEventListener("click", () => openConfig("application"));
+btnConfigCamera?.addEventListener("click", () => openConfig("camera"));
+serviceConfigApply?.addEventListener("click", applyConfigDraft);
+serviceConfigDiscard?.addEventListener("click", () => {
+    if (draftCount() && !window.confirm("Отменить все изменения?")) return;
+    clearDraft();
+    renderConfigTable();
+});
+serviceEditorCancel?.addEventListener("click", () => {
+    serviceEditedField = null;
+    showConfigPage();
+});
+serviceEditorSave?.addEventListener("click", saveEditedField);
+serviceEditorInput?.addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        saveEditedField();
+    }
+});
+
+btnTestSession?.addEventListener("click", () => {
+    if (!closeServiceModal()) return;
+    send({ type: "start_session", test_session: true });
+});
+btnBoothUnblock?.addEventListener("click", async () => {
+    try {
+        const data = await loadServiceConfig();
+        const raw = window.prompt(
+            "Количество следующих разрешённых сессий (1–1000)",
+            Math.max(1, data.unlock_sessions_remaining || 1),
+        );
+        if (raw === null) return;
+        if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > 1000) {
+            showServiceToast("Нужно целое число от 1 до 1000");
+            return;
+        }
+        await runLocalServiceAction("unblock", { sessions: Number(raw) });
+    } catch (e) {
+        showServiceToast(e.message || "Данные не загружены");
+    }
+});
+btnBoothBlock?.addEventListener("click", () => {
+    if (window.confirm("Заблокировать запуск новых сессий?")) {
+        runLocalServiceAction("unblock", { sessions: 0 });
+    }
+});
+
+const destructiveActions = [
+    [btnClearPrintQueue, "clear_print_queue", "Очистить очереди печати?"],
+    [btnClearPhotos, "clear_photos", "Очистить локальную папку photos?"],
+    [btnClearPrintJobs, "clear_print_jobs", "Очистить локальную папку photos_print_jobs?"],
+    [btnClearLogs, "clear_logs", "Очистить логи фотобудки?"],
+];
+destructiveActions.forEach(([button, command, question]) => {
+    button?.addEventListener("click", () => {
+        if (window.confirm(question)) runLocalServiceAction(command);
+    });
+});
+
+btnSysLock?.addEventListener("click", () => triggerSystemAction("lock", "Блокировка экрана"));
+btnSysTaskmgr?.addEventListener("click", () => triggerSystemAction("taskmgr", "Диспетчер задач"));
+btnSysKeyboard?.addEventListener("click", () => triggerSystemAction("keyboard", "Экранная клавиатура"));
+btnAppRestart?.addEventListener("click", () => {
+    if (!closeServiceModal()) return;
+    showServiceToast("Приложение перезапускается…", 10000);
+    fetch("/api/restart", { method: "POST" }).catch(() => {});
+});
+btnSysLogoff?.addEventListener("click", () => {
+    if (window.confirm("Выйти из системы?")) {
+        triggerSystemAction("logoff", "Выход из системы");
+    }
+});
+
+window.addEventListener("keydown", e => {
+    if (e.key !== "Escape" || !serviceModal || serviceModal.hidden) return;
+    e.preventDefault();
+    if (!serviceEditorPage.hidden) {
+        serviceEditedField = null;
+        showConfigPage();
+    } else if (!serviceConfigPage.hidden) showServiceHome();
+    else closeServiceModal();
 });

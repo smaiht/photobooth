@@ -210,18 +210,79 @@
         <div id="service-modal" hidden>
             <div class="service-dialog">
                 <div class="service-header">
-                    <span class="service-title">СЕРВИС</span>
+                    <button id="service-back" type="button" aria-label="Назад" hidden>←</button>
+                    <span id="service-title" class="service-title">СЕРВИС</span>
                     <button id="service-close" type="button" aria-label="Закрыть">✕</button>
                 </div>
-                <div id="network-adapters" class="service-grid"></div>
-                <div class="service-grid">
-                    <button id="btn-test-session" class="service-btn" type="button">Тестовая съёмка</button>
-                    <button id="btn-sys-lock" class="service-btn" type="button">Заблокировать экран</button>
-                    <button id="btn-sys-taskmgr" class="service-btn" type="button">Диспетчер задач</button>
-                    <button id="btn-sys-keyboard" class="service-btn" type="button">Экранная клавиатура</button>
-                    <button id="btn-app-restart" class="service-btn service-btn-danger" type="button">Перезапустить приложение</button>
-                    <button id="btn-sys-logoff" class="service-btn service-btn-danger" type="button">Выйти из системы</button>
+
+                <div id="service-home" class="service-page">
+                    <section class="service-section">
+                        <h2 class="service-section-title">Настройки</h2>
+                        <div class="service-grid">
+                            <button id="btn-config-app" class="service-btn" type="button">Конфиг приложения</button>
+                            <button id="btn-config-camera" class="service-btn" type="button">Конфиг камеры</button>
+                        </div>
+                    </section>
+
+                    <section class="service-section">
+                        <h2 class="service-section-title">Съёмка</h2>
+                        <div class="service-grid">
+                            <button id="btn-test-session" class="service-btn" type="button">Тестовая съёмка</button>
+                            <button id="btn-booth-unblock" class="service-btn" type="button">Разблокировать на N</button>
+                            <button id="btn-booth-block" class="service-btn service-btn-danger" type="button">Заблокировать съёмку</button>
+                        </div>
+                    </section>
+
+                    <section class="service-section">
+                        <h2 class="service-section-title">Очистка</h2>
+                        <div class="service-grid">
+                            <button id="btn-clear-print-queue" class="service-btn service-btn-danger" type="button">Очистить очереди печати</button>
+                            <button id="btn-clear-photos" class="service-btn service-btn-danger" type="button">Очистить photos</button>
+                            <button id="btn-clear-print-jobs" class="service-btn service-btn-danger" type="button">Очистить photos_print_jobs</button>
+                            <button id="btn-clear-logs" class="service-btn service-btn-danger" type="button">Очистить логи</button>
+                        </div>
+                    </section>
+
+                    <section class="service-section">
+                        <h2 class="service-section-title">Сеть</h2>
+                        <div id="network-adapters" class="service-grid">
+                            <div class="service-loader"><span></span>Загрузка адаптеров…</div>
+                        </div>
+                    </section>
+
+                    <section class="service-section">
+                        <h2 class="service-section-title">Система</h2>
+                        <div class="service-grid">
+                            <button id="btn-sys-lock" class="service-btn" type="button">Заблокировать экран</button>
+                            <button id="btn-sys-taskmgr" class="service-btn" type="button">Диспетчер задач</button>
+                            <button id="btn-sys-keyboard" class="service-btn" type="button">Экранная клавиатура</button>
+                            <button id="btn-app-restart" class="service-btn service-btn-danger" type="button">Перезапустить приложение</button>
+                            <button id="btn-sys-logoff" class="service-btn service-btn-danger" type="button">Выйти из системы</button>
+                        </div>
+                    </section>
                 </div>
+
+                <div id="service-config-page" class="service-page" hidden>
+                    <table class="service-config-table">
+                        <thead><tr><th>Ключ</th><th>Значение</th></tr></thead>
+                        <tbody id="service-config-fields"></tbody>
+                    </table>
+                    <div class="service-config-footer">
+                        <button id="service-config-discard" class="service-btn" type="button">Отменить изменения</button>
+                        <button id="service-config-apply" class="service-btn service-btn-apply" type="button" disabled>Применить и перезапустить</button>
+                    </div>
+                </div>
+
+                <div id="service-editor-page" class="service-page" hidden>
+                    <div id="service-editor-comment" class="service-editor-comment" hidden></div>
+                    <div id="service-editor-options" class="service-option-grid"></div>
+                    <input id="service-editor-input" class="service-editor-input" autocomplete="off" hidden>
+                    <div class="service-config-footer">
+                        <button id="service-editor-cancel" class="service-btn" type="button">Отмена</button>
+                        <button id="service-editor-save" class="service-btn service-btn-apply" type="button">Сохранить значение</button>
+                    </div>
+                </div>
+
             </div>
         </div>
 

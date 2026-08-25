@@ -129,7 +129,12 @@ def compose(
             )
         if spec.texts:
             draw_text_blocks(
-                canvas, spec.texts, text_values or {}, template_name)
+                canvas,
+                spec.texts,
+                text_values or {},
+                template_name,
+                template_dir=template_dir,
+            )
         return canvas
     except Exception:
         canvas.close()
@@ -551,6 +556,7 @@ def _compose_preview(
                 text_values or {},
                 template_name,
                 scale=scale,
+                template_dir=template_dir,
             )
     except Exception:
         background.close()

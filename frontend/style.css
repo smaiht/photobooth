@@ -1506,23 +1506,25 @@ html, body {
     flex-direction: column;
     gap: 20px;
 }
-
 .service-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 12px;
 }
 
 .service-title {
+    flex: 1;
     font-size: 24px;
     font-weight: 700;
     letter-spacing: 1.5px;
     color: #fff;
 }
 
+#service-back,
 #service-close {
     width: 44px;
     height: 44px;
+    flex: 0 0 44px;
     border: none;
     border-radius: 12px;
     background: rgba(255, 255, 255, 0.1);
@@ -1535,8 +1537,39 @@ html, body {
     touch-action: manipulation;
     transition: background 0.15s;
 }
+#service-back:active,
 #service-close:active {
     background: rgba(255, 255, 255, 0.25);
+}
+#service-back[hidden],
+.service-editor-comment[hidden],
+.service-editor-input[hidden] {
+    display: none;
+}
+
+.service-page[hidden] {
+    display: none;
+}
+
+#service-home:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.service-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.service-section-title {
+    margin: 0;
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
 }
 
 .service-grid {
@@ -1551,9 +1584,37 @@ html, body {
 
 .service-adapters-empty {
     grid-column: 1 / -1;
+    min-height: 68px;
     padding: 12px;
     text-align: center;
     opacity: 0.65;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.service-loader {
+    grid-column: 1 / -1;
+    min-height: 68px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 16px;
+}
+
+.service-loader > span {
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: serviceLoaderSpin 0.8s linear infinite;
+}
+
+@keyframes serviceLoaderSpin {
+    to { transform: rotate(360deg); }
 }
 
 .service-btn {
@@ -1579,6 +1640,11 @@ html, body {
 .service-btn:active {
     background: #383844;
     transform: scale(0.97);
+}
+.service-btn:disabled {
+    cursor: default;
+    opacity: 0.4;
+    transform: none;
 }
 .service-btn-toggle {
     display: flex;
@@ -1612,6 +1678,101 @@ html, body {
 }
 .service-btn-danger:active {
     background: rgba(255, 68, 68, 0.35);
+}
+
+.service-btn-apply {
+    border-color: rgba(0, 230, 118, 0.45);
+    color: #69f0ae;
+}
+
+.service-config-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    background: #2a2a32;
+    color: #fff;
+    overflow: hidden;
+}
+
+.service-config-table th,
+.service-config-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    text-align: left;
+}
+
+.service-config-table th {
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 13px;
+}
+
+.service-config-table th:last-child,
+.service-config-table td:last-child {
+    width: 42%;
+    text-align: right;
+}
+
+.service-config-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.service-config-row.is-changed td {
+    background: rgba(0, 230, 118, 0.08);
+}
+
+.service-config-key {
+    overflow-wrap: anywhere;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.service-config-value {
+    width: 100%;
+    padding: 12px;
+    flex-direction: column;
+    align-items: flex-end;
+    color: #69f0ae;
+    font-size: 17px;
+}
+
+.service-config-footer {
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+.service-editor-comment {
+    margin-bottom: 14px;
+    color: rgba(255, 255, 255, 0.7);
+    white-space: pre-wrap;
+}
+
+.service-option-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 12px;
+}
+
+.service-option.is-selected {
+    border-color: #00e676;
+    color: #69f0ae;
+}
+
+#service-editor-input {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 14px;
+    background: #111116;
+    color: #fff;
+    font-family: inherit;
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.2;
 }
 
 /* Service Toast */

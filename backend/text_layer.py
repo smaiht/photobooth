@@ -196,11 +196,12 @@ def draw_text_blocks(
     values: dict[str, str],
     template_name: str,
     scale: float = 1.0,
+    template_dir: Path | None = None,
 ) -> None:
     """Draw every block onto ``canvas``; log and skip the ones that fail."""
     for index, block in enumerate(blocks):
         try:
-            _draw_block(canvas, block, values, scale)
+            _draw_block(canvas, block, values, scale, template_dir)
         except Exception as exc:
             # The sheet is worth more than its caption.
             log.error(
@@ -214,6 +215,7 @@ def _draw_block(
     block: TextBlock,
     values: dict[str, str],
     scale: float,
+    template_dir: Path | None,
 ) -> None:
     x = round(block.x * scale)
     y = round(block.y * scale)
@@ -223,7 +225,12 @@ def _draw_block(
     prepared = []
     for line in block.lines:
         text = _resolve_text(line.text, values)
-        font = _load_font(line.font, max(1, round(line.size * scale)), line.weight)
+        font = _load_font(
+            line.font,
+            max(1, round(line.size * scale)),
+            line.weight,
+            template_dir,
+        )
         color = _parse_color(line.color)
         stroke_width = (
             max(1, round(line.stroke_width * scale))
@@ -334,8 +341,11 @@ def _load_font(
     name: str,
     size: int,
     weight: int | None,
+    template_dir: Path | None = None,
 ) -> ImageFont.FreeTypeFont:
-    path = FONTS_DIR / name
+    path = template_dir / name if template_dir is not None else None
+    if path is None or not path.is_file():
+        path = FONTS_DIR / name
     if not path.is_file():
         raise ValueError(f"font not found: {name}")
     font = ImageFont.truetype(str(path), size)
