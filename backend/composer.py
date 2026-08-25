@@ -308,6 +308,8 @@ def _validated_template(
             photo_index = raw["photo_index"]
             x = raw["x"]
             y = raw["y"]
+            width = raw.get("width", photo_width)
+            height = raw.get("height", photo_height)
             rotation = raw["rotate"]
         except KeyError as exc:
             raise ValueError(
@@ -325,6 +327,13 @@ def _validated_template(
                 f"invalid coordinates in slot {slot_index} "
                 f"of template {template_name!r}"
             )
+        if (not isinstance(width, int) or isinstance(width, bool) or width <= 0
+                or not isinstance(height, int) or isinstance(height, bool)
+                or height <= 0):
+            raise ValueError(
+                f"invalid size in slot {slot_index} "
+                f"of template {template_name!r}"
+            )
         _rotation_transpose(
             rotation,
             f"photo slot {slot_index} of template {template_name!r}",
@@ -333,8 +342,8 @@ def _validated_template(
             photo_index,
             x,
             y,
-            photo_width,
-            photo_height,
+            width,
+            height,
             rotation,
         ))
 

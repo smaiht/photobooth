@@ -195,7 +195,9 @@ def _write_layout(
         for index, slot in enumerate(slots):
             try:
                 x, y = slot["x"], slot["y"]
-                rectangle = (x, y, x + photo_width - 1, y + photo_height - 1)
+                width = slot.get("width", photo_width)
+                height = slot.get("height", photo_height)
+                rectangle = (x, y, x + width - 1, y + height - 1)
             except (KeyError, TypeError) as exc:
                 raise ValueError(f"template {name!r} has invalid slot {index}") from exc
             if rectangle[2] >= size[0] or rectangle[3] >= size[1]:
@@ -210,14 +212,14 @@ def _write_layout(
                 photo_path = photo_paths[photo_index % len(photo_paths)]
             except (KeyError, TypeError) as exc:
                 raise ValueError(f"template {name!r} has invalid slot {index}") from exc
-            cache_key = (photo_path, rotation, photo_width, photo_height)
+            cache_key = (photo_path, rotation, width, height)
             prepared = rendered.get(cache_key)
             if prepared is None:
                 with Image.open(photo_path) as source:
                     source_image = _oriented_rgb(source)
                 try:
                     prepared = _render_photo(
-                        source_image, rotation, photo_width, photo_height
+                        source_image, rotation, width, height
                     )
                 finally:
                     source_image.close()
@@ -226,7 +228,13 @@ def _write_layout(
             preview.paste(photo, (x + offset_x, y + offset_y))
         _add_foreground(preview, foreground_path, size)
         if texts:
-            draw_text_blocks(preview, texts, text_values, name)
+            draw_text_blocks(
+                preview,
+                texts,
+                text_values,
+                name,
+                template_dir=configured_background.parent,
+            )
         _save_png(preview, output_path)
     finally:
         for photo, _, _ in rendered.values():

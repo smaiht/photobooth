@@ -25,34 +25,70 @@
                 ],
                 "texts": [
                     {
-                        "position": {"x": 3400, "y": 645},
-                        "rotate": "ccw",
+                        "text": "ЮБИЛЕЙ СЕРГЕЯ",
+                        "position": {"x": 3267, "y": 645},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
-                        "weight": 800,
-                        "color": "#b34f63",
-                        "stroke_width": 20,
-                        "stroke_color": "#fff0df",
-                        "line_spacing": 0.85,
-                        "lines": [
-                            {"text": "ЮБИЛЕЙ СЕРГЕЯ", "size": 82},
-                            {"text": "50 лет", "size": 110, "color": "#d26752"},
-                            {"text": "22 августа 2026", "size": 60, "weight": 700, "color": "#956174"}
-                        ]
+                        "size": 82, "weight": 800, "color": "#b34f63",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 0.85, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
-                        "position": {"x": 3400, "y": 1832},
-                        "rotate": "ccw",
+                        "text": "50 лет",
+                        "position": {"x": 3412, "y": 645},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
-                        "weight": 800,
-                        "color": "#b34f63",
-                        "stroke_width": 20,
-                        "stroke_color": "#fff0df",
-                        "line_spacing": 0.85,
-                        "lines": [
-                            {"text": "ЮБИЛЕЙ СЕРГЕЯ", "size": 82},
-                            {"text": "50 лет", "size": 110, "color": "#d26752"},
-                            {"text": "22 августа 2026", "size": 60, "weight": 700, "color": "#956174"}
-                        ]
+                        "size": 110, "weight": 800, "color": "#d26752",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 0.85, "char_spacing": 0,
+                        "underline": false, "linethrough": false
+                    },
+                    {
+                        "text": "22 августа 2026",
+                        "position": {"x": 3544, "y": 645},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
+                        "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
+                        "size": 60, "weight": 700, "color": "#956174",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 0.85, "char_spacing": 0,
+                        "underline": false, "linethrough": false
+                    },
+                    {
+                        "text": "ЮБИЛЕЙ СЕРГЕЯ",
+                        "position": {"x": 3267, "y": 1832},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
+                        "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
+                        "size": 82, "weight": 800, "color": "#b34f63",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 0.85, "char_spacing": 0,
+                        "underline": false, "linethrough": false
+                    },
+                    {
+                        "text": "50 лет",
+                        "position": {"x": 3412, "y": 1832},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
+                        "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
+                        "size": 110, "weight": 800, "color": "#d26752",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 0.85, "char_spacing": 0,
+                        "underline": false, "linethrough": false
+                    },
+                    {
+                        "text": "22 августа 2026",
+                        "position": {"x": 3544, "y": 1832},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
+                        "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
+                        "size": 60, "weight": 700, "color": "#956174",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 0.85, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     }
                 ],
                 "_texts_comment": "Подписи центрированы по видимой ширине полосок с учетом внешнего trim: 50 px справа у первой и 55 px слева у второй после поворота.",
@@ -74,40 +110,37 @@
                 ],
                 "texts": [
                     {
+                        "text": "50 лет",
                         "position": {"x": 581, "y": 2292},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
-                        "weight": 800,
-                        "color": "#b34f63",
-                        "stroke_width": 20,
-                        "stroke_color": "#fff0df",
-                        "lines": [
-                            {"text": "50 лет", "size": 150}
-                        ]
+                        "size": 150, "weight": 800, "color": "#b34f63",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "ЮБИЛЕЙ СЕРГЕЯ",
                         "position": {"x": 1832, "y": 2292},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
-                        "weight": 800,
-                        "color": "#d26752",
-                        "stroke_width": 20,
-                        "stroke_color": "#fff0df",
-                        "lines": [
-                            {"text": "ЮБИЛЕЙ СЕРГЕЯ", "size": 160}
-                        ]
+                        "size": 160, "weight": 800, "color": "#d26752",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "22 августа 2026",
                         "position": {"x": 3087, "y": 2292},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
-                        "weight": 700,
-                        "color": "#956174",
-                        "stroke_width": 20,
-                        "stroke_color": "#fff0df",
-                        "lines": [
-                            {"text": "22 августа 2026", "size": 60}
-                        ]
+                        "size": 60, "weight": 700, "color": "#956174",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     }
                 ],
                 "_texts_date_tokens": ["{dd}.{mm}.{yyyy}", "{dd} {month_ru} {yyyy}"]
@@ -126,40 +159,37 @@
                 ],
                 "texts": [
                     {
+                        "text": "50 лет",
                         "position": {"x": 581, "y": 2292},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
-                        "weight": 800,
-                        "color": "#b34f63",
-                        "stroke_width": 20,
-                        "stroke_color": "#fff0df",
-                        "lines": [
-                            {"text": "50 лет", "size": 150}
-                        ]
+                        "size": 150, "weight": 800, "color": "#b34f63",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "ЮБИЛЕЙ СЕРГЕЯ",
                         "position": {"x": 1832, "y": 2292},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
-                        "weight": 800,
-                        "color": "#d26752",
-                        "stroke_width": 20,
-                        "stroke_color": "#fff0df",
-                        "lines": [
-                            {"text": "ЮБИЛЕЙ СЕРГЕЯ", "size": 160}
-                        ]
+                        "size": 160, "weight": 800, "color": "#d26752",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "22 августа 2026",
                         "position": {"x": 3087, "y": 2292},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "ShantellSans-VariableFont_BNCE,INFM,SPAC,wght.ttf",
-                        "weight": 700,
-                        "color": "#956174",
-                        "stroke_width": 20,
-                        "stroke_color": "#fff0df",
-                        "lines": [
-                            {"text": "22 августа 2026", "size": 60}
-                        ]
+                        "size": 60, "weight": 700, "color": "#956174",
+                        "stroke_width": 20, "stroke_color": "#fff0df",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     }
                 ],
                 "_texts_comment": "Слот single заканчивается на y=2160, поэтому три подписи остаются видимыми под фотографией.",

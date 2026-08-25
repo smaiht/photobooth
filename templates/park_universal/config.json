@@ -25,31 +25,51 @@
                 ],
                 "texts": [
                     {
-                        "position": {"x": 3545, "y": 635},
-                        "rotate": "ccw",
+                        "text": "ВЕЛИКИЙ УСТЮГ",
+                        "position": {"x": 3526, "y": 635},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "Comfortaa-VariableFont_wght.ttf",
-                        "weight": 700,
-                        "color": "#8c3b2e",
-                        "line_spacing": 1.25,
-                        "lines": [
-                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 30},
-                            {"text": "{dd} {month_ru} {yyyy}", "size": 26, "weight": 500}
-                        ]
+                        "size": 30, "weight": 700, "color": "#8c3b2e",
+                        "stroke_width": 0, "stroke_color": "#8c3b2e",
+                        "line_spacing": 1.25, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
-                        "position": {"x": 3545, "y": 1869},
-                        "rotate": "ccw",
+                        "text": "{dd} {month_ru} {yyyy}",
+                        "position": {"x": 3567, "y": 635},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "Comfortaa-VariableFont_wght.ttf",
-                        "weight": 700,
-                        "color": "#8c3b2e",
-                        "line_spacing": 1.25,
-                        "lines": [
-                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 30},
-                            {"text": "{dd} {month_ru} {yyyy}", "size": 26, "weight": 500}
-                        ]
+                        "size": 26, "weight": 500, "color": "#8c3b2e",
+                        "stroke_width": 0, "stroke_color": "#8c3b2e",
+                        "line_spacing": 1.25, "char_spacing": 0,
+                        "underline": false, "linethrough": false
+                    },
+                    {
+                        "text": "ВЕЛИКИЙ УСТЮГ",
+                        "position": {"x": 3526, "y": 1869},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
+                        "font": "Comfortaa-VariableFont_wght.ttf",
+                        "size": 30, "weight": 700, "color": "#8c3b2e",
+                        "stroke_width": 0, "stroke_color": "#8c3b2e",
+                        "line_spacing": 1.25, "char_spacing": 0,
+                        "underline": false, "linethrough": false
+                    },
+                    {
+                        "text": "{dd} {month_ru} {yyyy}",
+                        "position": {"x": 3567, "y": 1869},
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
+                        "font": "Comfortaa-VariableFont_wght.ttf",
+                        "size": 26, "weight": 500, "color": "#8c3b2e",
+                        "stroke_width": 0, "stroke_color": "#8c3b2e",
+                        "line_spacing": 1.25, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     }
                 ],
-                "_texts_comment": "По одной подписи на каждую физическую полоску: обе лежат на светлых плашках арта у правого края, второй блок сдвинут на 1234 px.",
+                "_texts_comment": "По два текстовых объекта на каждую физическую полоску: название и дата лежат на светлой плашке у правого края.",
                 "_texts_date_tokens": ["{dd}.{mm}.{yyyy}", "{dd} {month_ru} {yyyy}"]
             },
             "preview_rotation": "cw",
@@ -68,16 +88,26 @@
                 ],
                 "texts": [
                     {
-                        "position": {"x": 1840, "y": 2325},
-                        "rotate": "none",
+                        "text": "ВЕЛИКИЙ УСТЮГ",
+                        "position": {"x": 1840, "y": 2298},
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "Comfortaa-VariableFont_wght.ttf",
-                        "weight": 700,
-                        "color": "#8c3b2e",
-                        "line_spacing": 1.2,
-                        "lines": [
-                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 56},
-                            {"text": "{dd} {month_ru} {yyyy}", "size": 38, "weight": 500}
-                        ]
+                        "size": 56, "weight": 700, "color": "#8c3b2e",
+                        "stroke_width": 0, "stroke_color": "#8c3b2e",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
+                    },
+                    {
+                        "text": "{dd} {month_ru} {yyyy}",
+                        "position": {"x": 1840, "y": 2363},
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
+                        "font": "Comfortaa-VariableFont_wght.ttf",
+                        "size": 38, "weight": 500, "color": "#8c3b2e",
+                        "stroke_width": 0, "stroke_color": "#8c3b2e",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     }
                 ],
                 "_texts_date_tokens": ["{dd}.{mm}.{yyyy}", "{dd} {month_ru} {yyyy}"]
@@ -96,16 +126,26 @@
                 ],
                 "texts": [
                     {
-                        "position": {"x": 1840, "y": 2325},
-                        "rotate": "none",
+                        "text": "ВЕЛИКИЙ УСТЮГ",
+                        "position": {"x": 1840, "y": 2298},
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "Comfortaa-VariableFont_wght.ttf",
-                        "weight": 700,
-                        "color": "#8c3b2e",
-                        "line_spacing": 1.2,
-                        "lines": [
-                            {"text": "ВЕЛИКИЙ УСТЮГ", "size": 56},
-                            {"text": "{dd} {month_ru} {yyyy}", "size": 38, "weight": 500}
-                        ]
+                        "size": 56, "weight": 700, "color": "#8c3b2e",
+                        "stroke_width": 0, "stroke_color": "#8c3b2e",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
+                    },
+                    {
+                        "text": "{dd} {month_ru} {yyyy}",
+                        "position": {"x": 1840, "y": 2363},
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
+                        "font": "Comfortaa-VariableFont_wght.ttf",
+                        "size": 38, "weight": 500, "color": "#8c3b2e",
+                        "stroke_width": 0, "stroke_color": "#8c3b2e",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     }
                 ],
                 "_texts_comment": "Слот single заканчивается на y=2160, поэтому та же плашка остаётся видимой под фотографией.",

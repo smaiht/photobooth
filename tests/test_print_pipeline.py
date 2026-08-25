@@ -146,6 +146,40 @@ class ComposerTests(unittest.TestCase):
             finally:
                 result.close()
 
+    def test_photo_slot_can_override_the_template_default_size(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            folder = Path(tmpdir)
+            Image.new("RGB", (120, 80), "blue").save(folder / "background.png")
+            Image.new("RGB", (40, 20), "red").save(folder / "photo.png")
+            config = {
+                "print_size": [120, 80],
+                "templates": {
+                    "grid": {
+                        "photo_size_px": {"width": 100, "height": 60},
+                        "print_layout": {
+                            "background": "background.png",
+                            "photos": [{
+                                "photo_index": 0,
+                                "x": 10,
+                                "y": 10,
+                                "width": 40,
+                                "height": 20,
+                                "rotate": "none",
+                            }],
+                        },
+                        "preview_rotation": "none",
+                        "preview_split": "none",
+                    },
+                },
+            }
+
+            result = compose(folder, "grid", [folder / "photo.png"], config)
+            try:
+                self.assertGreater(result.getpixel((20, 20))[0], 200)
+                self.assertGreater(result.getpixel((80, 40))[2], 200)
+            finally:
+                result.close()
+
     def test_optional_foreground_is_composited_after_photos(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             folder = Path(tmpdir)
@@ -366,11 +400,22 @@ class TemplateTextTests(unittest.TestCase):
 
     def _block(self, **overrides) -> dict:
         block = {
+            "text": "{dd}.{mm}.{yyyy}",
             "position": {"x": 200, "y": 150},
-            "rotate": "none",
+            "align": "center",
+            "angle": 0,
+            "skew": {"x": 0, "y": 0},
+            "flip": {"x": False, "y": False},
             "font": self.FONT,
+            "size": 40,
+            "weight": 400,
             "color": "#000000",
-            "lines": [{"text": "{dd}.{mm}.{yyyy}", "size": 40}],
+            "stroke_width": 0,
+            "stroke_color": "#000000",
+            "line_spacing": 1.2,
+            "char_spacing": 0,
+            "underline": False,
+            "linethrough": False,
         }
         block.update(overrides)
         return block
@@ -456,7 +501,7 @@ class TemplateTextTests(unittest.TestCase):
             folder = Path(tmpdir)
             config = self._pack(folder, [
                 self._block(font="NoSuchFont.ttf"),
-                self._block(lines=[{"text": "{unknown}", "size": 40}]),
+                self._block(text="{unknown}"),
             ])
             with self.assertLogs("backend.text_layer", level="ERROR") as logs:
                 result = compose(
@@ -478,7 +523,8 @@ class TemplateTextTests(unittest.TestCase):
             ink = {}
             for weight in (300, 700):
                 config = self._pack(folder, [self._block(
-                    lines=[{"text": "08.08.2026", "size": 40, "weight": weight}],
+                    text="08.08.2026",
+                    weight=weight,
                 )])
                 result = compose(
                     folder, "grid", [folder / "photo.png"], config,
@@ -498,38 +544,15 @@ class TemplateTextTests(unittest.TestCase):
             clamped.getbbox("08.08.2026"), limit.getbbox("08.08.2026"))
         self.assertIn("Out-of-range weight=5000", logs.output[0])
 
-    def test_line_overrides_only_what_it_declares(self):
-        blocks = text_layer.validated_text_blocks(
-            {"texts": [self._block(
-                color="#111111",
-                size=30,
-                weight=400,
-                lines=[
-                    {"text": "первая"},
-                    {"text": "вторая", "size": 50, "color": "#222222"},
-                ],
-            )]},
-            "grid",
-            (400, 200),
-        )
-        first, second = blocks[0].lines
-        self.assertEqual((first.size, first.color, first.weight), (30, "#111111", 400))
-        self.assertEqual((second.size, second.color), (50, "#222222"))
-        # An override must not drop the block-level font or weight.
-        self.assertEqual(second.font, first.font)
-        self.assertEqual(second.weight, 400)
-
     def test_structural_mistakes_in_a_pack_are_refused(self):
         cases = {
             "texts must be a list": {"texts": {}},
             "position must be inside": [self._block(
                 position={"x": 500, "y": 100})],
-            "unsupported rotate": [self._block(rotate="upside")],
-            "needs a non-empty lines list": [self._block(lines=[])],
-            "size must be an integer": [self._block(
-                lines=[{"text": "x", "size": 0}])],
-            "needs a font file name": [self._block(
-                font="../secrets.ttf", lines=[{"text": "x", "size": 20}])],
+            "align must be": [self._block(align="justify")],
+            "text must be a string": [self._block(text=None)],
+            "size must be an integer": [self._block(size=0)],
+            "needs a font file name": [self._block(font="../secrets.ttf")],
             "line_spacing must be": [self._block(line_spacing=99)],
         }
         for message, texts in cases.items():
@@ -545,8 +568,8 @@ class TemplateTextTests(unittest.TestCase):
                 folder,
                 [self._block(
                     position={"x": 200, "y": 200},
-                    rotate="ccw",
-                    lines=[{"text": "08.08.2026", "size": 40}],
+                    angle=-90,
+                    text="08.08.2026",
                 )],
                 size=(400, 400),
             )

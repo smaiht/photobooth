@@ -1,29 +1,22 @@
-"""Render configured text blocks onto print sheets and their previews.
+"""Render configured text objects onto print sheets and previews.
 
-A template's ``print_layout.texts`` describes text drawn as the last layer,
-after ``background``, the photos and the optional ``foreground``. Nothing is
-baked into the static image layers, so their reduced preview caches stay
-untouched and a date never has to be redrawn by hand for a new event.
+Each item in ``print_layout.texts`` is one text object. Its properties apply to
+the complete string; explicit ``\n`` characters are the only line breaks.
+Text is drawn last, over the background, photos and optional foreground.
 
-The same block is used for the full print raster and for the on-screen preview:
-every coordinate and font size is multiplied by one scale factor, exactly like
-the photo slots are.
-
-Text is decoration, not the product the guest paid for. A missing font, an
-unparsable colour or an unknown token is logged and that block is skipped, so a
-sheet is still printed without its caption.
+Rendering errors are logged per object and never block the guest's print.
 """
 
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 import logging
-from typing import NamedTuple
+import math
 
 from PIL import Image, ImageDraw, ImageFont
 
 
-# One rotation vocabulary for photo slots, previews and text blocks. It lives
-# here so this module needs no import from composer, which imports it.
+# Photo slots and previews still use this compact rotation vocabulary.
 ROTATION_TRANSPOSE = {
     "none": None,
     "cw": Image.Transpose.ROTATE_270,
@@ -31,13 +24,12 @@ ROTATION_TRANSPOSE = {
 }
 DEFAULT_LINE_SPACING = 1.2
 DEFAULT_COLOR = "#000000"
+FABRIC_FONT_SIZE_MULTIPLIER = 1.13
 MIN_FONT_SIZE = 4
 MAX_FONT_SIZE = 2000
 FONTS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
-# Cyrillic month names: an embedded Windows Python runs under the "C" locale,
-# where strftime("%B") returns English names. Nominative and genitive forms
-# differ in Russian, and a date reads "8 августа 2026", not "8 август 2026".
+# Cyrillic month names cannot depend on the host's locale.
 MONTHS_RU_GENITIVE = (
     "января", "февраля", "марта", "апреля", "мая", "июня",
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
@@ -47,22 +39,27 @@ DATE_TOKENS = ("{dd}.{mm}.{yyyy}", "{dd} {month_ru} {yyyy}")
 log = logging.getLogger(__name__)
 
 
-class TextLine(NamedTuple):
+@dataclass(frozen=True)
+class TextBlock:
+    x: int
+    y: int
     text: str
+    align: str
+    angle: float
+    skew_x: float
+    skew_y: float
+    flip_x: bool
+    flip_y: bool
     font: str
     size: int
     weight: int | None
     color: str
-    stroke_width: int
+    stroke_width: float
     stroke_color: str
-
-
-class TextBlock(NamedTuple):
-    x: int
-    y: int
-    rotation: str
     line_spacing: float
-    lines: list[TextLine]
+    char_spacing: float
+    underline: bool
+    linethrough: bool
 
 
 def date_values(moment: datetime) -> dict[str, str]:
@@ -80,12 +77,7 @@ def validated_text_blocks(
     template_name: str,
     print_size: tuple[int, int],
 ) -> list[TextBlock]:
-    """Validate ``print_layout.texts``; an absent key means no text at all.
-
-    Only a structural mistake in the pack raises. Everything that can fail at
-    render time is handled there, so a live session never loses its print over
-    a caption.
-    """
+    """Validate ``print_layout.texts``; an absent key means no text."""
     raw_blocks = layout.get("texts")
     if raw_blocks is None:
         return []
@@ -94,7 +86,7 @@ def validated_text_blocks(
 
     blocks = []
     for index, raw in enumerate(raw_blocks):
-        context = f"text block {index} of template {template_name!r}"
+        context = f"text object {index} of template {template_name!r}"
         if not isinstance(raw, dict):
             raise ValueError(f"invalid {context}")
         blocks.append(_validated_block(raw, context, print_size))
@@ -106,6 +98,10 @@ def _validated_block(
     context: str,
     print_size: tuple[int, int],
 ) -> TextBlock:
+    text = raw.get("text")
+    if not isinstance(text, str):
+        raise ValueError(f"{context} text must be a string")
+
     position = raw.get("position")
     if not isinstance(position, dict):
         raise ValueError(f"{context} needs a position object")
@@ -123,71 +119,106 @@ def _validated_block(
             f"{context} position must be inside the print size {print_size}"
         )
 
-    rotation = raw.get("rotate", "none")
-    if rotation not in ROTATION_TRANSPOSE:
-        raise ValueError(f"{context} has unsupported rotate {rotation!r}")
+    align = raw.get("align", "center")
+    if align not in ("left", "center", "right"):
+        raise ValueError(f"{context} align must be left, center or right")
 
-    line_spacing = raw.get("line_spacing", DEFAULT_LINE_SPACING)
-    if (isinstance(line_spacing, bool)
-            or not isinstance(line_spacing, (int, float))
-            or not 0.5 <= float(line_spacing) <= 4):
+    angle = _finite_number(raw.get("angle", 0), f"{context} angle")
+
+    skew = raw.get("skew", {"x": 0, "y": 0})
+    if not isinstance(skew, dict):
+        raise ValueError(f"{context} skew must be an object")
+    skew_x = _finite_number(skew.get("x", 0), f"{context} skew.x")
+    skew_y = _finite_number(skew.get("y", 0), f"{context} skew.y")
+    if not -89 <= skew_x <= 89 or not -89 <= skew_y <= 89:
+        raise ValueError(f"{context} skew values must be between -89 and 89")
+
+    flip = raw.get("flip", {"x": False, "y": False})
+    if not isinstance(flip, dict):
+        raise ValueError(f"{context} flip must be an object")
+    flip_x = flip.get("x", False)
+    flip_y = flip.get("y", False)
+    if not isinstance(flip_x, bool) or not isinstance(flip_y, bool):
+        raise ValueError(f"{context} flip values must be booleans")
+
+    font = raw.get("font")
+    if not isinstance(font, str) or not font or Path(font).name != font:
+        raise ValueError(f"{context} needs a font file name")
+
+    size = raw.get("size")
+    if (not isinstance(size, int) or isinstance(size, bool)
+            or not MIN_FONT_SIZE <= size <= MAX_FONT_SIZE):
+        raise ValueError(
+            f"{context} size must be an integer between "
+            f"{MIN_FONT_SIZE} and {MAX_FONT_SIZE}"
+        )
+
+    weight = raw.get("weight")
+    if weight is not None and (
+        not isinstance(weight, int) or isinstance(weight, bool)
+    ):
+        raise ValueError(f"{context} weight must be an integer")
+
+    color = raw.get("color", DEFAULT_COLOR)
+    if not isinstance(color, str) or not color:
+        raise ValueError(f"{context} color must be a string")
+
+    stroke_width = _finite_number(
+        raw.get("stroke_width", 0), f"{context} stroke_width"
+    )
+    if stroke_width < 0:
+        raise ValueError(f"{context} stroke_width must be non-negative")
+    stroke_color = raw.get("stroke_color", color)
+    if not isinstance(stroke_color, str) or not stroke_color:
+        raise ValueError(f"{context} stroke_color must be a string")
+
+    line_spacing = _finite_number(
+        raw.get("line_spacing", DEFAULT_LINE_SPACING),
+        f"{context} line_spacing",
+    )
+    if not 0.5 <= line_spacing <= 4:
         raise ValueError(f"{context} line_spacing must be between 0.5 and 4")
 
-    block_font = raw.get("font")
-    block_size = raw.get("size")
-    block_weight = raw.get("weight")
-    block_color = raw.get("color", DEFAULT_COLOR)
-    block_stroke_width = raw.get("stroke_width", 0)
-    block_stroke_color = raw.get("stroke_color")
+    char_spacing = _finite_number(
+        raw.get("char_spacing", 0), f"{context} char_spacing"
+    )
+    if not -2000 <= char_spacing <= 2000:
+        raise ValueError(f"{context} char_spacing must be between -2000 and 2000")
 
-    raw_lines = raw.get("lines")
-    if not isinstance(raw_lines, list) or not raw_lines:
-        raise ValueError(f"{context} needs a non-empty lines list")
+    underline = raw.get("underline", False)
+    linethrough = raw.get("linethrough", False)
+    if not isinstance(underline, bool) or not isinstance(linethrough, bool):
+        raise ValueError(f"{context} text decorations must be booleans")
 
-    lines = []
-    for line_index, raw_line in enumerate(raw_lines):
-        line_context = f"line {line_index} of {context}"
-        if not isinstance(raw_line, dict):
-            raise ValueError(f"invalid {line_context}")
-        text = raw_line.get("text")
-        if not isinstance(text, str):
-            raise ValueError(f"{line_context} text must be a string")
-        # A block-level value is the default; a line overrides only what it
-        # needs, so a pack cannot drift by repeating the font on every line.
-        font = raw_line.get("font", block_font)
-        if not isinstance(font, str) or not font or Path(font).name != font:
-            raise ValueError(f"{line_context} needs a font file name")
-        size = raw_line.get("size", block_size)
-        if (not isinstance(size, int) or isinstance(size, bool)
-                or not MIN_FONT_SIZE <= size <= MAX_FONT_SIZE):
-            raise ValueError(
-                f"{line_context} size must be an integer between "
-                f"{MIN_FONT_SIZE} and {MAX_FONT_SIZE}"
-            )
-        weight = raw_line.get("weight", block_weight)
-        if weight is not None and (
-            not isinstance(weight, int) or isinstance(weight, bool)
-        ):
-            raise ValueError(f"{line_context} weight must be an integer")
-        color = raw_line.get("color", block_color)
-        if not isinstance(color, str) or not color:
-            raise ValueError(f"{line_context} color must be a string")
-        stroke_width = raw_line.get("stroke_width", block_stroke_width)
-        if (not isinstance(stroke_width, int) or isinstance(stroke_width, bool)
-                or stroke_width < 0):
-            raise ValueError(
-                f"{line_context} stroke_width must be a non-negative integer"
-            )
-        stroke_color = raw_line.get("stroke_color", block_stroke_color)
-        if stroke_color is None:
-            stroke_color = color
-        if not isinstance(stroke_color, str) or not stroke_color:
-            raise ValueError(f"{line_context} stroke_color must be a string")
-        lines.append(TextLine(
-            text, font, size, weight, color, stroke_width, stroke_color,
-        ))
+    return TextBlock(
+        x=x,
+        y=y,
+        text=text,
+        align=align,
+        angle=angle,
+        skew_x=skew_x,
+        skew_y=skew_y,
+        flip_x=flip_x,
+        flip_y=flip_y,
+        font=font,
+        size=size,
+        weight=weight,
+        color=color,
+        stroke_width=stroke_width,
+        stroke_color=stroke_color,
+        line_spacing=line_spacing,
+        char_spacing=char_spacing,
+        underline=underline,
+        linethrough=linethrough,
+    )
 
-    return TextBlock(x, y, rotation, float(line_spacing), lines)
+
+def _finite_number(value: object, label: str) -> float:
+    if (isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)):
+        raise ValueError(f"{label} must be a finite number")
+    return float(value)
 
 
 def draw_text_blocks(
@@ -198,14 +229,13 @@ def draw_text_blocks(
     scale: float = 1.0,
     template_dir: Path | None = None,
 ) -> None:
-    """Draw every block onto ``canvas``; log and skip the ones that fail."""
+    """Draw every object; log and skip any object that fails at runtime."""
     for index, block in enumerate(blocks):
         try:
             _draw_block(canvas, block, values, scale, template_dir)
         except Exception as exc:
-            # The sheet is worth more than its caption.
             log.error(
-                "Text block %d of template %r was skipped: %s",
+                "Text object %d of template %r was skipped: %s",
                 index, template_name, exc,
             )
 
@@ -222,107 +252,223 @@ def _draw_block(
     if not 0 <= x <= canvas.width or not 0 <= y <= canvas.height:
         raise ValueError("position does not fit the canvas")
 
-    prepared = []
-    for line in block.lines:
-        text = _resolve_text(line.text, values)
-        font = _load_font(
-            line.font,
-            max(1, round(line.size * scale)),
-            line.weight,
-            template_dir,
-        )
-        color = _parse_color(line.color)
-        stroke_width = (
-            max(1, round(line.stroke_width * scale))
-            if line.stroke_width else 0
-        )
-        stroke_color = _parse_color(line.stroke_color)
-        ascent, descent = font.getmetrics()
-        line_height = ascent + descent + stroke_width * 2
-        prepared.append((
-            text, font, color, stroke_width, stroke_color, line_height,
-        ))
+    text = _resolve_text(block.text, values)
+    font_size = max(1, round(block.size * scale))
+    font = _load_font(block.font, font_size, block.weight, template_dir)
+    color = _parse_color(block.color)
+    stroke_color = _parse_color(block.stroke_color)
+    stroke_width = max(0, round(block.stroke_width * scale))
+    char_spacing = font_size * block.char_spacing / 1000
+    ascent, descent = font.getmetrics()
+    lines = text.split("\n")
+    line_step = font_size * block.line_spacing * FABRIC_FONT_SIZE_MULTIPLIER
 
-    total_height = sum(
-        round(line_height * block.line_spacing) for *_, line_height in prepared
-    )
-    cursor = -total_height // 2
     positioned = []
     bounds = []
-    for text, font, color, stroke_width, stroke_color, line_height in prepared:
-        slot_height = round(line_height * block.line_spacing)
-        offset = (slot_height - line_height) // 2
-        anchor_y = cursor + offset + stroke_width
-        if text:
-            bbox = font.getbbox(
-                text,
-                anchor="ma",
-                stroke_width=stroke_width,
-            )
-            positioned.append((
-                text, font, color, stroke_width, stroke_color, anchor_y,
-            ))
+    decoration_thickness = max(1, round(font_size / 15))
+    for index, line in enumerate(lines):
+        baseline_y = (
+            (index - (len(lines) - 1) / 2) * line_step
+            + (ascent - descent) / 2
+        )
+        runs, line_left, line_right = _line_runs(
+            line, font, char_spacing, block.align
+        )
+        for value, run_x, anchor in runs:
+            bbox = font.getbbox(value, anchor=anchor, stroke_width=stroke_width)
             bounds.append((
-                bbox[0],
-                anchor_y + bbox[1],
-                bbox[2],
-                anchor_y + bbox[3],
+                run_x + bbox[0],
+                baseline_y + bbox[1],
+                run_x + bbox[2],
+                baseline_y + bbox[3],
             ))
-        cursor += slot_height
 
-    if not positioned:
+        decorations = []
+        if line_right > line_left:
+            if block.underline:
+                decorations.append(
+                    baseline_y + max(1, round(descent * 0.35))
+                )
+            if block.linethrough:
+                decorations.append(baseline_y - round(ascent * 0.3))
+            bounds.extend(
+                (
+                    line_left,
+                    line_y - decoration_thickness / 2,
+                    line_right,
+                    line_y + decoration_thickness / 2,
+                )
+                for line_y in decorations
+            )
+        positioned.append((runs, baseline_y, line_left, line_right, decorations))
+
+    if not bounds:
         return
 
-    left = min(bbox[0] for bbox in bounds)
-    top = min(bbox[1] for bbox in bounds)
-    right = max(bbox[2] for bbox in bounds)
-    bottom = max(bbox[3] for bbox in bounds)
-    half_width = max(1, -left, right) + 1
-    half_height = max(1, -top, bottom) + 1
-
+    half_width = math.ceil(max(
+        1,
+        max(abs(left) for left, _, _, _ in bounds),
+        max(abs(right) for _, _, right, _ in bounds),
+    )) + 2
+    half_height = math.ceil(max(
+        1,
+        max(abs(top) for _, top, _, _ in bounds),
+        max(abs(bottom) for _, _, _, bottom in bounds),
+    )) + 2
     layer = Image.new(
-        "RGBA",
-        (half_width * 2, half_height * 2),
-        (0, 0, 0, 0),
+        "RGBA", (half_width * 2, half_height * 2), (0, 0, 0, 0)
     )
+
     try:
         draw = ImageDraw.Draw(layer)
-
-        # Paint every outline first, so a later line's thick stroke can never
-        # cover the face of an earlier line.
-        for text, font, _, stroke_width, stroke_color, anchor_y in positioned:
-            if stroke_width:
+        for runs, baseline_y, _, _, _ in positioned:
+            if not stroke_width:
+                continue
+            for value, run_x, anchor in runs:
                 draw.text(
-                    (half_width, half_height + anchor_y),
-                    text,
+                    (half_width + run_x, half_height + baseline_y),
+                    value,
                     font=font,
                     fill=stroke_color,
-                    anchor="ma",
+                    anchor=anchor,
                     stroke_width=stroke_width,
                     stroke_fill=stroke_color,
                 )
 
-        for text, font, color, _, _, anchor_y in positioned:
-            draw.text(
-                (half_width, half_height + anchor_y),
-                text,
-                font=font,
-                fill=color,
-                anchor="ma",
-            )
+        for runs, baseline_y, line_left, line_right, decorations in positioned:
+            for value, run_x, anchor in runs:
+                draw.text(
+                    (half_width + run_x, half_height + baseline_y),
+                    value,
+                    font=font,
+                    fill=color,
+                    anchor=anchor,
+                )
+            for line_y in decorations:
+                draw.line(
+                    (
+                        half_width + line_left,
+                        half_height + line_y,
+                        half_width + line_right,
+                        half_height + line_y,
+                    ),
+                    fill=color,
+                    width=decoration_thickness,
+                )
 
-        transpose = ROTATION_TRANSPOSE[block.rotation]
-        if transpose is not None:
-            rotated = layer.transpose(transpose)
+        transformed = _transform_layer(layer, block)
+        if transformed is not layer:
             layer.close()
-            layer = rotated
+            layer = transformed
         canvas.paste(
             layer,
-            (x - layer.width // 2, y - layer.height // 2),
+            (round(x - layer.width / 2), round(y - layer.height / 2)),
             layer,
         )
     finally:
         layer.close()
+
+
+def _line_runs(
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    char_spacing: float,
+    align: str,
+) -> tuple[list[tuple[str, float, str]], float, float]:
+    if not text:
+        return [], 0, 0
+
+    if abs(char_spacing) < 0.001:
+        width = float(font.getlength(text))
+        left = {"left": 0, "center": -width / 2, "right": -width}[align]
+        anchor = {"left": "ls", "center": "ms", "right": "rs"}[align]
+        return [(text, 0, anchor)], left, left + width
+
+    characters = list(text)
+    advances = [float(font.getlength(character)) for character in characters]
+    width = sum(advances) + char_spacing * (len(characters) - 1)
+    left = {"left": 0, "center": -width / 2, "right": -width}[align]
+    cursor = left
+    runs = []
+    for character, advance in zip(characters, advances):
+        runs.append((character, cursor, "ls"))
+        cursor += advance + char_spacing
+    return runs, left, left + width
+
+
+def _transform_layer(layer: Image.Image, block: TextBlock) -> Image.Image:
+    skew_x = math.tan(math.radians(block.skew_x))
+    skew_y = math.tan(math.radians(block.skew_y))
+    flip_x = -1 if block.flip_x else 1
+    flip_y = -1 if block.flip_y else 1
+
+    # Fabric composes dimensions as flip/scale * skewX * skewY.
+    matrix = (
+        flip_x * (1 + skew_x * skew_y),
+        flip_x * skew_x,
+        flip_y * skew_y,
+        flip_y,
+    )
+    transformed = layer
+    if matrix != (1, 0, 0, 1):
+        transformed = _affine_about_center(layer, matrix)
+
+    if abs(block.angle) >= 0.001:
+        rotated = transformed.rotate(
+            -block.angle,
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+        )
+        if transformed is not layer:
+            transformed.close()
+        transformed = rotated
+    return transformed
+
+
+def _affine_about_center(
+    image: Image.Image,
+    matrix: tuple[float, float, float, float],
+) -> Image.Image:
+    a, b, c, d = matrix
+    determinant = a * d - b * c
+    if abs(determinant) < 1e-9:
+        raise ValueError("text transform is singular")
+
+    half_width = image.width / 2
+    half_height = image.height / 2
+    corners = (
+        (-half_width, -half_height),
+        (half_width, -half_height),
+        (-half_width, half_height),
+        (half_width, half_height),
+    )
+    points = tuple(
+        (a * x + b * y, c * x + d * y) for x, y in corners
+    )
+    output_half_width = math.ceil(max(abs(x) for x, _ in points)) + 2
+    output_half_height = math.ceil(max(abs(y) for _, y in points)) + 2
+    output_size = (output_half_width * 2, output_half_height * 2)
+
+    ia, ib, ic, id_ = (
+        d / determinant,
+        -b / determinant,
+        -c / determinant,
+        a / determinant,
+    )
+    data = (
+        ia,
+        ib,
+        half_width - ia * output_half_width - ib * output_half_height,
+        ic,
+        id_,
+        half_height - ic * output_half_width - id_ * output_half_height,
+    )
+    return image.transform(
+        output_size,
+        Image.Transform.AFFINE,
+        data,
+        resample=Image.Resampling.BICUBIC,
+    )
 
 
 def _resolve_text(text: str, values: dict[str, str]) -> str:
@@ -354,10 +500,11 @@ def _load_font(
     try:
         axes = font.get_variation_axes()
     except OSError:
-        # A static TTF has no variation axes; the configured weight is moot.
         log.info("Font %s is not variable; weight %d ignored", name, weight)
         return font
-    for axis in axes:
+
+    values = [axis["default"] for axis in axes]
+    for index, axis in enumerate(axes):
         if axis.get("name") in (b"Weight", "Weight"):
             minimum = axis["minimum"]
             maximum = axis["maximum"]
@@ -367,7 +514,8 @@ def _load_font(
                     "Out-of-range weight=%d for %s; using %d (%d..%d)",
                     weight, name, clamped, minimum, maximum,
                 )
-            font.set_variation_by_axes([clamped])
+            values[index] = clamped
+            font.set_variation_by_axes(values)
             return font
     log.info("Font %s has no weight axis; weight %d ignored", name, weight)
     return font

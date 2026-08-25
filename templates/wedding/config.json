@@ -25,70 +25,70 @@
                 ],
                 "texts": [
                     {
+                        "text": "The Wedding of",
                         "position": {"x": 3265, "y": 620},
-                        "rotate": "ccw",
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#79515a",
-                        "stroke_width": 10,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "The Wedding of", "size": 82}
-                        ]
+                        "size": 82, "weight": 400, "color": "#79515a",
+                        "stroke_width": 10, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "Егор и Елизавета",
                         "position": {"x": 3400, "y": 620},
-                        "rotate": "ccw",
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#3f2931",
-                        "stroke_width": 10,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "Егор и Елизавета", "size": 150}
-                        ]
+                        "size": 150, "weight": 400, "color": "#3f2931",
+                        "stroke_width": 10, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "21 | 08 | 26",
                         "position": {"x": 3540, "y": 620},
-                        "rotate": "ccw",
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#79515a",
-                        "stroke_width": 10,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "21 | 08 | 26", "size": 88}
-                        ]
+                        "size": 88, "weight": 400, "color": "#79515a",
+                        "stroke_width": 10, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "The Wedding of",
                         "position": {"x": 3265, "y": 1860},
-                        "rotate": "ccw",
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#79515a",
-                        "stroke_width": 10,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "The Wedding of", "size": 82}
-                        ]
+                        "size": 82, "weight": 400, "color": "#79515a",
+                        "stroke_width": 10, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "Егор и Елизавета",
                         "position": {"x": 3400, "y": 1860},
-                        "rotate": "ccw",
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#3f2931",
-                        "stroke_width": 10,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "Егор и Елизавета", "size": 150}
-                        ]
+                        "size": 150, "weight": 400, "color": "#3f2931",
+                        "stroke_width": 10, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "21 | 08 | 26",
                         "position": {"x": 3540, "y": 1860},
-                        "rotate": "ccw",
+                        "align": "center", "angle": -90,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#79515a",
-                        "stroke_width": 10,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "21 | 08 | 26", "size": 88}
-                        ]
+                        "size": 88, "weight": 400, "color": "#79515a",
+                        "stroke_width": 10, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     }
                 ],
                 "_texts_comment": "После поворота каждой полоски подпись идёт тремя строками: The Wedding of, имена и дата.",
@@ -110,37 +110,37 @@
                 ],
                 "texts": [
                     {
+                        "text": "The Wedding of",
                         "position": {"x": 900, "y": 2302},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#3f2931",
-                        "stroke_width": 20,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "The Wedding of", "size": 100}
-                        ]
+                        "size": 100, "weight": 400, "color": "#3f2931",
+                        "stroke_width": 20, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "Егор и Елизавета",
                         "position": {"x": 1844, "y": 2302},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#3f2931",
-                        "stroke_width": 15,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "Егор и Елизавета", "size": 160}
-                        ]
+                        "size": 160, "weight": 400, "color": "#3f2931",
+                        "stroke_width": 15, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "21 | 08 | 26",
                         "position": {"x": 2750, "y": 2302},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#3f2931",
-                        "stroke_width": 20,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "21 | 08 | 26", "size": 100}
-                        ]
+                        "size": 100, "weight": 400, "color": "#3f2931",
+                        "stroke_width": 20, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     }
                 ],
                 "_texts_date_tokens": ["{dd}.{mm}.{yyyy}", "{dd} {month_ru} {yyyy}"]
@@ -159,37 +159,37 @@
                 ],
                 "texts": [
                     {
+                        "text": "The Wedding of",
                         "position": {"x": 900, "y": 2302},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#79515a",
-                        "stroke_width": 10,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "The Wedding of", "size": 84}
-                        ]
+                        "size": 84, "weight": 400, "color": "#79515a",
+                        "stroke_width": 10, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "Егор и Елизавета",
                         "position": {"x": 1844, "y": 2302},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#3f2931",
-                        "stroke_width": 10,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "Егор и Елизавета", "size": 175}
-                        ]
+                        "size": 175, "weight": 400, "color": "#3f2931",
+                        "stroke_width": 10, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     },
                     {
+                        "text": "21 | 08 | 26",
                         "position": {"x": 2750, "y": 2302},
-                        "rotate": "none",
+                        "align": "center", "angle": 0,
+                        "skew": {"x": 0, "y": 0}, "flip": {"x": false, "y": false},
                         "font": "GreatVibes-Regular.ttf",
-                        "color": "#79515a",
-                        "stroke_width": 10,
-                        "stroke_color": "#ffffff",
-                        "lines": [
-                            {"text": "21 | 08 | 26", "size": 84}
-                        ]
+                        "size": 84, "weight": 400, "color": "#79515a",
+                        "stroke_width": 10, "stroke_color": "#ffffff",
+                        "line_spacing": 1.2, "char_spacing": 0,
+                        "underline": false, "linethrough": false
                     }
                 ],
                 "_texts_comment": "Слот single заканчивается на y=2160, поэтому та же плашка остаётся видимой под фотографией.",
