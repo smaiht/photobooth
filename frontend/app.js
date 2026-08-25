@@ -37,6 +37,8 @@ const templateSkip = document.getElementById("template-skip");
 const templateMulti = document.getElementById("template-multi");
 const templatePrint = document.getElementById("template-print");
 const templatePrintCount = document.getElementById("template-print-count");
+const templateHeroOrb = document.querySelector(".template-hero-orb");
+const templateHeroOrbCanvas = document.querySelector(".template-hero-orb-canvas");
 const photoChoicePanel = document.getElementById("photo-choice-panel");
 const photoChoiceOptions = document.getElementById("photo-choice-options");
 const frameOn = document.getElementById("frame-on");
@@ -132,6 +134,127 @@ let poseIntroTimer = null;
 let poseIntroRun = 0;
 
 const IDLE_POSE_GROUP_COUNT = 2;
+
+function startTemplateOrbField() {
+    if (!templateHeroOrb || !templateHeroOrbCanvas) return;
+    const context = templateHeroOrbCanvas.getContext("2d");
+    if (!context) return;
+
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let width = 0;
+    let height = 0;
+    let pixelRatio = 1;
+    let lastDraw = 0;
+    let staticFrameDrawn = false;
+
+    const resize = () => {
+        const nextWidth = Math.round(templateHeroOrb.clientWidth);
+        const nextHeight = Math.round(templateHeroOrb.clientHeight);
+        const nextRatio = Math.min(window.devicePixelRatio || 1, 2);
+        if (nextWidth < 1 || nextHeight < 1) return false;
+
+        const changed = nextWidth !== width
+            || nextHeight !== height
+            || nextRatio !== pixelRatio;
+        if (!changed) return false;
+
+        width = nextWidth;
+        height = nextHeight;
+        pixelRatio = nextRatio;
+        templateHeroOrbCanvas.width = Math.round(width * pixelRatio);
+        templateHeroOrbCanvas.height = Math.round(height * pixelRatio);
+        context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+        return true;
+    };
+
+    const gaussian = (x, y, centerX, centerY, sigma) => {
+        const dx = x - centerX;
+        const dy = y - centerY;
+        return Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma));
+    };
+
+    const draw = (milliseconds) => {
+        const time = milliseconds / 1000;
+        const motionTime = time * 1.25;
+        const spacing = width / 46;
+        const halfWidth = width / 2;
+        const halfHeight = height / 2;
+
+        const firstX = width * (0.62 + 0.11 * Math.sin(motionTime * 0.72));
+        const firstY = height * (0.62 + 0.12 * Math.cos(motionTime * 0.57));
+        const firstSigma = width * (0.14 + 0.014 * Math.sin(motionTime * 0.83));
+        const secondX = width * (0.72 + 0.09 * Math.cos(motionTime * 0.43 + 1.4));
+        const secondY = height * (0.58 + 0.14 * Math.sin(motionTime * 0.67 + 0.8));
+        const thirdX = width * (0.52 + 0.08 * Math.sin(motionTime * 0.51 + 2.4));
+        const thirdY = height * (0.70 + 0.10 * Math.cos(motionTime * 0.74));
+
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "#173b29";
+
+        for (let y = spacing / 2; y < height; y += spacing) {
+            for (let x = spacing / 2; x < width; x += spacing) {
+                const edgeX = (x - halfWidth) / halfWidth;
+                const edgeY = (y - halfHeight) / halfHeight;
+                if (edgeX * edgeX + edgeY * edgeY > 1) continue;
+
+                const sampleX = x
+                    + Math.sin(y * 0.013 + motionTime * 0.8) * width * 0.012;
+                const sampleY = y
+                    + Math.sin(x * 0.011 - motionTime * 0.65) * height * 0.01;
+                const first = gaussian(
+                    sampleX, sampleY, firstX, firstY, firstSigma,
+                );
+                const second = gaussian(
+                    sampleX, sampleY, secondX, secondY, width * 0.105,
+                );
+                const third = gaussian(
+                    sampleX, sampleY, thirdX, thirdY, width * 0.08,
+                );
+                const field = 1
+                    - (1 - first) * (1 - second * 0.82) * (1 - third * 0.62);
+                const texture = 0.96
+                    + 0.07 * Math.sin(x * 0.018 + motionTime * 0.9)
+                    * Math.sin(y * 0.016 - motionTime * 0.65);
+                const strength = Math.max(0, Math.min(1, field * texture));
+                const radius = spacing
+                    * (0.025 + 0.075 * Math.pow(strength, 0.82));
+
+                context.globalAlpha = 0.1 + strength * 0.38;
+                context.beginPath();
+                context.arc(x, y, radius, 0, Math.PI * 2);
+                context.fill();
+            }
+        }
+        context.globalAlpha = 1;
+    };
+
+    const frame = (now) => {
+        if (screens.template.hidden || document.hidden) {
+            staticFrameDrawn = false;
+        } else {
+            if (resize()) staticFrameDrawn = false;
+            if (width > 0 && height > 0) {
+                if (reducedMotion.matches) {
+                    if (!staticFrameDrawn) {
+                        draw(0);
+                        staticFrameDrawn = true;
+                    }
+                } else if (now - lastDraw >= 1000 / 30) {
+                    draw(now);
+                    lastDraw = now;
+                }
+            }
+        }
+        requestAnimationFrame(frame);
+    };
+
+    reducedMotion.addEventListener?.("change", () => {
+        staticFrameDrawn = false;
+    });
+    requestAnimationFrame(frame);
+}
+
+startTemplateOrbField();
 
 function resetIdlePoseGroups() {
     idlePoseGroups = Array.from(

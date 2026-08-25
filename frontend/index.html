@@ -86,6 +86,12 @@
 
         <!-- TEMPLATE SELECT -->
         <div class="screen" id="screen-template" hidden>
+            <div class="template-hero-orb" aria-hidden="true">
+                <div class="template-hero-orb-backdrop"></div>
+                <div class="template-hero-orb-surface">
+                    <canvas class="template-hero-orb-canvas"></canvas>
+                </div>
+            </div>
             <div class="template-tools">
                 <button id="template-multi" type="button" hidden
                         aria-pressed="false"
@@ -245,13 +251,6 @@
                     </section>
 
                     <section class="service-section">
-                        <h2 class="service-section-title">Сеть</h2>
-                        <div id="network-adapters" class="service-grid">
-                            <div class="service-loader"><span></span>Загрузка адаптеров…</div>
-                        </div>
-                    </section>
-
-                    <section class="service-section">
                         <h2 class="service-section-title">Система</h2>
                         <div class="service-grid">
                             <button id="btn-sys-lock" class="service-btn" type="button">Заблокировать экран</button>
@@ -259,6 +258,13 @@
                             <button id="btn-sys-keyboard" class="service-btn" type="button">Экранная клавиатура</button>
                             <button id="btn-app-restart" class="service-btn service-btn-danger" type="button">Перезапустить приложение</button>
                             <button id="btn-sys-logoff" class="service-btn service-btn-danger" type="button">Выйти из системы</button>
+                        </div>
+                    </section>
+
+                    <section class="service-section">
+                        <h2 class="service-section-title">Сеть</h2>
+                        <div id="network-adapters" class="service-grid">
+                            <div class="service-loader"><span></span>Загрузка адаптеров…</div>
                         </div>
                     </section>
                 </div>

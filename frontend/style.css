@@ -429,7 +429,9 @@ html, body {
     .idle-hero-wrap,
     .idle-start-button,
     .idle-tap-hand,
-    .idle-tap-ring {
+    .idle-tap-ring,
+    .template-hero-orb-surface,
+    .template-hero-orb-backdrop {
         animation-play-state: paused !important;
     }
 
@@ -631,13 +633,12 @@ html, body {
     gap: 2vh;
     padding: 5vh;
     background:
-        radial-gradient(circle at 8% -8%, rgba(83, 159, 126, 0.12), transparent 27vw),
-        radial-gradient(circle at 92% -10%, rgba(209, 93, 111, 0.1), transparent 25vw),
-        #f8f7f4;
+        radial-gradient(circle at 92% -10%, rgba(255, 102, 137, 0.22), transparent 27vw),
+        radial-gradient(circle at 76% 112%, rgba(74, 121, 194, 0.2), transparent 36vw),
+        #d3cddd;
 }
 
-#screen-template::before {
-    content: "";
+.template-hero-orb {
     position: absolute;
     z-index: 0;
     top: calc(10vh - 36vw);
@@ -645,25 +646,57 @@ html, body {
     width: 72vw;
     aspect-ratio: 1;
     border-radius: 50%;
-    background:
-        radial-gradient(circle, rgba(23, 59, 41, 0.17) 0 0.1vw, transparent 0.13vw)
-            0 0 / 0.95vw 0.95vw,
-        linear-gradient(145deg, #c8ff70 0%, #73eca4 55%, #45d28d 100%);
-    box-shadow:
-        0.7vw 0.7vw 0 #ff6689,
-        1vw 1.8vw 3vw rgba(28, 85, 54, 0.18);
     pointer-events: none;
-    transition: background 0.2s ease, box-shadow 0.2s ease;
 }
 
-#screen-template.multi-select::before {
-    background:
-        radial-gradient(circle, rgba(23, 59, 41, 0.2) 0 0.1vw, transparent 0.13vw)
-            0 0 / 0.95vw 0.95vw,
-        linear-gradient(145deg, #b6f957 0%, #56df91 55%, #32c97b 100%);
-    box-shadow:
-        0.7vw 0.7vw 0 #f54f7a,
-        1vw 1.8vw 3vw rgba(25, 80, 50, 0.24);
+.template-hero-orb-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border-radius: 50%;
+    background: #ff6689;
+    transform: translate(0.9vw, 0.9vw);
+    animation: template-circle-breathe 3s ease-in-out infinite alternate;
+    will-change: border-radius, clip-path;
+}
+
+#screen-template.multi-select .template-hero-orb-backdrop {
+    background: #f54f7a;
+}
+
+.template-hero-orb-surface {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: 50%;
+    overflow: hidden;
+    background: linear-gradient(145deg, #c8ff70 0%, #73eca4 55%, #45d28d 100%);
+    animation: template-circle-breathe 3s ease-in-out infinite alternate;
+    will-change: border-radius, clip-path;
+}
+
+#screen-template.multi-select .template-hero-orb-surface {
+    background: linear-gradient(145deg, #b6f957 0%, #56df91 55%, #32c97b 100%);
+}
+
+.template-hero-orb-canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+@keyframes template-circle-breathe {
+    from {
+        border-radius: 50%;
+        clip-path: circle(46% at 50% 50%);
+    }
+    to {
+        border-radius: 48% 52% 51% 49% / 52% 48% 52% 48%;
+        clip-path: circle(50% at 50% 50%);
+    }
 }
 
 .template-options-row {
@@ -1771,7 +1804,6 @@ html, body {
 .service-config-table td {
     padding: 12px 14px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    text-align: left;
 }
 
 .service-config-table th {
@@ -1779,10 +1811,16 @@ html, body {
     font-size: 13px;
 }
 
+.service-config-table th:first-child,
+.service-config-table td:first-child {
+    width: 50%;
+    text-align: right;
+}
+
 .service-config-table th:last-child,
 .service-config-table td:last-child {
-    width: 42%;
-    text-align: right;
+    width: 50%;
+    text-align: left;
 }
 
 .service-config-table tr:last-child td {
@@ -1800,11 +1838,13 @@ html, body {
 }
 
 .service-config-value {
-    width: 100%;
+    display: inline-flex;
+    max-width: 100%;
     padding: 12px;
     flex-direction: column;
-    align-items: flex-end;
+    align-items: flex-start;
     overflow-wrap: break-word;
+    text-align: left;
     color: #69f0ae;
     font-size: 17px;
 }
