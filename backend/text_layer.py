@@ -24,7 +24,9 @@ ROTATION_TRANSPOSE = {
 }
 DEFAULT_LINE_SPACING = 1.2
 DEFAULT_COLOR = "#000000"
+# Fabric's logical text box constants. They are unchanged in Fabric 5.3–7.4.
 FABRIC_FONT_SIZE_MULTIPLIER = 1.13
+FABRIC_FONT_SIZE_FRACTION = 0.222
 MIN_FONT_SIZE = 4
 MAX_FONT_SIZE = 2000
 FONTS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
@@ -262,6 +264,11 @@ def _draw_block(
     ascent, descent = font.getmetrics()
     lines = text.split("\n")
     line_step = font_size * block.line_spacing * FABRIC_FONT_SIZE_MULTIPLIER
+    baseline_offset = (
+        font_size
+        * FABRIC_FONT_SIZE_MULTIPLIER
+        * (0.5 - FABRIC_FONT_SIZE_FRACTION)
+    )
 
     positioned = []
     bounds = []
@@ -269,7 +276,7 @@ def _draw_block(
     for index, line in enumerate(lines):
         baseline_y = (
             (index - (len(lines) - 1) / 2) * line_step
-            + (ascent - descent) / 2
+            + baseline_offset
         )
         runs, line_left, line_right = _line_runs(
             line, font, char_spacing, block.align
