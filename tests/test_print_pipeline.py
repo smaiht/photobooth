@@ -731,10 +731,10 @@ class PreviewComposerTests(unittest.TestCase):
                 self.assertEqual(strip_cache.size, (300, 200))
 
             with Image.open(results["strips"]) as strips:
-                self.assertLess(max(strips.getpixel((10, 10))), 80)
+                self.assertEqual(strips.getpixel((10, 10)), (255, 255, 255))
                 self.assertGreater(strips.getpixel((120, 20))[0], 200)
                 self.assertGreater(strips.getpixel((180, 30))[0], 200)
-                self.assertLess(max(strips.getpixel((150, 100))), 80)
+                self.assertEqual(strips.getpixel((150, 100)), (255, 255, 255))
                 self.assertGreater(strips.getpixel((120, 50))[1], 80)
                 self.assertGreater(strips.getpixel((120, 85))[2], 200)
 

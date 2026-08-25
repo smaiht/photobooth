@@ -635,9 +635,10 @@ html, body {
     gap: 2vh;
     padding: 5vh;
     background:
-        radial-gradient(circle at 92% -10%, rgba(255, 102, 137, 0.22), transparent 27vw),
-        radial-gradient(circle at 76% 112%, rgba(74, 121, 194, 0.2), transparent 36vw),
-        #d3cddd;
+        radial-gradient(circle at 92% -10%, rgba(255, 65, 130, 0.45), transparent 35vw),
+        radial-gradient(circle at 78% 110%, rgba(55, 120, 240, 0.42), transparent 45vw),
+        radial-gradient(circle at 8% -8%, rgba(115, 236, 163, 0.424), transparent 38vw),
+        #cec8d8;
 }
 
 .template-hero-orb {
@@ -1462,18 +1463,12 @@ html, body {
     border-radius: 0 0.72vw 0 0.6vw;
     display: grid;
     place-items: center;
-    background: rgba(255, 255, 255, 0.88);
-    backdrop-filter: blur(4px);
+    background: #ffffff;
     color: #222;
     box-shadow: none;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-    transition: transform 0.12s ease, background 0.12s ease;
-}
-.photo-choice-expand:active {
-    transform: scale(0.92);
-    background: #e8e5df;
 }
 .photo-choice-expand:disabled { opacity: 0.5; }
 .photo-choice-expand svg {
