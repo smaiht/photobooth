@@ -1,7 +1,8 @@
 const core = window.PhotoboothCore;
 const previewRoute = core.previewRoute(location.hash);
 
-const POSE_INTRO_HOLD_MS = 2000;
+const POSE_INTRO_DELAY_MS = 500;
+const POSE_INTRO_HOLD_MS = 1500;
 const TEST_POSE_INTRO_HOLD_MS = 1000;
 const POSE_INTRO_MOVE_MS = 1000;
 
@@ -331,9 +332,8 @@ function showPoseIntro(urls, holdMs) {
     });
     targets.forEach(card => card.classList.add("pose-card-target"));
     poseIntro.replaceChildren(...cards);
-    poseIntro.hidden = false;
 
-    poseIntroTimer = setTimeout(() => {
+    const moveToRails = () => {
         if (run !== poseIntroRun) return;
         poseIntro.classList.add("moving");
         const animations = cards.map((card, index) => {
@@ -362,7 +362,13 @@ function showPoseIntro(urls, holdMs) {
         Promise.all(animations.map(animation => animation.finished)).then(() => {
             if (run === poseIntroRun) clearPoseIntro();
         }).catch(() => {});
-    }, holdMs);
+    };
+
+    poseIntroTimer = setTimeout(() => {
+        if (run !== poseIntroRun) return;
+        poseIntro.hidden = false;
+        poseIntroTimer = setTimeout(moveToRails, holdMs);
+    }, POSE_INTRO_DELAY_MS);
 }
 
 function renderIdlePoseBackdrop() {
