@@ -24,6 +24,11 @@ MAX_PACK_SIZE = 1024 * 1024 * 1024
 StatusCallback = Callable[[str], None]
 
 
+def _raise_if_cancelled(cancel_event) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError("custom template sync cancelled")
+
+
 def _request_json(method: str, url: str, token: str, **params) -> dict:
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -42,9 +47,10 @@ def _request_json(method: str, url: str, token: str, **params) -> dict:
     return payload
 
 
-def _ensure_remote_root(token: str, remote_root: str) -> None:
+def _ensure_remote_root(token: str, remote_root: str, cancel_event=None) -> None:
     current = ""
     for part in remote_root.strip("/").split("/"):
+        _raise_if_cancelled(cancel_event)
         current += "/" + part
         try:
             _request_json("PUT", f"{API}/resources", token, path=current)
@@ -53,10 +59,11 @@ def _ensure_remote_root(token: str, remote_root: str) -> None:
                 raise
 
 
-def _list_directory(path: str, token: str) -> list[dict]:
+def _list_directory(path: str, token: str, cancel_event=None) -> list[dict]:
     items: list[dict] = []
     offset = 0
     while True:
+        _raise_if_cancelled(cancel_event)
         payload = _request_json(
             "GET", f"{API}/resources", token,
             path=path, limit=1000, offset=offset,
@@ -66,6 +73,7 @@ def _list_directory(path: str, token: str) -> list[dict]:
         if not isinstance(page, list):
             raise ValueError(f"invalid Yandex.Disk directory listing: {path}")
         items.extend(item for item in page if isinstance(item, dict))
+        _raise_if_cancelled(cancel_event)
         if len(page) < 1000:
             return items
         offset += len(page)
@@ -78,11 +86,12 @@ def _safe_name(value) -> str:
     return name
 
 
-def _pack_files(remote_pack: str, token: str) -> dict[str, dict]:
+def _pack_files(remote_pack: str, token: str, cancel_event=None) -> dict[str, dict]:
     files: dict[str, dict] = {}
 
     def walk(remote_dir: str, relative_dir: str = "") -> None:
-        for item in _list_directory(remote_dir, token):
+        for item in _list_directory(remote_dir, token, cancel_event):
+            _raise_if_cancelled(cancel_event)
             name = _safe_name(item.get("name"))
             relative = f"{relative_dir}/{name}" if relative_dir else name
             item_type = item.get("type")
@@ -115,7 +124,9 @@ def _download_file(
     destination: Path,
     token: str,
     on_progress: Callable[[int, float], None] | None = None,
+    cancel_event=None,
 ) -> None:
+    _raise_if_cancelled(cancel_event)
     payload = _request_json(
         "GET", f"{API}/resources/download", token,
         path=remote["remote_path"],
@@ -132,9 +143,11 @@ def _download_file(
     try:
         with urllib.request.urlopen(request, timeout=60) as response, temporary.open("wb") as output:
             while True:
+                _raise_if_cancelled(cancel_event)
                 chunk = response.read(256 * 1024)
                 if not chunk:
                     break
+                _raise_if_cancelled(cancel_event)
                 total += len(chunk)
                 if total > remote["size"]:
                     raise ValueError("custom template file exceeds declared size")
@@ -182,9 +195,11 @@ def _sync_pack(
     num_photos: int,
     default_template: str,
     on_progress: StatusCallback | None = None,
+    cancel_event=None,
 ) -> bool:
     from .composer import load_template_pack
 
+    _raise_if_cancelled(cancel_event)
     destination = custom_root / name
     old_state = _read_state(destination)
     if _state_matches(destination, old_state, remote):
@@ -248,12 +263,20 @@ def _sync_pack(
     if downloads:
         report_progress(0, 0, force=True)
     for metadata, target in downloads:
-        if on_progress:
+        _raise_if_cancelled(cancel_event)
+        if cancel_event is not None:
+            _download_file(
+                metadata, target, token,
+                on_progress=report_progress if on_progress else None,
+                cancel_event=cancel_event,
+            )
+        elif on_progress:
             _download_file(metadata, target, token, report_progress)
         else:
             _download_file(metadata, target, token)
         downloaded += metadata["size"]
 
+    _raise_if_cancelled(cancel_event)
     state = {
         "files": {
             name: {"size": item["size"], "md5": item["md5"]}
@@ -288,6 +311,7 @@ def sync_custom_templates(
     remote_root: str = REMOTE_ROOT,
     on_status: StatusCallback | None = None,
     on_progress: StatusCallback | None = None,
+    cancel_event=None,
 ) -> dict[str, int]:
     """Mirror valid remote packs into a local cache; never replace one partially."""
     from .config import TEMPLATE_PACK_RE
@@ -297,17 +321,19 @@ def sync_custom_templates(
         return {"updated": 0, "removed": 0, "failed": 0}
     remote_root = "/" + remote_root.strip("/")
     custom_root.mkdir(parents=True, exist_ok=True)
+    _raise_if_cancelled(cancel_event)
     try:
-        root_items = _list_directory(remote_root, token)
+        root_items = _list_directory(remote_root, token, cancel_event)
     except urllib.error.HTTPError as exc:
         if exc.code != 404:
             raise
-        _ensure_remote_root(token, remote_root)
+        _ensure_remote_root(token, remote_root, cancel_event)
         root_items = []
 
     snapshots: dict[str, dict[str, dict]] = {}
     failed = 0
     for item in root_items:
+        _raise_if_cancelled(cancel_event)
         if item.get("type") != "dir":
             continue
         name = _safe_name(item.get("name"))
@@ -319,7 +345,10 @@ def sync_custom_templates(
         try:
             if on_progress:
                 on_progress(f"{name}: проверка файлов...")
-            snapshots[name] = _pack_files(f"{remote_root}/{name}", token)
+            snapshots[name] = _pack_files(
+                f"{remote_root}/{name}", token, cancel_event)
+        except InterruptedError:
+            raise
         except Exception as exc:
             failed += 1
             if on_status:
@@ -357,15 +386,19 @@ def sync_custom_templates(
     stage_root.mkdir()
     try:
         for name, files in snapshots.items():
+            _raise_if_cancelled(cancel_event)
             try:
                 if _sync_pack(
                     name, files, custom_root, stage_root, token,
                     num_photos, default_template,
                     on_progress=on_progress,
+                    cancel_event=cancel_event,
                 ):
                     updated += 1
                     if on_status:
                         on_status(f"Обновлён кастомный шаблон: {name}")
+            except InterruptedError:
+                raise
             except Exception as exc:
                 failed += 1
                 if on_status:
@@ -375,6 +408,7 @@ def sync_custom_templates(
 
     removed = 0
     for path in custom_root.iterdir():
+        _raise_if_cancelled(cancel_event)
         if path.is_dir() and TEMPLATE_PACK_RE.fullmatch(path.name) and path.name not in remote_names:
             shutil.rmtree(path)
             removed += 1

@@ -111,10 +111,21 @@ def _build_loading_html():
         document.getElementById('retry-update').disabled = disabled;
         document.getElementById('update-controls').style.opacity = disabled ? '0.55' : '1';
     }}
-    function beginUpdateCheck() {{
+    var loadingTask = 'update';
+    function showLoadingControls(task, skipLabel, retryLabel) {{
+        loadingTask = task;
+        document.getElementById('skip-update').textContent = skipLabel;
+        document.getElementById('retry-update').textContent = retryLabel;
         document.getElementById('update-controls').style.display = 'flex';
         setUpdateControlsDisabled(false);
+    }}
+    function beginUpdateCheck() {{
+        showLoadingControls(
+            'update', 'Запустить без обновления', 'Повторить заново');
         setProgress('Подключение к Яндекс Диску · попытка 1/5');
+    }}
+    function beginTemplateSync() {{
+        showLoadingControls('templates', 'ПРОПУСТИТЬ', 'ПОВТОРИТЬ');
     }}
     function hideUpdateControls() {{
         document.getElementById('update-controls').style.display = 'none';
@@ -122,10 +133,14 @@ def _build_loading_html():
     function requestUpdateAction(action) {{
         setUpdateControlsDisabled(true);
         if (action === 'skip') {{
-            setProgress('Запуск без обновления...');
+            setProgress(loadingTask === 'templates'
+                ? 'Запуск с локальными шаблонами...'
+                : 'Запуск без обновления...');
             window.pywebview.api.skip_update();
         }} else {{
-            setProgress('Обновление запускается заново...');
+            setProgress(loadingTask === 'templates'
+                ? 'Синхронизация шаблонов запускается заново...'
+                : 'Обновление запускается заново...');
             window.pywebview.api.retry_update();
         }}
     }}
@@ -277,6 +292,7 @@ _UPDATE_MARKER = _APP_DIR / ".update_in_progress.json"
 _UPDATE_COMPONENTS = (
     "app", "assets", "python", "bin", "templates", "edsdk", "drivers",
 )
+_CUSTOM_TEMPLATE_RETRY_DELAYS = (2.0, 3.0, 3.0, 3.0)
 _COMPONENT_ROOTS = {
     "assets": "assets",
     "python": "python",
@@ -1264,28 +1280,77 @@ def sync_custom_templates():
     config = json.loads(
         (_APP_DIR / "config_app.json").read_text(encoding="utf-8")
     )
+    attempts = len(_CUSTOM_TEMPLATE_RETRY_DELAYS) + 1
+    _loading_api.reset()
     _ui("setStatus('Шаблоны')")
-    _ui_progress("Проверка кастомных шаблонов...")
-    try:
-        result = sync(
-            _APP_DIR / "templates_custom",
-            num_photos=int(config["num_photos"]),
-            default_template=str(config["default_template"]),
-            on_status=_ui_log,
-            on_progress=_ui_progress,
-        )
-        log.info(
-            "Custom templates: updated=%d removed=%d failed=%d",
-            result["updated"], result["removed"], result["failed"],
-        )
-        if result["failed"]:
-            _ui_progress("Синхронизация шаблонов завершена с ошибками")
+
+    while True:
+        _ui("beginTemplateSync()")
+        last_error = None
+
+        for attempt in range(1, attempts + 1):
+            if _loading_api.event.is_set():
+                break
+            _ui_progress(
+                f"Проверка кастомных шаблонов · попытка {attempt}/{attempts}"
+            )
+            try:
+                result = sync(
+                    _APP_DIR / "templates_custom",
+                    num_photos=int(config["num_photos"]),
+                    default_template=str(config["default_template"]),
+                    on_status=_ui_log,
+                    on_progress=_ui_progress,
+                    cancel_event=_loading_api.event,
+                )
+                log.info(
+                    "Custom templates: attempt=%d/%d updated=%d removed=%d failed=%d",
+                    attempt, attempts,
+                    result["updated"], result["removed"], result["failed"],
+                )
+                if not result["failed"] and not _loading_api.event.is_set():
+                    _ui("hideUpdateControls()")
+                    _ui_progress("Кастомные шаблоны синхронизированы")
+                    return
+                if result["failed"]:
+                    last_error = RuntimeError(
+                        f"не обработано шаблонов: {result['failed']}")
+            except Exception as exc:
+                last_error = exc
+                if not _loading_api.event.is_set():
+                    log.warning(
+                        "Custom template sync attempt %d/%d failed: %s",
+                        attempt, attempts, exc, exc_info=True,
+                    )
+
+            if _loading_api.event.is_set() or attempt >= attempts:
+                break
+            delay = _CUSTOM_TEMPLATE_RETRY_DELAYS[attempt - 1]
+            _ui_progress(
+                "Синхронизация шаблонов не завершена · "
+                f"повтор {attempt + 1}/{attempts} через {delay:.0f} с"
+            )
+            if _loading_api.event.wait(delay):
+                break
+
+        if _loading_api.action == "retry":
+            log.info("Custom template sync restarted by user")
+            _loading_api.reset()
+            continue
+
+        _ui("hideUpdateControls()")
+        if _loading_api.action == "skip":
+            log.info("Custom template sync skipped by user; using local cache")
+            _ui_progress("Запуск с локальными шаблонами")
         else:
-            _ui_progress("Кастомные шаблоны синхронизированы")
-    except Exception as exc:
-        log.exception("Custom template sync failed; using local cache")
-        _ui_progress("Кастомные шаблоны не обновлены")
-        _ui_log(f"Кастомные шаблоны не обновлены: {exc}")
+            log.error(
+                "Custom template sync failed after %d attempts; using local cache: %s",
+                attempts, last_error,
+            )
+            _ui_progress("Кастомные шаблоны не обновлены — запускаем локальные")
+            if last_error:
+                _ui_log(f"Ошибка синхронизации шаблонов: {last_error}")
+        return
 
 
 def _run_application():
