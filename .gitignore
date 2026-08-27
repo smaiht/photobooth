@@ -13,7 +13,7 @@ photos_print_jobs/
 dist/
 build/
 *.spec
-
+.kiro
 .vscode/
 
 .update_hash
@@ -52,3 +52,5 @@ templates/**/*_preview.png.tmp
 templates/**/*_trim.png
 templates/**/*_trim.png.tmp
 templates/**/checks/
+
+templates_custom/

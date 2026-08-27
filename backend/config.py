@@ -15,6 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 ASSETS_DIR = ROOT_DIR / "assets"
 FRONTEND_DIR = ROOT_DIR / "frontend"
 TEMPLATES_DIR = ROOT_DIR / "templates"
+CUSTOM_TEMPLATES_DIR = ROOT_DIR / "templates_custom"
 EDSDK_DLL = ROOT_DIR / "EDSDK_Win" / "EDSDK_64" / "Dll" / "EDSDK.dll"
 
 PHOTOS_DIR = ROOT_DIR / "photos"
@@ -125,10 +126,41 @@ def _write_json_config(path: Path, config: dict) -> None:
     temporary.replace(path)
 
 
+def template_pack_dir(
+    name: str,
+    templates_dir: Path | None = None,
+    custom_templates_dir: Path | None = None,
+) -> Path:
+    """Resolve a pack, preferring a downloaded custom pack with the same name."""
+    requested = str(name or "").strip().lower()
+    if not TEMPLATE_PACK_RE.fullmatch(requested):
+        raise ValueError("некорректное имя template pack")
+
+    system_root = Path(templates_dir) if templates_dir is not None else TEMPLATES_DIR
+    custom_root = (
+        Path(custom_templates_dir)
+        if custom_templates_dir is not None
+        else CUSTOM_TEMPLATES_DIR
+    )
+    for root in (custom_root, system_root):
+        pack = root / requested
+        if (pack / "config.json").is_file():
+            return pack
+
+    available = sorted({
+        candidate.parent.name
+        for root in (custom_root, system_root)
+        for candidate in root.glob("*/config.json")
+    })
+    suffix = f"; доступно: {', '.join(available)}" if available else ""
+    raise ValueError(f"неизвестный template pack: {requested}{suffix}")
+
+
 def update_template_pack(
     name: str,
     config_path: Path | None = None,
     templates_dir: Path | None = None,
+    custom_templates_dir: Path | None = None,
 ) -> tuple[str, str, bool]:
     """Validate a template pack and atomically select it for the next start."""
     requested = str(name or "").strip().lower()
@@ -140,18 +172,16 @@ def update_template_pack(
         if config_path is not None
         else ROOT_DIR / "config_app.json"
     )
-    packs_root = (
-        Path(templates_dir)
-        if templates_dir is not None
-        else path.parent / "templates"
+    pack_dir = template_pack_dir(
+        requested,
+        templates_dir=templates_dir or path.parent / "templates",
+        custom_templates_dir=(
+            custom_templates_dir
+            if custom_templates_dir is not None
+            else path.parent / "templates_custom"
+        ),
     )
-    pack_config_path = packs_root / requested / "config.json"
-    if not pack_config_path.is_file():
-        available = sorted(
-            candidate.parent.name for candidate in packs_root.glob("*/config.json")
-        )
-        suffix = f"; доступно: {', '.join(available)}" if available else ""
-        raise ValueError(f"неизвестный template pack: {requested}{suffix}")
+    pack_config_path = pack_dir / "config.json"
 
     pack_config = json.loads(pack_config_path.read_text(encoding="utf-8"))
     templates = (

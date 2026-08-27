@@ -466,49 +466,6 @@ def _cleanup_stale_update_artifacts(app_dir: Path = _APP_DIR) -> None:
                 log.warning("Disk update: stale stage is still busy %s: %s", path, exc)
 
 
-def _should_skip(name: str) -> bool:
-    """Skip files that Windows locks while Python is running."""
-    n = name.replace("\\", "/")
-    if n.endswith("/"):
-        return True
-    # Skip all exe/dll/pyd in python/ — they're locked by running process
-    if n.startswith("python/") and n.rsplit(".", 1)[-1] in ("exe", "dll", "pyd"):
-        return True
-    top = n.split("/", 1)[0]
-    # Runtime state belongs to this installation. config_app.json and
-    # config_camera.json intentionally come from the release for now.
-    if top in {
-        ".git", ".env", ".ENV", "photos", "photos_print_jobs",
-        "yadisk_queue.json", "cafe_unlock_state.json",
-        "cafe_unlock_state.json.tmp", "photobooth.log",
-    } or top.startswith("photobooth.log."):
-        return True
-    return False
-
-
-def _extract_update(zip_path: str, app_dir: str) -> None:
-    import zipfile
-
-    root = os.path.realpath(app_dir)
-    with zipfile.ZipFile(zip_path) as zf:
-        bad_member = zf.testzip()
-        if bad_member:
-            raise ValueError(f"ZIP CRC failed: {bad_member}")
-        for info in zf.infolist():
-            member = info.filename.replace("\\", "/")
-            if _should_skip(member):
-                continue
-            target = os.path.realpath(os.path.join(app_dir, member))
-            if os.path.commonpath((root, target)) != root:
-                raise ValueError(f"ZIP path escapes application directory: {member}")
-            if info.is_dir():
-                os.makedirs(target, exist_ok=True)
-                continue
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with zf.open(info) as src, open(target, "wb") as dst:
-                dst.write(src.read())
-
-
 def _prepare_update_stage(
     archives: Path | list[tuple[str, Path]],
     stage_path: Path,
@@ -948,10 +905,6 @@ def _release_artifacts(status: dict) -> dict[str, dict]:
     return selected
 
 
-def _full_update(status: dict) -> dict:
-    return _release_artifacts(status)["full"]
-
-
 def _read_update_versions(path: Path) -> dict[str, str] | str | None:
     try:
         raw = path.read_text(encoding="utf-8").strip()
@@ -1304,6 +1257,33 @@ def auto_update():
             return
 
 
+def sync_custom_templates():
+    """Refresh the custom-pack cache after release updates, before FastAPI starts."""
+    from backend.custom_templates import sync_custom_templates as sync
+
+    config = json.loads(
+        (_APP_DIR / "config_app.json").read_text(encoding="utf-8")
+    )
+    _ui("setStatus('Шаблоны')")
+    _ui_log("Проверка кастомных шаблонов...")
+    try:
+        result = sync(
+            _APP_DIR / "templates_custom",
+            num_photos=int(config["num_photos"]),
+            default_template=str(config["default_template"]),
+            on_status=_ui_log,
+        )
+        log.info(
+            "Custom templates: updated=%d removed=%d failed=%d",
+            result["updated"], result["removed"], result["failed"],
+        )
+        if not any(result.values()):
+            _ui_log("Кастомные шаблоны актуальны")
+    except Exception as exc:
+        log.exception("Custom template sync failed; using local cache")
+        _ui_log(f"Кастомные шаблоны не обновлены: {exc}")
+
+
 def _run_application():
     installer_active = _external_update_active()
     if installer_active:
@@ -1355,9 +1335,12 @@ def _run_application():
     _window = window
 
     def update_then_start():
-        # Auto-update while Loading is shown
+        # Install release components first. If installation requires replacing
+        # this process, auto_update exits and the restarted copy reaches the
+        # custom-template step with the new code.
         try:
             auto_update()
+            sync_custom_templates()
         finally:
             if update_marker_owned:
                 _release_update_marker()

@@ -227,6 +227,7 @@
                         <div class="service-grid">
                             <button id="btn-config-app" class="service-btn" type="button">Конфиг приложения</button>
                             <button id="btn-config-camera" class="service-btn" type="button">Конфиг камеры</button>
+                            <button id="btn-template-pack" class="service-btn service-btn-wide" type="button">Выбрать шаблон</button>
                         </div>
                     </section>
 
@@ -295,6 +296,30 @@
                     <div class="service-config-footer">
                         <button id="service-unlock-cancel" class="service-btn" type="button">Отмена</button>
                         <button id="service-unlock-save" class="service-btn service-btn-apply" type="button">Разблокировать</button>
+                    </div>
+                </div>
+
+                <div id="service-template-page" class="service-page" hidden>
+                    <div id="service-template-list" class="service-template-list"></div>
+                    <div id="service-template-confirm" class="service-template-confirm" hidden>
+                        <div class="service-template-selected">
+                            <strong id="service-template-name"></strong>
+                            <span id="service-template-source"></span>
+                        </div>
+                        <div class="service-template-previews">
+                            <figure id="service-template-grid-preview">
+                                <figcaption>Грид</figcaption>
+                                <img id="service-template-grid-image" alt="Фон грида">
+                            </figure>
+                            <figure id="service-template-strips-preview">
+                                <figcaption>Стрипсы</figcaption>
+                                <img id="service-template-strips-image" alt="Фон стрипсов">
+                            </figure>
+                        </div>
+                        <div class="service-config-footer">
+                            <button id="service-template-change" class="service-btn" type="button">Другой шаблон</button>
+                            <button id="service-template-apply" class="service-btn service-btn-apply" type="button">Применить без перезапуска</button>
+                        </div>
                     </div>
                 </div>
 

@@ -22,10 +22,11 @@ from urllib.parse import quote
 
 from fastapi import BackgroundTasks, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from .config import (
     ASSETS_DIR,
+    CUSTOM_TEMPLATES_DIR,
     EDSDK_DLL,
     FRONTEND_DIR,
     PHOTOS_DIR,
@@ -37,6 +38,7 @@ from .config import (
     lens_max_aperture_hint,
     load_event_config,
     preset_names,
+    template_pack_dir,
     update_app_config_field,
     update_camera_config_field,
     update_template_pack,
@@ -46,6 +48,7 @@ from .composer import (
     compose,
     compose_unframed_photo,
     generate_template_previews,
+    load_template_pack,
     template_photo_count,
 )
 from .text_layer import date_values
@@ -1059,40 +1062,13 @@ async def _run_session(test_session: bool = False):
     num_photos = int(CONFIG["num_photos"])
     if num_photos <= 0:
         raise ValueError("num_photos must be positive")
-    template_dir = TEMPLATES_DIR / CONFIG["template_pack"]
-    tpl_config = json.loads((template_dir / "config.json").read_text(encoding="utf-8"))
-    available_templates = tpl_config.get("templates", {})
-    if not isinstance(available_templates, dict) or not available_templates:
-        raise ValueError(f"No templates configured in {template_dir}")
-    tpl_print_size = tuple(tpl_config.get("print_size", DEFAULT_PRINT_SIZE))
-    for template_name, template in available_templates.items():
-        required_photos = template_photo_count(
-            template, template_name, tpl_print_size)
-        # A layout may intentionally use only the first captured photo, but it
-        # must never reference a photo the session does not capture.
-        if required_photos > num_photos:
-            raise ValueError(
-                f"Template {template_name!r} needs {required_photos} photos, "
-                f"but the session captures {num_photos}"
-            )
-        if template.get("photo_choice") is True and required_photos != 1:
-            raise ValueError(
-                f"Photo-choice template {template_name!r} must reference "
-                "exactly one photo"
-            )
-        layout = template["print_layout"]
-        background = layout.get("background")
-        if not isinstance(background, str) or not (template_dir / background).is_file():
-            raise ValueError(f"Template background is missing: {template_name!r}")
-        foreground = layout.get("foreground")
-        if foreground is not None and (
-            not isinstance(foreground, str)
-            or not foreground
-            or not (template_dir / foreground).is_file()
-        ):
-            raise ValueError(f"Template foreground is missing: {template_name!r}")
-    if CONFIG["default_template"] not in available_templates:
-        raise ValueError(f"Unknown default template: {CONFIG['default_template']}")
+    template_dir = template_pack_dir(CONFIG["template_pack"])
+    tpl_config = load_template_pack(
+        template_dir,
+        num_photos,
+        CONFIG["default_template"],
+    )
+    available_templates = tpl_config["templates"]
 
     SESSION_COUNT += 1
     SESSION_ID = uuid.uuid4().hex[:8] + hex(int(time.time() * 1000000))[2:]
@@ -1629,6 +1605,110 @@ def get_service_config():
         "camera": camera_config,
         "start_locked": _start_locked(),
         "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
+    }
+
+
+@app.get("/api/service/templates")
+def get_service_templates():
+    packs = []
+    seen = set()
+    for root, source in (
+        (CUSTOM_TEMPLATES_DIR, "custom"),
+        (TEMPLATES_DIR, "system"),
+    ):
+        for config_path in sorted(root.glob("*/config.json")):
+            name = config_path.parent.name
+            if name in seen:
+                continue
+            try:
+                pack_dir = template_pack_dir(name)
+                config = load_template_pack(
+                    pack_dir,
+                    int(CONFIG["num_photos"]),
+                    CONFIG["default_template"],
+                )
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                log.error("Service template %s skipped: %s", name, exc)
+                continue
+            seen.add(name)
+            layouts = [
+                layout for layout in ("grid", "strips")
+                if layout in config["templates"]
+            ]
+            packs.append({
+                "name": name,
+                "source": source,
+                "current": name == CONFIG.get("template_pack"),
+                "layouts": layouts,
+            })
+    return {"ok": True, "templates": packs}
+
+
+@app.get("/api/service/templates/{name}/{layout}")
+def get_service_template_background(name: str, layout: str):
+    if layout not in {"grid", "strips"}:
+        return {"ok": False, "error": "Неизвестный макет"}
+    try:
+        pack_dir = template_pack_dir(name)
+        config = load_template_pack(
+            pack_dir,
+            int(CONFIG["num_photos"]),
+            CONFIG["default_template"],
+        )
+        template = config["templates"].get(layout)
+        if not isinstance(template, dict):
+            raise ValueError(f"В паке нет макета {layout}")
+        background = template["print_layout"]["background"]
+        path = pack_dir / background
+    except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return FileResponse(path, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/service/template")
+def set_service_template(payload: dict):
+    global CONFIG
+
+    if STATE not in ("idle", "no_camera", "camera_searching"):
+        return {
+            "status": "error",
+            "message": f"Template pack не изменён: state={STATE}",
+        }
+    if _background_uploads:
+        return {
+            "status": "error",
+            "message": "Template pack не изменён: завершается подготовка загрузки",
+        }
+    name = str(payload.get("name") or "").strip().lower()
+    try:
+        pack_dir = template_pack_dir(name)
+        load_template_pack(
+            pack_dir,
+            int(CONFIG["num_photos"]),
+            CONFIG["default_template"],
+        )
+        old_name, new_name, changed = update_template_pack(name)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {"status": "error", "message": f"Template pack не изменён: {exc}"}
+
+    CONFIG["template_pack"] = new_name
+    if changed:
+        _record_event_history({
+            "type": "configuration_changed",
+            "section": "application",
+            "field": "template_pack",
+            "old": old_name,
+            "new": new_name,
+            "source": {"actor": "operator", "command": "service_set_template"},
+        })
+        message = f"Template pack: {old_name} → {new_name}"
+    else:
+        message = f"Template pack уже выбран: {new_name}"
+    return {
+        "status": "ok",
+        "message": message,
+        "template_pack": new_name,
+        "restart": False,
     }
 
 
@@ -2213,7 +2293,7 @@ async def handle_disk_command(command: dict) -> dict:
                 "Custom print source saved: job=%s path=%s keep=%s",
                 job_id, original_path, keep_print_files,
             )
-            template_dir = TEMPLATES_DIR / CONFIG["template_pack"]
+            template_dir = template_pack_dir(CONFIG["template_pack"])
             template_config = json.loads(
                 (template_dir / "config.json").read_text(encoding="utf-8"))
             raw_print_size = template_config.get("print_size", [3688, 2480])

@@ -78,6 +78,17 @@ const serviceUnlockPlus = document.getElementById("service-unlock-plus");
 const serviceUnlockPresets = document.getElementById("service-unlock-presets");
 const serviceUnlockCancel = document.getElementById("service-unlock-cancel");
 const serviceUnlockSave = document.getElementById("service-unlock-save");
+const serviceTemplatePage = document.getElementById("service-template-page");
+const serviceTemplateList = document.getElementById("service-template-list");
+const serviceTemplateConfirm = document.getElementById("service-template-confirm");
+const serviceTemplateName = document.getElementById("service-template-name");
+const serviceTemplateSource = document.getElementById("service-template-source");
+const serviceTemplateGridPreview = document.getElementById("service-template-grid-preview");
+const serviceTemplateGridImage = document.getElementById("service-template-grid-image");
+const serviceTemplateStripsPreview = document.getElementById("service-template-strips-preview");
+const serviceTemplateStripsImage = document.getElementById("service-template-strips-image");
+const serviceTemplateChange = document.getElementById("service-template-change");
+const serviceTemplateApply = document.getElementById("service-template-apply");
 const serviceEditorPage = document.getElementById("service-editor-page");
 const serviceEditorComment = document.getElementById("service-editor-comment");
 const serviceEditorOptions = document.getElementById("service-editor-options");
@@ -87,6 +98,7 @@ const serviceEditorSave = document.getElementById("service-editor-save");
 const networkAdapters = document.getElementById("network-adapters");
 const btnConfigApp = document.getElementById("btn-config-app");
 const btnConfigCamera = document.getElementById("btn-config-camera");
+const btnTemplatePack = document.getElementById("btn-template-pack");
 const btnTestSession = document.getElementById("btn-test-session");
 const btnBoothUnblock = document.getElementById("btn-booth-unblock");
 const btnBoothBlock = document.getElementById("btn-booth-block");
@@ -1515,6 +1527,8 @@ let serviceConfigPromise = null;
 let serviceSection = "application";
 let serviceEditedField = null;
 let serviceEditedValue = null;
+let serviceTemplatePacks = [];
+let selectedServiceTemplate = null;
 const serviceDraft = { application: {}, camera: {} };
 
 function showServiceToast(text, duration = 3000) {
@@ -1655,6 +1669,10 @@ function updateServiceLabels() {
     btnConfigCamera.textContent = cameraCount
         ? `Конфиг камеры · ${cameraCount}`
         : "Конфиг камеры";
+    const currentTemplate = serviceConfig?.application?.template_pack;
+    btnTemplatePack.textContent = currentTemplate
+        ? `Выбрать шаблон · ${currentTemplate}`
+        : "Выбрать шаблон";
     btnBoothUnblock.textContent = serviceConfig
         ? `Разблокировать на N · сейчас ${serviceConfig.unlock_sessions_remaining}`
         : "Разблокировать на N";
@@ -1665,6 +1683,7 @@ function showServiceHome() {
     serviceHome.hidden = false;
     serviceConfigPage.hidden = true;
     serviceUnlockPage.hidden = true;
+    serviceTemplatePage.hidden = true;
     serviceEditorPage.hidden = true;
     serviceBack.hidden = true;
     serviceTitle.textContent = "СЕРВИС";
@@ -1703,6 +1722,80 @@ function showUnlockPage() {
     serviceBack.hidden = false;
     serviceTitle.textContent = "РАЗБЛОКИРОВКА";
     serviceModal.querySelector(".service-dialog").scrollTop = 0;
+}
+
+function showTemplateSelection(pack = null) {
+    selectedServiceTemplate = pack;
+    serviceTemplateList.hidden = Boolean(pack);
+    serviceTemplateConfirm.hidden = !pack;
+    if (!pack) return;
+
+    serviceTemplateName.textContent = pack.name;
+    serviceTemplateSource.textContent = pack.source === "custom"
+        ? "Кастомный шаблон"
+        : "Системный шаблон";
+    const stamp = Date.now();
+    const setPreview = (layout, figure, image) => {
+        const available = pack.layouts.includes(layout);
+        figure.hidden = !available;
+        if (available) {
+            image.src = `/api/service/templates/${encodeURIComponent(pack.name)}/${layout}?v=${stamp}`;
+        } else {
+            image.removeAttribute("src");
+        }
+    };
+    setPreview("grid", serviceTemplateGridPreview, serviceTemplateGridImage);
+    setPreview("strips", serviceTemplateStripsPreview, serviceTemplateStripsImage);
+}
+
+function renderServiceTemplates() {
+    serviceTemplateList.replaceChildren();
+    if (!serviceTemplatePacks.length) {
+        const empty = document.createElement("div");
+        empty.className = "service-adapters-empty";
+        empty.textContent = "Доступных шаблонов нет";
+        serviceTemplateList.appendChild(empty);
+        return;
+    }
+    serviceTemplatePacks.forEach(pack => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "service-btn service-template-option";
+        if (pack.current) button.classList.add("is-current");
+        const name = document.createElement("strong");
+        name.textContent = pack.name;
+        const details = document.createElement("span");
+        details.textContent = [
+            pack.source === "custom" ? "кастомный" : "системный",
+            pack.current ? "выбран сейчас" : "",
+        ].filter(Boolean).join(" · ");
+        button.append(name, details);
+        button.addEventListener("click", () => showTemplateSelection(pack));
+        serviceTemplateList.appendChild(button);
+    });
+}
+
+async function openServiceTemplates() {
+    serviceHome.hidden = true;
+    serviceConfigPage.hidden = true;
+    serviceUnlockPage.hidden = true;
+    serviceEditorPage.hidden = true;
+    serviceTemplatePage.hidden = false;
+    serviceBack.hidden = false;
+    serviceTitle.textContent = "ВЫБОР ШАБЛОНА";
+    serviceModal.querySelector(".service-dialog").scrollTop = 0;
+    showTemplateSelection();
+    serviceTemplateList.innerHTML = '<div class="service-loader"><span></span>Загрузка шаблонов…</div>';
+    try {
+        const res = await fetch("/api/service/templates", { cache: "no-store" });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "Шаблоны не загружены");
+        serviceTemplatePacks = Array.isArray(data.templates) ? data.templates : [];
+        renderServiceTemplates();
+    } catch (error) {
+        serviceTemplatePacks = [];
+        serviceTemplateList.textContent = error.message || "Шаблоны не загружены";
+    }
 }
 
 async function loadServiceConfig(force = false) {
@@ -1954,6 +2047,33 @@ async function runLocalServiceAction(command, data = null) {
     }
 }
 
+async function applyServiceTemplate() {
+    if (!selectedServiceTemplate) return;
+    serviceTemplateApply.disabled = true;
+    showServiceToast("Применение шаблона…", 30000);
+    try {
+        const res = await fetch("/api/service/template", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: selectedServiceTemplate.name }),
+        });
+        const result = await res.json();
+        if (!res.ok || result.status !== "ok") {
+            throw new Error(result.message || "Шаблон не изменён");
+        }
+        await loadServiceConfig(true);
+        serviceTemplatePacks.forEach(pack => {
+            pack.current = pack.name === result.template_pack;
+        });
+        showServiceHome();
+        showServiceToast(`${result.message}. Перезапуск не требуется`, 7000);
+    } catch (error) {
+        showServiceToast(error.message || "Шаблон не изменён", 8000);
+    } finally {
+        serviceTemplateApply.disabled = false;
+    }
+}
+
 function openServiceModal() {
     if (!serviceModal) return;
     serviceConfig = null;
@@ -2014,6 +2134,8 @@ serviceBack?.addEventListener("click", () => {
     if (!serviceEditorPage.hidden) {
         serviceEditedField = null;
         showConfigPage();
+    } else if (!serviceTemplatePage.hidden && selectedServiceTemplate) {
+        showTemplateSelection();
     } else {
         showServiceHome();
     }
@@ -2023,6 +2145,9 @@ serviceModal?.addEventListener("click", e => {
 });
 btnConfigApp?.addEventListener("click", () => openConfig("application"));
 btnConfigCamera?.addEventListener("click", () => openConfig("camera"));
+btnTemplatePack?.addEventListener("click", openServiceTemplates);
+serviceTemplateChange?.addEventListener("click", () => showTemplateSelection());
+serviceTemplateApply?.addEventListener("click", applyServiceTemplate);
 serviceConfigApply?.addEventListener("click", applyConfigDraft);
 serviceConfigDiscard?.addEventListener("click", () => {
     clearDraft();
@@ -2113,7 +2238,10 @@ window.addEventListener("keydown", e => {
     if (!serviceEditorPage.hidden) {
         serviceEditedField = null;
         showConfigPage();
-    } else if (!serviceConfigPage.hidden || !serviceUnlockPage.hidden) {
+    } else if (!serviceTemplatePage.hidden && selectedServiceTemplate) {
+        showTemplateSelection();
+    } else if (!serviceConfigPage.hidden || !serviceUnlockPage.hidden
+            || !serviceTemplatePage.hidden) {
         showServiceHome();
     } else {
         closeServiceModal();

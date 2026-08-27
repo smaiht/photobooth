@@ -287,20 +287,6 @@ class DiskUpdateStatusTests(unittest.TestCase):
 
 
 class DiskUpdateDownloadTests(unittest.TestCase):
-    def test_selects_full_artifact(self):
-        artifact = {
-            "path": "/photobooth_system/updates/artifacts/full_bundle/full.zip",
-            "bundle_path": "/photobooth_system/updates/artifacts/full_bundle",
-            "size": 10,
-            "sha256": "a" * 64,
-        }
-        selected = app._full_update({
-            "schema_version": 1,
-            "active": "full",
-            "artifacts": {"full": artifact},
-        })
-        self.assertEqual(selected, artifact)
-
     def test_downloads_and_verifies_artifact(self):
         payload = b"update zip bytes"
         status = {
@@ -672,59 +658,6 @@ class DiskUpdateDownloadTests(unittest.TestCase):
 
 
 class UpdateExtractionTests(unittest.TestCase):
-    def test_extracts_code_and_replaces_repository_config(self):
-        with TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            archive = root / "update.zip"
-            target = root / "app"
-            target.mkdir()
-            (target / "config_app.json").write_text("local", encoding="utf-8")
-            with zipfile.ZipFile(archive, "w") as zf:
-                zf.writestr("backend/main.py", "updated")
-                zf.writestr("config_app.json", "release")
-                zf.writestr("python/runtime.dll", b"locked")
-
-            app._extract_update(str(archive), str(target))
-
-            self.assertEqual((target / "backend/main.py").read_text(), "updated")
-            self.assertEqual((target / "config_app.json").read_text(), "release")
-            self.assertFalse((target / "python/runtime.dll").exists())
-
-    def test_preserves_cafe_unlock_runtime_state(self):
-        with TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            archive = root / "update.zip"
-            target = root / "app"
-            target.mkdir()
-            state_path = target / "cafe_unlock_state.json"
-            state_path.write_text('{"remaining_sessions":5}', encoding="utf-8")
-            with zipfile.ZipFile(archive, "w") as zf:
-                zf.writestr("backend/main.py", "updated")
-                zf.writestr(
-                    "cafe_unlock_state.json",
-                    '{"remaining_sessions":0}',
-                )
-
-            app._extract_update(str(archive), str(target))
-
-            self.assertEqual(
-                state_path.read_text(encoding="utf-8"),
-                '{"remaining_sessions":5}',
-            )
-
-    def test_rejects_path_traversal(self):
-        with TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            archive = root / "update.zip"
-            target = root / "app"
-            target.mkdir()
-            with zipfile.ZipFile(archive, "w") as zf:
-                zf.writestr("../outside.txt", "bad")
-
-            with self.assertRaisesRegex(ValueError, "escapes application directory"):
-                app._extract_update(str(archive), str(target))
-            self.assertFalse((root / "outside.txt").exists())
-
     def test_prepares_complete_release_before_application_exit(self):
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

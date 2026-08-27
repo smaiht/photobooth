@@ -6,6 +6,7 @@ drawn in a fixed order: background, photos, optional foreground, optional text.
 """
 
 from pathlib import Path
+import json
 import logging
 import os
 from typing import NamedTuple
@@ -388,6 +389,68 @@ def template_photo_count(
     """Return how many distinct session photos a template references."""
     spec = _validated_template(template, template_name, print_size)
     return _required_photo_count(spec.slots)
+
+
+def load_template_pack(
+    template_dir: Path,
+    num_photos: int,
+    default_template: str,
+) -> dict:
+    """Load and fully validate a system or downloaded template pack."""
+    config_path = template_dir / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError(f"template pack {template_dir.name!r} must be an object")
+    templates = config.get("templates")
+    if not isinstance(templates, dict) or not templates:
+        raise ValueError(f"template pack {template_dir.name!r} has no templates")
+    if default_template not in templates:
+        raise ValueError(
+            f"template pack {template_dir.name!r} does not contain "
+            f"default_template {default_template!r}"
+        )
+
+    print_size = _validated_print_size(config)
+    root = template_dir.resolve()
+    for template_name, template in templates.items():
+        spec = _validated_template(template, template_name, print_size)
+        required = _required_photo_count(spec.slots)
+        if required > num_photos:
+            raise ValueError(
+                f"template {template_name!r} needs {required} photos, "
+                f"but the session captures {num_photos}"
+            )
+        if template.get("photo_choice") is True and required != 1:
+            raise ValueError(
+                f"photo-choice template {template_name!r} must reference one photo"
+            )
+        for slot_index, slot in enumerate(spec.slots):
+            if slot.x + slot.width > print_size[0] or slot.y + slot.height > print_size[1]:
+                raise ValueError(
+                    f"photo slot {slot_index} exceeds template {template_name!r}"
+                )
+        for layer_name, filename in (
+            ("background", spec.background),
+            ("foreground", spec.foreground),
+        ):
+            if filename is None:
+                continue
+            layer = (template_dir / filename).resolve()
+            if root not in layer.parents or not layer.is_file():
+                raise ValueError(
+                    f"template {template_name!r} {layer_name} is missing or unsafe"
+                )
+            with Image.open(layer) as image:
+                if image.size != print_size:
+                    raise ValueError(
+                        f"template {template_name!r} {layer_name} must be "
+                        f"{print_size}, got {image.size}"
+                    )
+                if layer_name == "foreground" and "A" not in image.getbands():
+                    raise ValueError(
+                        f"template {template_name!r} foreground needs alpha"
+                    )
+    return config
 
 
 def _composite_foreground(
