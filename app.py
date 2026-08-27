@@ -1265,22 +1265,26 @@ def sync_custom_templates():
         (_APP_DIR / "config_app.json").read_text(encoding="utf-8")
     )
     _ui("setStatus('Шаблоны')")
-    _ui_log("Проверка кастомных шаблонов...")
+    _ui_progress("Проверка кастомных шаблонов...")
     try:
         result = sync(
             _APP_DIR / "templates_custom",
             num_photos=int(config["num_photos"]),
             default_template=str(config["default_template"]),
             on_status=_ui_log,
+            on_progress=_ui_progress,
         )
         log.info(
             "Custom templates: updated=%d removed=%d failed=%d",
             result["updated"], result["removed"], result["failed"],
         )
-        if not any(result.values()):
-            _ui_log("Кастомные шаблоны актуальны")
+        if result["failed"]:
+            _ui_progress("Синхронизация шаблонов завершена с ошибками")
+        else:
+            _ui_progress("Кастомные шаблоны синхронизированы")
     except Exception as exc:
         log.exception("Custom template sync failed; using local cache")
+        _ui_progress("Кастомные шаблоны не обновлены")
         _ui_log(f"Кастомные шаблоны не обновлены: {exc}")
 
 

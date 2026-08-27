@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -109,7 +110,12 @@ def _pack_files(remote_pack: str, token: str) -> dict[str, dict]:
     return files
 
 
-def _download_file(remote: dict, destination: Path, token: str) -> None:
+def _download_file(
+    remote: dict,
+    destination: Path,
+    token: str,
+    on_progress: Callable[[int, float], None] | None = None,
+) -> None:
     payload = _request_json(
         "GET", f"{API}/resources/download", token,
         path=remote["remote_path"],
@@ -120,6 +126,7 @@ def _download_file(remote: dict, destination: Path, token: str) -> None:
     request = urllib.request.Request(href, headers={"User-Agent": USER_AGENT})
     digest = hashlib.md5()
     total = 0
+    started = time.monotonic()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".tmp")
     try:
@@ -133,6 +140,9 @@ def _download_file(remote: dict, destination: Path, token: str) -> None:
                     raise ValueError("custom template file exceeds declared size")
                 digest.update(chunk)
                 output.write(chunk)
+                if on_progress:
+                    elapsed = max(time.monotonic() - started, 0.001)
+                    on_progress(total, total / elapsed)
         if total != remote["size"] or digest.hexdigest() != remote["md5"]:
             raise ValueError("custom template file checksum mismatch")
         temporary.replace(destination)
@@ -171,6 +181,7 @@ def _sync_pack(
     token: str,
     num_photos: int,
     default_template: str,
+    on_progress: StatusCallback | None = None,
 ) -> bool:
     from .composer import load_template_pack
 
@@ -196,6 +207,7 @@ def _sync_pack(
             except OSError:
                 pass
 
+    downloads = []
     for relative, metadata in remote.items():
         target = stage / relative
         old = old_state.get(relative)
@@ -204,7 +216,43 @@ def _sync_pack(
             and target.is_file()
             and target.stat().st_size == metadata["size"]
         ):
+            downloads.append((metadata, target))
+
+    download_total = sum(metadata["size"] for metadata, _ in downloads)
+    downloaded = 0
+    last_ui_time = 0.0
+
+    def report_progress(current: int, speed: float, *, force: bool = False) -> None:
+        nonlocal last_ui_time
+        if not on_progress:
+            return
+        now = time.monotonic()
+        total_downloaded = downloaded + current
+        if not force and total_downloaded < download_total and now - last_ui_time < 0.25:
+            return
+        if total_downloaded <= 0:
+            on_progress(f"{name}: Подключение к Яндекс Диску")
+        else:
+            percent = min(
+                100,
+                round(total_downloaded * 100 / max(download_total, 1)),
+            )
+            on_progress(
+                f"{name}: Скачивание {percent}% · "
+                f"{total_downloaded / 1048576:.2f}/"
+                f"{download_total / 1048576:.2f} МБ · "
+                f"{speed / 1048576:.2f} МБ/с"
+            )
+        last_ui_time = now
+
+    if downloads:
+        report_progress(0, 0, force=True)
+    for metadata, target in downloads:
+        if on_progress:
+            _download_file(metadata, target, token, report_progress)
+        else:
             _download_file(metadata, target, token)
+        downloaded += metadata["size"]
 
     state = {
         "files": {
@@ -239,6 +287,7 @@ def sync_custom_templates(
     default_template: str,
     remote_root: str = REMOTE_ROOT,
     on_status: StatusCallback | None = None,
+    on_progress: StatusCallback | None = None,
 ) -> dict[str, int]:
     """Mirror valid remote packs into a local cache; never replace one partially."""
     from .config import TEMPLATE_PACK_RE
@@ -268,11 +317,39 @@ def sync_custom_templates(
                 on_status(f"Пропущена папка с некорректным именем: {name}")
             continue
         try:
+            if on_progress:
+                on_progress(f"{name}: проверка файлов...")
             snapshots[name] = _pack_files(f"{remote_root}/{name}", token)
         except Exception as exc:
             failed += 1
             if on_status:
                 on_status(f"Не удалось прочитать шаблон {name}: {exc}")
+
+    remote_names = {
+        _safe_name(item.get("name"))
+        for item in root_items
+        if item.get("type") == "dir"
+        and TEMPLATE_PACK_RE.fullmatch(str(item.get("name") or ""))
+    }
+    local_names = {
+        path.name for path in custom_root.iterdir()
+        if path.is_dir() and TEMPLATE_PACK_RE.fullmatch(path.name)
+    }
+    changed_names = {
+        name for name, files in snapshots.items()
+        if not _state_matches(custom_root / name, _read_state(custom_root / name), files)
+    }
+    if on_status:
+        if snapshots or local_names - remote_names:
+            on_status("Кастомные шаблоны:")
+            for name in sorted(snapshots):
+                action = "↓" if name in changed_names else "✓"
+                state = "скачать" if name in changed_names else "актуально"
+                on_status(f"{action} {name} — {state}")
+            for name in sorted(local_names - remote_names):
+                on_status(f"− {name} — удалить")
+        else:
+            on_status("Кастомных шаблонов нет")
 
     updated = 0
     stage_root = custom_root / f".sync.{os.getpid()}"
@@ -284,6 +361,7 @@ def sync_custom_templates(
                 if _sync_pack(
                     name, files, custom_root, stage_root, token,
                     num_photos, default_template,
+                    on_progress=on_progress,
                 ):
                     updated += 1
                     if on_status:
@@ -296,12 +374,6 @@ def sync_custom_templates(
         shutil.rmtree(stage_root, ignore_errors=True)
 
     removed = 0
-    remote_names = {
-        _safe_name(item.get("name"))
-        for item in root_items
-        if item.get("type") == "dir"
-        and TEMPLATE_PACK_RE.fullmatch(str(item.get("name") or ""))
-    }
     for path in custom_root.iterdir():
         if path.is_dir() and TEMPLATE_PACK_RE.fullmatch(path.name) and path.name not in remote_names:
             shutil.rmtree(path)

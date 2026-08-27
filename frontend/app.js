@@ -2097,8 +2097,7 @@ function closeServiceModal() {
 let secretTapsLeft = 0;
 let secretTapsRight = 0;
 let secretTapTimer = null;
-const secretCornerWidth = 100;
-const secretCornerHeight = 100;
+const secretCornerSize = 200;
 
 function resetSecretTaps() {
     secretTapsLeft = 0;
@@ -2109,9 +2108,9 @@ function resetSecretTaps() {
 
 window.addEventListener("pointerdown", (e) => {
     if (serviceModal && !serviceModal.hidden) return;
-    const atTop = e.clientY <= secretCornerHeight;
-    const atLeft = atTop && e.clientX <= secretCornerWidth;
-    const atRight = atTop && e.clientX >= window.innerWidth - secretCornerWidth;
+    const atTop = e.clientY <= secretCornerSize;
+    const atLeft = atTop && e.clientX <= secretCornerSize;
+    const atRight = atTop && e.clientX >= window.innerWidth - secretCornerSize;
 
     if (atLeft && secretTapsRight === 0) {
         if (secretTapsLeft === 0) {
