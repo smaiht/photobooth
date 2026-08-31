@@ -73,6 +73,7 @@ const serviceTitle = document.getElementById("service-title");
 const serviceClose = document.getElementById("service-close");
 const serviceToast = document.getElementById("service-toast");
 const serviceHome = document.getElementById("service-home");
+const serviceRuntimeStatus = document.getElementById("service-runtime-status");
 const serviceConfigPage = document.getElementById("service-config-page");
 const serviceConfigFields = document.getElementById("service-config-fields");
 const serviceConfigDiscard = document.getElementById("service-config-discard");
@@ -1573,6 +1574,136 @@ function showServiceToast(text, duration = 3000) {
     }, duration);
 }
 
+function renderServiceStatusLoading() {
+    const loader = document.createElement("div");
+    loader.className = "service-loader";
+    loader.appendChild(document.createElement("span"));
+    loader.appendChild(document.createTextNode("Проверяем будку…"));
+    serviceRuntimeStatus.replaceChildren(loader);
+}
+
+function createServiceStatusCard(label, value, detail = "", error = false) {
+    const card = document.createElement("div");
+    card.className = "service-status-card";
+    card.classList.toggle("is-error", error);
+
+    const labelElement = document.createElement("span");
+    labelElement.className = "service-status-label";
+    labelElement.textContent = label;
+    const valueElement = document.createElement("strong");
+    valueElement.className = "service-status-value";
+    valueElement.textContent = value;
+    const detailElement = document.createElement("span");
+    detailElement.className = "service-status-detail";
+    detailElement.textContent = detail;
+    card.append(labelElement, valueElement, detailElement);
+    return card;
+}
+
+function serviceGigabytes(bytes) {
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value < 0) return "—";
+    return `${(value / (1024 ** 3)).toLocaleString("ru-RU", {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+    })} ГБ`;
+}
+
+function renderServiceStatus(data) {
+    const printer = data.printer || {};
+    const queue = data.print_queue || {};
+    const disk = data.disk || {};
+
+    let printerDetail = "";
+    if (printer.enabled !== true) {
+        printerDetail = "Печать отключена в конфиге";
+    } else if (Number.isInteger(printer.media_remaining)) {
+        printerDetail = `Остаток: ${printer.media_remaining} отпечатков`;
+        if (Number.isInteger(printer.media_capacity)) {
+            printerDetail += ` из ${printer.media_capacity}`;
+        }
+    } else if (printer.error) {
+        printerDetail = printer.error;
+    } else {
+        printerDetail = "Остаток обновится после завершения печати";
+    }
+
+    const applicationJobs = Number.isInteger(queue.application_jobs)
+        ? queue.application_jobs
+        : null;
+    const windowsJobs = Number.isInteger(queue.windows_jobs)
+        ? queue.windows_jobs
+        : null;
+    const queueEmpty = !queue.error && applicationJobs === 0 && windowsJobs === 0;
+    const queueValue = queueEmpty
+        ? "Пусто"
+        : [
+            applicationJobs === null ? null : `Приложение: ${applicationJobs}`,
+            windowsJobs === null ? null : `Windows: ${windowsJobs}`,
+        ].filter(Boolean).join(" · ") || "Недоступна";
+
+    const diskValue = disk.error ? "Недоступно" : `${serviceGigabytes(disk.free_bytes)} свободно`;
+    const diskDetail = disk.error
+        ? disk.error
+        : `Объём диска: ${serviceGigabytes(disk.total_bytes)}`;
+
+    const pendingUploads = Number.isInteger(data.pending_uploads)
+        ? data.pending_uploads
+        : null;
+    const uploadsValue = data.uploads_error
+        ? "Недоступно"
+        : pendingUploads > 0
+            ? `Ожидают: ${pendingUploads}`
+            : data.uploads_preparing
+                ? "Подготавливается"
+                : "Всё загружено";
+    const uploadsDetail = data.uploads_error || "Очередь Яндекс.Диска";
+
+    serviceRuntimeStatus.replaceChildren(
+        createServiceStatusCard(
+            "Принтер",
+            printer.status || "Недоступен",
+            printerDetail,
+            Boolean(printer.error),
+        ),
+        createServiceStatusCard(
+            "Очередь печати",
+            queueValue,
+            queue.error || "Внутренняя и Windows-очереди",
+            Boolean(queue.error),
+        ),
+        createServiceStatusCard(
+            "Свободное место",
+            diskValue,
+            diskDetail,
+            Boolean(disk.error),
+        ),
+        createServiceStatusCard(
+            "Загрузки",
+            uploadsValue,
+            uploadsDetail,
+            Boolean(data.uploads_error),
+        ),
+    );
+}
+
+async function refreshServiceStatus() {
+    renderServiceStatusLoading();
+    try {
+        const response = await fetch("/api/service/status");
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Ошибка статуса");
+        renderServiceStatus(data);
+    } catch (error) {
+        serviceRuntimeStatus.replaceChildren(createServiceStatusCard(
+            "Состояние будки",
+            "Не загружено",
+            error.message || "Ошибка запроса",
+            true,
+        ));
+    }
+}
+
 function renderNetworkNotice(text, loading = false) {
     if (!networkAdapters) return;
     const notice = document.createElement("div");
@@ -2113,8 +2244,10 @@ function openServiceModal() {
     clearDraft();
     showServiceHome();
     renderNetworkNotice("Загрузка адаптеров…", true);
+    renderServiceStatusLoading();
     serviceModal.hidden = false;
     refreshNetworkStatus();
+    refreshServiceStatus();
     loadServiceConfig().catch(() => {});
 }
 

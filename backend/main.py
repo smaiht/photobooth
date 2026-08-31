@@ -1591,6 +1591,92 @@ def set_network(payload: dict):
     )
 
 
+def _service_status_snapshot() -> dict:
+    from .printer import (
+        get_dnp_printer_info,
+        get_windows_print_queues,
+        print_queue_status,
+    )
+
+    app_queue = print_queue_status()
+    print_enabled = CONFIG.get("print_enabled") is True
+    printer = {
+        "enabled": print_enabled,
+        "status": "печать выключена" if not print_enabled else "недоступен",
+        "media_remaining": None,
+        "media_capacity": None,
+        "error": None,
+    }
+    queue = {
+        "application_jobs": app_queue["pending"] + int(app_queue["active"]),
+        "windows_jobs": 0,
+        "error": None,
+    }
+
+    if print_enabled and not queue["application_jobs"]:
+        try:
+            records = get_windows_print_queues(CONFIG)
+            seen_printers = set()
+            queue_errors = []
+            for record in records:
+                printer_name = record.get("printer_name") or record.get("target")
+                if printer_name in seen_printers:
+                    continue
+                seen_printers.add(printer_name)
+                if record.get("error"):
+                    queue_errors.append(str(record["error"]))
+                elif type(record.get("jobs")) is int:
+                    queue["windows_jobs"] += record["jobs"]
+            if queue_errors:
+                queue["error"] = " | ".join(queue_errors)
+        except Exception as exc:
+            queue["windows_jobs"] = None
+            queue["error"] = str(exc)
+
+    if print_enabled:
+        if queue["application_jobs"] or queue["windows_jobs"]:
+            printer["status"] = "есть задания на печать"
+        else:
+            try:
+                info = get_dnp_printer_info(CONFIG)
+                printer.update({
+                    "status": info["status"],
+                    "media_remaining": info.get("media_remaining"),
+                    "media_capacity": info.get("media_capacity"),
+                })
+            except Exception as exc:
+                printer["error"] = str(exc)
+
+    disk = {"free_bytes": None, "total_bytes": None, "error": None}
+    try:
+        usage = shutil.disk_usage(PHOTOS_DIR)
+        disk.update({"free_bytes": usage.free, "total_bytes": usage.total})
+    except OSError as exc:
+        disk["error"] = str(exc)
+
+    try:
+        pending_uploads = yadisk_cloud.pending_count()
+        uploads_error = None
+    except Exception as exc:
+        pending_uploads = None
+        uploads_error = str(exc)
+
+    return {
+        "ok": True,
+        "printer": printer,
+        "print_queue": queue,
+        "disk": disk,
+        "pending_uploads": pending_uploads,
+        "uploads_preparing": bool(_background_uploads),
+        "uploads_error": uploads_error,
+    }
+
+
+@app.get("/api/service/status")
+async def get_service_status():
+    return await asyncio.to_thread(_service_status_snapshot)
+
+
 @app.get("/api/service/config")
 def get_service_config():
     try:

@@ -62,6 +62,14 @@ def print_queue_busy() -> bool:
     return _printing or bool(_print_queue)
 
 
+def print_queue_status() -> dict:
+    """Return the small in-app queue snapshot used by the service screen."""
+    return {
+        "active": _printing,
+        "pending": len(_print_queue),
+    }
+
+
 def _win32print():
     """Import pywin32 lazily so the booth can still run on development hosts."""
     try:
