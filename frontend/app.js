@@ -1,10 +1,16 @@
 const core = window.PhotoboothCore;
 const previewRoute = core.previewRoute(location.hash);
 
-const POSE_INTRO_DELAY_MS = 500;
-const POSE_INTRO_HOLD_MS = 1500;
-const TEST_POSE_INTRO_HOLD_MS = 1000;
-const POSE_INTRO_MOVE_MS = 1000;
+const FIRST_POSE_INTRO_DELAY_MS = 0;
+const NEXT_POSE_INTRO_DELAY_MS = 400;
+
+const FIRST_POSE_INTRO_FADE_IN_MS = 0;
+const NEXT_POSE_INTRO_FADE_IN_MS = 200;
+
+const POSE_INTRO_HOLD_MS = 1500; // Показ до начала разъезда
+const TEST_POSE_INTRO_HOLD_MS = POSE_INTRO_HOLD_MS;
+
+const POSE_INTRO_MOVE_MS = 500;
 
 const screens = {
     no_camera: document.getElementById("screen-no-camera"),
@@ -312,7 +318,7 @@ function clearPoseIntro() {
     });
 }
 
-function showPoseIntro(urls, holdMs) {
+function showPoseIntro(urls, delayMs, holdMs, fadeInMs) {
     clearPoseIntro();
     const targets = [
         ...poseRails.left.querySelectorAll(".pose-card"),
@@ -332,6 +338,7 @@ function showPoseIntro(urls, holdMs) {
     });
     targets.forEach(card => card.classList.add("pose-card-target"));
     poseIntro.replaceChildren(...cards);
+    poseIntro.style.animationDuration = `${fadeInMs}ms`;
 
     const moveToRails = () => {
         if (run !== poseIntroRun) return;
@@ -368,7 +375,7 @@ function showPoseIntro(urls, holdMs) {
         if (run !== poseIntroRun) return;
         poseIntro.hidden = false;
         poseIntroTimer = setTimeout(moveToRails, holdMs);
-    }, POSE_INTRO_DELAY_MS);
+    }, delayMs);
 }
 
 function renderIdlePoseBackdrop() {
@@ -459,7 +466,12 @@ function syncTechnicalEvent(data = {}) {
     }
 }
 
-function renderPoseExamples(photoIndex = 0, introHoldMs = 0) {
+function renderPoseExamples(
+    photoIndex = 0,
+    introDelayMs = 0,
+    introHoldMs = 0,
+    introFadeInMs = 0,
+) {
     const parsedIndex = Number(photoIndex);
     const safeIndex = Number.isFinite(parsedIndex)
         ? Math.max(0, Math.floor(parsedIndex))
@@ -489,7 +501,9 @@ function renderPoseExamples(photoIndex = 0, introHoldMs = 0) {
             rail.replaceChildren(...cards);
         });
     }
-    if (introHoldMs > 0) showPoseIntro(selectedUrls, introHoldMs);
+    if (introHoldMs > 0) {
+        showPoseIntro(selectedUrls, introDelayMs, introHoldMs, introFadeInMs);
+    }
 }
 
 function configurePoseExamples(cfg) {
@@ -783,7 +797,19 @@ function _doSwitch(state, data) {
         const introHoldMs = data.test_session
             ? TEST_POSE_INTRO_HOLD_MS
             : POSE_INTRO_HOLD_MS;
-        renderPoseExamples(photoIndex, introHoldMs);
+        const firstPhoto = Number(photoIndex) === 0;
+        const introDelayMs = firstPhoto
+            ? FIRST_POSE_INTRO_DELAY_MS
+            : NEXT_POSE_INTRO_DELAY_MS;
+        const introFadeInMs = firstPhoto
+            ? FIRST_POSE_INTRO_FADE_IN_MS
+            : NEXT_POSE_INTRO_FADE_IN_MS;
+        renderPoseExamples(
+            photoIndex,
+            introDelayMs,
+            introHoldMs,
+            introFadeInMs,
+        );
     }
 
     // New session — hide QR

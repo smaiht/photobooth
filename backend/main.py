@@ -80,6 +80,9 @@ SESSION_LINK = ""
 TEMPLATE_OPTIONS: list[dict] = []
 CONFIG = load_event_config()
 
+TEST_COUNTDOWN_SECONDS = 5 # 2
+TEST_COUNTDOWN_SOUND_SECONDS = 3 # 1
+
 CAFE_UNLOCK_STATE_FILENAME = "cafe_unlock_state.json"
 EVENT_HISTORY_FILENAME = "event_history.json"
 EVENT_HISTORY_ARCHIVE_DIRNAME = "event_history_archive"
@@ -1093,8 +1096,8 @@ async def _run_session(test_session: bool = False):
 
     pre_countdown_delay, countdown_seconds, countdown_sound_seconds = _countdown_timing()
     if test_session:
-        countdown_seconds = 2
-        countdown_sound_seconds = 1
+        countdown_seconds = TEST_COUNTDOWN_SECONDS
+        countdown_sound_seconds = TEST_COUNTDOWN_SOUND_SECONDS
         countdown_sound_seconds = min(countdown_sound_seconds, countdown_seconds)
 
     # Drop the previous session frame before the frontend reconnects to /live.
