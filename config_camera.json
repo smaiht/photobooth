@@ -65,7 +65,7 @@
     "_shutter_type_options": ["electronic_first_curtain", "mechanical", "electronic"],
     "_shutter_type_comment": "For flash on EOS R8 use electronic_first_curtain. Do not use electronic/silent shutter with flash.",
 
-    "av": "5.6",
+    "av": "6.3",
     "_av_comment": "Aperture. f/5.6 is easier for focus and needs less flash power. Try f/8 later if groups are not fully in focus. The lens limits which of these values the camera really offers.",
     "_av_options": [
         "1.0", "1.1", "1.2", "1.4", "1.6", "1.8", "2.0", "2.2",
@@ -74,7 +74,7 @@
         "16", "18", "20", "22"
     ],
 
-    "tv": "1/100",
+    "tv": "1/80",
     "_tv_comment": "Shutter speed. 1/160 is a safe flash sync start for EOS R8 + MS300V. Avoid 1/250+ with this non-HSS studio flash. Values below 1 second are whole seconds.",
     "_tv_options": [
         "30", "25", "20", "15", "13", "10", "8", "6",
@@ -86,7 +86,7 @@
         "1/2000", "1/2500", "1/3200", "1/4000"
     ],
 
-    "iso": 1250,
+    "iso": 800,
     "_iso_options": [
         100, 125, 160, 200, 250, 320, 400, 500,
         640, 800, 1000, 1250, 1600, 2000, 2500, 3200,
