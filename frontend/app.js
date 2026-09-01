@@ -1,16 +1,14 @@
 const core = window.PhotoboothCore;
 const previewRoute = core.previewRoute(location.hash);
 
-const FIRST_POSE_INTRO_DELAY_MS = 0;
 const NEXT_POSE_INTRO_DELAY_MS = 400;
 
-const FIRST_POSE_INTRO_FADE_IN_MS = 0;
 const NEXT_POSE_INTRO_FADE_IN_MS = 200;
 
-const POSE_INTRO_HOLD_MS = 1500; // Показ до начала разъезда
+const POSE_INTRO_HOLD_MS = 1200; // Показ до начала разъезда
 const TEST_POSE_INTRO_HOLD_MS = POSE_INTRO_HOLD_MS;
 
-const POSE_INTRO_MOVE_MS = 500;
+const POSE_INTRO_MOVE_MS = 300;
 
 const screens = {
     no_camera: document.getElementById("screen-no-camera"),
@@ -32,6 +30,7 @@ const poseRails = {
     right: document.getElementById("pose-rail-right"),
 };
 const poseIntro = document.getElementById("pose-intro");
+const poseIntroCards = document.getElementById("pose-intro-cards");
 const idlePoseField = document.getElementById("idle-pose-field");
 const idlePoseRows = Array.from(document.querySelectorAll(".idle-pose-row"));
 const idleSessionInfo = document.getElementById("idle-session-info");
@@ -309,7 +308,7 @@ function clearPoseIntro() {
     poseIntro.querySelectorAll(".pose-intro-card").forEach(card => {
         card.getAnimations().forEach(animation => animation.cancel());
     });
-    poseIntro.replaceChildren();
+    poseIntroCards.replaceChildren();
     poseIntro.classList.remove("moving");
     poseIntro.hidden = true;
     Object.values(poseRails).forEach(rail => {
@@ -338,7 +337,7 @@ function showPoseIntro(urls, delayMs, holdMs, fadeInMs) {
         return card;
     });
     targets.forEach(card => card.classList.add("pose-card-target"));
-    poseIntro.replaceChildren(...cards);
+    poseIntroCards.replaceChildren(...cards);
     poseIntro.style.animationDuration = `${fadeInMs}ms`;
 
     const moveToRails = () => {
@@ -795,21 +794,17 @@ function _doSwitch(state, data) {
         currentShootingPhotoIndex = photoIndex;
         const idx = photoIndex + 1;
         photoCounter.textContent = `${idx} / ${data.total ?? 4}`;
-        const introHoldMs = data.test_session
-            ? TEST_POSE_INTRO_HOLD_MS
-            : POSE_INTRO_HOLD_MS;
         const firstPhoto = Number(photoIndex) === 0;
-        const introDelayMs = firstPhoto
-            ? FIRST_POSE_INTRO_DELAY_MS
-            : NEXT_POSE_INTRO_DELAY_MS;
-        const introFadeInMs = firstPhoto
-            ? FIRST_POSE_INTRO_FADE_IN_MS
-            : NEXT_POSE_INTRO_FADE_IN_MS;
+        const introHoldMs = firstPhoto
+            ? 0
+            : data.test_session
+                ? TEST_POSE_INTRO_HOLD_MS
+                : POSE_INTRO_HOLD_MS;
         renderPoseExamples(
             photoIndex,
-            introDelayMs,
+            NEXT_POSE_INTRO_DELAY_MS,
             introHoldMs,
-            introFadeInMs,
+            NEXT_POSE_INTRO_FADE_IN_MS,
         );
     }
 
