@@ -142,15 +142,28 @@ html, body {
     to { transform: translate3d(0, 0, 0); }
 }
 
+/* The card itself: background, padding and corners live here, and the two rows
+   inside it are the title/button line and the explainer. */
 .idle-hero-wrap {
     position: absolute;
     z-index: 2;
     top: 50%;
     left: 50%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2.5vh;
+    padding: 3vh;
+    border: 2px solid rgba(24, 24, 24, 0.1);
+    border-radius: clamp(28px, 2.8vw, 54px);
+    /* Opaque: the card now spans the explainer too, and the moving pose
+       carousel behind it must not show through that much surface. */
+    background: #fff;
+    box-shadow: 0 1.4vh 3.5vh rgba(24, 24, 24, 0.15);
     transform: translate(-50%, -50%);
     transform-origin: center center;
     isolation: isolate;
-    will-change: transform, opacity;
+    will-change: transform;
     /*
      * The old idle prompt pulsed in place.  Keep the motion on the whole
      * central composition instead: the white card, fade and optional price
@@ -159,6 +172,29 @@ html, body {
      */
     animation: idle-hero-breathe var(--idle-hero-motion-duration) ease-in-out infinite;
 }
+
+/*
+ * The explainer document is edge to edge, so the iframe carries its exact
+ * 1200:700 ratio and nothing of the host shows through it. Driven by height,
+ * since what is scarce is the room left under the title row.
+ */
+.idle-explainer {
+    display: block;
+    height: 62vh;
+    max-width: 92vw;
+    aspect-ratio: 1200 / 700;
+    border: 0;
+    /* A touch tighter than the card's own corners, as a nested block should be.
+       Safe now that the card behind it is opaque: the clipped corners show
+       white, not the carousel. */
+    border-radius: clamp(18px, 1.8vw, 34px);
+    background: #f8f4ec;
+    /* Taps belong to the НАЧАТЬ button, never to the animation. */
+    pointer-events: none;
+}
+
+/* Explicit: the display above would otherwise beat the UA rule for [hidden]. */
+.idle-explainer[hidden] { display: none; }
 
 /* .idle-center-fade {
     position: absolute;
@@ -169,25 +205,16 @@ html, body {
     filter: blur(clamp(22px, 2.3vw, 44px));
 } */
 
+/* First row of the card: title on the left, start button on the right. */
 .idle-hero {
-    position: relative;
     display: grid;
-    grid-template-areas:
-        "title prompt"
-        "info prompt";
     grid-template-columns: auto min(28vw, 520px);
     align-items: center;
-    column-gap: 4vw;
-    padding: 3.5vh 3vw;
-    border: 2px solid rgba(24, 24, 24, 0.1);
-    border-radius: clamp(28px, 2.8vw, 54px);
-    background: rgba(255, 255, 255, 0.9);
-    box-shadow: 0 1.4vh 3.5vh rgba(24, 24, 24, 0.15);
+    column-gap: 2vw;
     text-align: center;
 }
 
 .idle-hero h1 {
-    grid-area: title;
     margin: 0;
     line-height: 1.05;
 }
@@ -199,7 +226,7 @@ html, body {
 
 .idle-title-main {
     color: #181818;
-    font-size: 7vh;
+    font-size: 6vh;
     font-weight: 700;
     letter-spacing: 0.07em;
 }
@@ -210,15 +237,6 @@ html, body {
     font-size: 3vh;
     font-weight: 600;
     letter-spacing: 0.06em;
-}
-
-.idle-session-info {
-    grid-area: info;
-    margin: 1vh 0 0;
-    color: #5b5750;
-    font-size: 2vh;
-    font-weight: 700;
-    letter-spacing: 0.09em;
 }
 
 .idle-price-badge {
@@ -249,7 +267,6 @@ html, body {
 }
 
 .tap-prompt {
-    grid-area: prompt;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -339,30 +356,31 @@ html, body {
     animation: tap-exit var(--warmup) ease-in forwards;
 }
 
+/*
+ * Drift only — no opacity and no scale. Fading would make the whole card,
+ * iframe included, translucent over the moving pose carousel. Scaling would
+ * resample the composited layer (and the explainer surface inside it) every
+ * frame, forever, for a 1.4% size change nobody sees. Translating a composited
+ * layer is just a matrix, so burn-in protection stays free.
+ */
 @keyframes idle-hero-breathe {
     0%, 100% {
-        transform: translate(-50%, -50%) translate3d(0, 0, 0) scale(1);
-        opacity: 1;
+        transform: translate(-50%, -50%) translate3d(0, 0, 0);
     }
     16% {
-        transform: translate(-50%, -50%) translate3d(18px, -10px, 0) scale(1.014);
-        opacity: 0.96;
+        transform: translate(-50%, -50%) translate3d(18px, -10px, 0);
     }
     33% {
-        transform: translate(-50%, -50%) translate3d(-13px, -18px, 0) scale(0.992);
-        opacity: 0.93;
+        transform: translate(-50%, -50%) translate3d(-13px, -18px, 0);
     }
     50% {
-        transform: translate(-50%, -50%) translate3d(-20px, 10px, 0) scale(1.01);
-        opacity: 0.9;
+        transform: translate(-50%, -50%) translate3d(-20px, 10px, 0);
     }
     67% {
-        transform: translate(-50%, -50%) translate3d(10px, 18px, 0) scale(0.99);
-        opacity: 0.93;
+        transform: translate(-50%, -50%) translate3d(10px, 18px, 0);
     }
     84% {
-        transform: translate(-50%, -50%) translate3d(20px, -5px, 0) scale(1.012);
-        opacity: 0.96;
+        transform: translate(-50%, -50%) translate3d(20px, -5px, 0);
     }
 }
 

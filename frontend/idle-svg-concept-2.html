@@ -11,7 +11,6 @@
         body {
             display: grid;
             place-items: center;
-            padding: 2vw;
             overflow: hidden;
             background: #fbfaf8;
             font-family: "Comfortaa", sans-serif;
@@ -46,10 +45,9 @@
 
             position: relative;
             width: 100%;
-            max-width: 1400px;
+            max-height: 100%;
             aspect-ratio: 1200 / 700;
             overflow: hidden;
-            border-radius: clamp(20px, 2vw, 38px);
             background: linear-gradient(155deg, #f8f4ec, #e9e2d8);
         }
 
@@ -702,7 +700,6 @@
             let activeScreen = "";
             let startedAt = performance.now();
             let position = 0;
-            let paused = false;
 
             const clamp = value => Math.max(0, Math.min(1, value));
             const between = (value, interval) => value >= interval[0] && value <= interval[1];
@@ -926,12 +923,28 @@
                 }
             }
 
+            /*
+             * Full frame rate: at 30 fps the pans and the countdown read as
+             * stuttering. When paused the loop stops scheduling altogether
+             * instead of waking up every frame to do nothing.
+             */
+            let frameHandle = 0;
+
             function tick(now) {
-                if (!paused) {
-                    position = ((now - startedAt) / 1000) % TOTAL;
-                    render(position);
-                }
-                requestAnimationFrame(tick);
+                frameHandle = requestAnimationFrame(tick);
+                position = ((now - startedAt) / 1000) % TOTAL;
+                render(position);
+            }
+
+            function start() {
+                if (frameHandle) return;
+                frameHandle = requestAnimationFrame(tick);
+            }
+
+            function stop() {
+                if (!frameHandle) return;
+                cancelAnimationFrame(frameHandle);
+                frameHandle = 0;
             }
 
             const controller = {
@@ -939,14 +952,14 @@
                 stages,
                 duration: TOTAL,
                 pause() {
-                    if (paused) return;
+                    if (!frameHandle) return;
                     position = ((performance.now() - startedAt) / 1000) % TOTAL;
-                    paused = true;
+                    stop();
                 },
                 play() {
-                    if (!paused) return;
+                    if (frameHandle) return;
                     startedAt = performance.now() - position * 1000;
-                    paused = false;
+                    start();
                 },
                 seek(seconds) {
                     position = ((seconds % TOTAL) + TOTAL) % TOTAL;
@@ -958,7 +971,7 @@
             root.idleTimeline = controller;
             window.idleTimeline = controller;
             render(0);
-            requestAnimationFrame(tick);
+            start();
 
             if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
                 controller.pause();

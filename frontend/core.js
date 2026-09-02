@@ -54,24 +54,6 @@
         return shuffled;
     }
 
-    function frameWord(count) {
-        const mod100 = count % 100;
-        const mod10 = count % 10;
-        if (mod100 >= 11 && mod100 <= 14) return "КАДРОВ";
-        if (mod10 === 1) return "КАДР";
-        if (mod10 >= 2 && mod10 <= 4) return "КАДРА";
-        return "КАДРОВ";
-    }
-
-    function secondWord(count) {
-        const mod100 = count % 100;
-        const mod10 = count % 10;
-        if (mod100 >= 11 && mod100 <= 14) return "СЕКУНД";
-        if (mod10 === 1) return "СЕКУНДА";
-        if (mod10 >= 2 && mod10 <= 4) return "СЕКУНДЫ";
-        return "СЕКУНД";
-    }
-
     function sheetWord(count) {
         const mod100 = count % 100;
         const mod10 = count % 10;
@@ -211,7 +193,6 @@
         buildViewerFrames,
         clampAxisOffset,
         defaultWithFrame,
-        frameWord,
         nextBasketCopies,
         pointCentroid,
         pointSpread,
@@ -219,7 +200,6 @@
         printItemKey,
         qrPresentation,
         screenForState,
-        secondWord,
         sheetWord,
         shuffledCopy,
         viewerReleaseAction,

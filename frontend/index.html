@@ -24,19 +24,16 @@
             </div>
 
             <div class="idle-hero-wrap">
-                <!-- <div class="idle-center-fade" aria-hidden="true"></div> -->
+                <div class="idle-price-badge" id="idle-price-badge" hidden>
+                    <span>ЦЕНА:</span>
+                    <strong id="idle-price-value">100 ₽</strong>
+                </div>
+
                 <section class="idle-hero">
-                    <div class="idle-price-badge" id="idle-price-badge" hidden>
-                        <span>ЦЕНА:</span>
-                        <strong id="idle-price-value">100 ₽</strong>
-                    </div>
                     <h1>
                         <span class="idle-title-main">ФОТОБУДКА</span>
                         <span class="idle-title-sub">МОМЕНТАЛЬНАЯ ПЕЧАТЬ</span>
                     </h1>
-                    <p class="idle-session-info" id="idle-session-info">
-                        4 КАДРА С ТАЙМЕРОМ 5 СЕКУНД
-                    </p>
                     <div class="tap-prompt">
                         <button class="idle-start-button" id="idle-start-button" type="button" tabindex="-1" disabled>
                             <span class="idle-start-label">НАЧАТЬ</span>
@@ -50,6 +47,16 @@
                         <div class="tap-lock-status">(ЗАБЛОКИРОВАНО)</div>
                     </div>
                 </section>
+
+                <!--
+                 * The explainer is its own document on purpose: its CSS and its
+                 * animation loop stay isolated, and the same file is still opened
+                 * directly while it is being designed.
+                 -->
+                <iframe class="idle-explainer" id="idle-explainer"
+                        src="idle-svg-concept-2.html"
+                        title="Как работает фотобудка"
+                        scrolling="no" tabindex="-1" aria-hidden="true"></iframe>
             </div>
         </div>
 
@@ -240,6 +247,7 @@
                             <button id="btn-config-app" class="service-btn" type="button">Конфиг приложения</button>
                             <button id="btn-config-camera" class="service-btn" type="button">Конфиг камеры</button>
                             <button id="btn-template-pack" class="service-btn service-btn-wide" type="button">Выбрать шаблон</button>
+                            <button id="btn-idle-explainer" class="service-btn service-btn-wide" type="button">Объяснялка на главном: ВКЛ</button>
                         </div>
                     </section>
 

@@ -32,8 +32,63 @@ const poseRails = {
 const poseIntro = document.getElementById("pose-intro");
 const poseIntroCards = document.getElementById("pose-intro-cards");
 const idlePoseField = document.getElementById("idle-pose-field");
+const idleExplainer = document.getElementById("idle-explainer");
+const btnIdleExplainer = document.getElementById("btn-idle-explainer");
+
+/*
+ * Operator switch, not a config field: it changes nothing on the booth besides
+ * this one panel, so it applies at once with no restart. Stored locally so it
+ * survives one.
+ */
+const IDLE_EXPLAINER_KEY = "photobooth.idleExplainer";
+let idleExplainerEnabled = localStorage.getItem(IDLE_EXPLAINER_KEY) !== "off";
+let idleExplainerActive = false;
+
+/*
+ * The explainer runs its own timeline inside the iframe. It plays only while the
+ * switch is on and the idle screen is up; rewound on every entry so a guest
+ * always sees the story from the start, and stopped otherwise so the kiosk is
+ * not animating around the clock.
+ */
+function refreshIdleExplainer() {
+    if (btnIdleExplainer) {
+        btnIdleExplainer.textContent = idleExplainerEnabled
+            ? "Объяснялка на главном: ВКЛ"
+            : "Объяснялка на главном: ВЫКЛ";
+    }
+    if (!idleExplainer) return;
+    idleExplainer.hidden = !idleExplainerEnabled;
+    const timeline = idleExplainer.contentWindow
+        && idleExplainer.contentWindow.idleTimeline;
+    if (!timeline) return;
+    if (idleExplainerEnabled && idleExplainerActive) {
+        timeline.seek(0);
+        timeline.play();
+    } else {
+        timeline.pause();
+    }
+}
+
+function setIdleExplainer(active) {
+    idleExplainerActive = active;
+    refreshIdleExplainer();
+}
+
+function toggleIdleExplainer() {
+    idleExplainerEnabled = !idleExplainerEnabled;
+    localStorage.setItem(IDLE_EXPLAINER_KEY, idleExplainerEnabled ? "on" : "off");
+    refreshIdleExplainer();
+    showServiceToast(idleExplainerEnabled
+        ? "Объяснялка включена"
+        : "Объяснялка выключена");
+}
+
+// The first state can arrive before the iframe is ready, so apply it on load.
+if (idleExplainer) {
+    idleExplainer.addEventListener("load", refreshIdleExplainer);
+}
+refreshIdleExplainer();
 const idlePoseRows = Array.from(document.querySelectorAll(".idle-pose-row"));
-const idleSessionInfo = document.getElementById("idle-session-info");
 const idlePriceBadge = document.getElementById("idle-price-badge");
 const idlePriceValue = document.getElementById("idle-price-value");
 const idleStartButton = document.getElementById("idle-start-button");
@@ -434,21 +489,6 @@ function renderDoneTitle(data = {}) {
         : "Идёт печать";
 }
 
-function configureIdleSessionInfo(cfg) {
-    const configuredPhotos = Math.floor(Number(cfg.num_photos));
-    const photoCount = Number.isFinite(configuredPhotos)
-        ? Math.max(1, configuredPhotos)
-        : 4;
-    const configuredSeconds = Math.floor(Number(cfg.countdown_seconds));
-    const countdownSeconds = Number.isFinite(configuredSeconds)
-        ? Math.max(0, configuredSeconds)
-        : 5;
-    idleSessionInfo.textContent = (
-        `${photoCount} ${core.frameWord(photoCount)} С ТАЙМЕРОМ `
-        + `${countdownSeconds} ${core.secondWord(countdownSeconds)}`
-    );
-}
-
 function renderTechnicalEventBadge() {
     const visible = technicalEventActive && technicalEventPriceRubles > 0;
     idlePriceBadge.hidden = !visible;
@@ -774,6 +814,7 @@ function _doSwitch(state, data) {
 
     const key = core.screenForState(state);
     if (key && screens[key]) screens[key].hidden = false;
+    setIdleExplainer(key === "idle");
     setLiveView(key === "shooting");
     if (key !== "shooting") clearPoseIntro();
     if (key === "done") renderDoneTitle(data);
@@ -1506,7 +1547,6 @@ let config = {};
 
 function applyConfig(cfg) {
     config = cfg;
-    configureIdleSessionInfo(cfg);
     const configuredPrice = Math.floor(Number(cfg.technical_event_price_rubles));
     technicalEventPriceRubles = Number.isFinite(configuredPrice)
         ? Math.max(0, configuredPrice)
@@ -2305,6 +2345,7 @@ serviceModal?.addEventListener("click", e => {
 btnConfigApp?.addEventListener("click", () => openConfig("application"));
 btnConfigCamera?.addEventListener("click", () => openConfig("camera"));
 btnTemplatePack?.addEventListener("click", openServiceTemplates);
+btnIdleExplainer?.addEventListener("click", toggleIdleExplainer);
 serviceTemplateChange?.addEventListener("click", () => showTemplateSelection());
 serviceTemplateApply?.addEventListener("click", applyServiceTemplate);
 serviceConfigApply?.addEventListener("click", applyConfigDraft);

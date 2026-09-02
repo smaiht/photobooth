@@ -47,18 +47,16 @@ test("preview hashes are normalized and unknown hashes stay inactive", () => {
     assert.equal(core.previewRoute(null), null);
 });
 
-test("Russian counters use the correct word forms", () => {
+test("Russian sheet counter uses the correct word forms", () => {
     const cases = [
-        [1, "КАДР", "СЕКУНДА", "лист"],
-        [2, "КАДРА", "СЕКУНДЫ", "листа"],
-        [5, "КАДРОВ", "СЕКУНД", "листов"],
-        [11, "КАДРОВ", "СЕКУНД", "листов"],
-        [21, "КАДР", "СЕКУНДА", "лист"],
-        [24, "КАДРА", "СЕКУНДЫ", "листа"],
+        [1, "лист"],
+        [2, "листа"],
+        [5, "листов"],
+        [11, "листов"],
+        [21, "лист"],
+        [24, "листа"],
     ];
-    for (const [count, frames, seconds, sheets] of cases) {
-        assert.equal(core.frameWord(count), frames);
-        assert.equal(core.secondWord(count), seconds);
+    for (const [count, sheets] of cases) {
         assert.equal(core.sheetWord(count), sheets);
     }
 });
