@@ -234,9 +234,9 @@
                 <rect x="800" y="168" width="500" height="329" rx="21" fill="url(#ipc-wood-light)"/>
                 <rect x="800" y="168" width="500" height="329" rx="21" fill="url(#ipc-wood-grain)"/>
 
-                <circle cx="1050" cy="223" r="34" fill="#291b14" stroke="#704329" stroke-width="8"/>
-                <circle cx="1050" cy="223" r="23" fill="#080b0c" stroke="#343a3c" stroke-width="5"/>
-                <circle cx="1043" cy="215" r="7" fill="#7396a3" opacity="0.8"/>
+                <circle cx="1050" cy="211" r="34" fill="#291b14" stroke="#704329" stroke-width="8"/>
+                <circle cx="1050" cy="211" r="23" fill="#080b0c" stroke="#343a3c" stroke-width="5"/>
+                <circle cx="1043" cy="203" r="7" fill="#7396a3" opacity="0.8"/>
 
                 <rect x="825" y="260" width="450" height="225" rx="24" fill="#181817"/>
                 <rect x="840" y="275" width="420" height="195" rx="13" fill="#f7f3eb"/>
@@ -293,6 +293,8 @@
                         <text x="1050" y="307" fill="#191918" font-size="20" font-weight="700"
                               letter-spacing="1.5" text-anchor="middle">ЧТО ПЕЧАТАЕМ?</text>
 
+                        <!-- The three choices are centered as one row. -->
+                        <g transform="translate(10 0)">
                         <!-- 2 strips -->
                         <rect x="875" y="320" width="100" height="137" rx="10" fill="#fff" stroke="#d2cabf" stroke-width="2"/>
                         <rect x="887" y="331" width="32" height="84" rx="4" fill="#f5ede6" stroke="#d4cbc1"/>
@@ -320,6 +322,7 @@
 
                         <rect class="ipc-choice-selector" x="984" y="314" width="112" height="149" rx="14"/>
                         <circle class="ipc-choice-tap" cx="1040" cy="387" r="26"/>
+                        </g>
                     </g>
 
                     <g class="ipc-screen-state ipc-screen-done">
@@ -426,12 +429,12 @@
             </g>
 
             <g aria-hidden="true">
-                <rect x="270" y="646" width="860" height="42" rx="21" fill="#fff" opacity="0.76"/>
-                <g fill="#191918" font-size="18" font-weight="700" letter-spacing="1" text-anchor="middle">
-                    <text class="ipc-caption ipc-caption-start" x="700" y="674">НАЖМИТЕ «НАЧАТЬ»</text>
-                    <text class="ipc-caption ipc-caption-live" x="700" y="674">МЕНЯЙТЕ ПОЗЫ — СНИМАЕМ 4 КАДРА</text>
-                    <text class="ipc-caption ipc-caption-choice" x="700" y="674">ВЫБЕРИТЕ ФОРМАТ ПЕЧАТИ</text>
-                    <text class="ipc-caption ipc-caption-done" x="700" y="674">ЗАБЕРИТЕ ФОТО · ОРИГИНАЛЫ И ВИДЕО ПО QR</text>
+                <rect x="130" y="75" width="500" height="80" rx="21" fill="#fff" opacity="0.76"/>
+                <g fill="#191918" font-size="16" font-weight="700" letter-spacing="0.6" text-anchor="middle">
+                    <text class="ipc-caption ipc-caption-start" x="380" y="120">Жмём «Начать»</text>
+                    <text class="ipc-caption ipc-caption-live" x="380" y="120">Делаем 4 кадра, меняем позы</text>
+                    <text class="ipc-caption ipc-caption-choice" x="380" y="120">Выбираем формат печати</text>
+                    <text class="ipc-caption ipc-caption-done" x="380" y="120">Забираем фото, оригиналы доступны по QR</text>
                 </g>
             </g>
         </svg>
