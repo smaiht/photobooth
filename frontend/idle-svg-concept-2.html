@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photobooth idle — raster concept</title>
+    <style>
+        * { box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; margin: 0; }
+
+        body {
+            display: grid;
+            place-items: center;
+            padding: 2vw;
+            overflow: hidden;
+            background: #fbfaf8;
+            font-family: "Comfortaa", sans-serif;
+        }
+
+        .idle-process {
+            /*
+             * EDIT LAYOUT HERE.
+             * Positions are relative to the whole component.
+             */
+            --booth-x: 70%;
+            --booth-bottom: -8%;
+            --booth-height: 116%;
+            --guests-x: 35%;
+            --guests-bottom: -1%;
+            --guests-height: 91%;
+            --focus-scale: 1.22;
+            --asset-focus-scale: 1.48;
+            --focus-origin: 54% 38%;
+            /* Choice stage pushes in on the monitor: extra zoom on top of
+               --focus-scale, around the booth screen instead of the stage. */
+            --choice-zoom: 1.5;
+            --choice-origin: 69% 53%;
+            --lamp-x: 54.6%;
+            --lamp-y: 9.1%;
+            --lamp-size: 150%;
+
+            --ink: #191918;
+            --wine: #750d22;
+            --red: #d83434;
+            --green: #173b29;
+
+            position: relative;
+            width: 100%;
+            max-width: 1400px;
+            aspect-ratio: 1200 / 700;
+            overflow: hidden;
+            border-radius: clamp(20px, 2vw, 38px);
+            background: linear-gradient(155deg, #f8f4ec, #e9e2d8);
+        }
+
+        .progress {
+            --step-size: 18px;
+            --track-height: 7px;
+            --track-y: 9px;     /* centre line of the bar inside .progress */
+            --step-lift: 2px;   /* circles sit a touch above that line */
+
+            position: absolute;
+            z-index: 20;
+            top: 24px;
+            left: 9%;
+            width: 82%;
+            height: 48px;
+        }
+
+        /* The bar runs through the centres of the first and last circle. */
+        .progress-track,
+        .progress-fill {
+            position: absolute;
+            top: var(--track-y);
+            left: 0;
+            height: var(--track-height);
+            margin-top: calc(var(--track-height) / -2);
+            border-radius: 999px;
+        }
+
+        .progress-track {
+            width: 100%;
+            background: #d8d0c5;
+        }
+
+        .progress-fill {
+            width: 0;
+            background: var(--wine);
+        }
+
+        .progress-steps {
+            position: relative;
+            height: 100%;
+        }
+
+        /*
+         * Each step is centred on its own fraction of the track, so the circles
+         * land exactly on 0, 1/3, 2/3 and 1 and the outer two sit on the ends.
+         * Label width cannot move them: the whole step is centred, not laid out.
+         */
+        .progress-step {
+            position: absolute;
+            top: calc(var(--track-y) - var(--step-size) / 2 - var(--step-lift));
+            display: grid;
+            justify-items: center;
+            gap: 5px;
+            transform: translateX(-50%);
+            color: #5a534d;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+        }
+
+        .progress-step:nth-child(1) { left: 0; }
+        .progress-step:nth-child(2) { left: 33.3333%; }
+        .progress-step:nth-child(3) { left: 66.6667%; }
+        .progress-step:nth-child(4) { left: 100%; }
+
+        .progress-step span {
+            white-space: nowrap;
+        }
+
+        .progress-step::before {
+            content: "";
+            width: var(--step-size);
+            height: var(--step-size);
+            border: 4px solid var(--wine);
+            border-radius: 50%;
+            background: #f8f4ec;
+        }
+
+        .progress-step.active::before {
+            background: var(--wine);
+        }
+
+        .caption {
+            position: absolute;
+            z-index: 20;
+            top: 78px;
+            left: 6%;
+            display: grid;
+            place-items: center;
+            width: 46%;
+            padding: 14px 26px;
+            border-radius: 24px;
+            background: rgba(255, 255, 255, 0.82);
+            color: var(--ink);
+            font-size: clamp(27px, 2.7vw, 39px);
+            font-weight: 700;
+            line-height: 1.25;
+            text-align: center;
+        }
+
+        .scene {
+            position: absolute;
+            inset: 118px 0 0;
+        }
+
+        .floor-shadow {
+            position: absolute;
+            z-index: 0;
+            left: 13%;
+            right: 7%;
+            bottom: 3%;
+            height: 7%;
+            border-radius: 50%;
+            background: rgba(66, 48, 35, 0.13);
+            filter: blur(5px);
+        }
+
+        .floor-line {
+            position: absolute;
+            z-index: 0;
+            right: 4%;
+            bottom: 6%;
+            left: 4%;
+            height: 3px;
+            border-radius: 999px;
+            background: rgba(74, 61, 50, 0.18);
+        }
+
+        /*
+         * No will-change here on purpose: these elements are scaled, and a
+         * promoted layer is rasterised at its layout size and then stretched by
+         * the GPU, which is exactly what made the booth screen look soft.
+         */
+        .actors {
+            --scene-scale: 1;
+
+            position: absolute;
+            z-index: 1;
+            inset: 0;
+            transform: scale(var(--scene-scale));
+            transform-origin: var(--focus-origin);
+        }
+
+        .booth {
+            --asset-scale: 1;
+
+            position: absolute;
+            z-index: 2;
+            left: var(--booth-x);
+            bottom: var(--booth-bottom);
+            height: var(--booth-height);
+            aspect-ratio: 2 / 3;
+            transform: translateX(-50%) scale(var(--asset-scale));
+            transform-origin: center top;
+        }
+
+        .booth > img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .booth-screen {
+            position: absolute;
+            z-index: 3;
+            top: 30.4%;
+            left: 34.5%;
+            width: 25.6%;
+            height: 10.5%;
+            overflow: hidden;
+            border: 3px solid #151515;
+            border-radius: 5%;
+            background: #f7f3eb;
+            color: var(--ink);
+        }
+
+        .screen-state {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .screen-state.active { display: flex; }
+
+        .screen-start {
+            flex-direction: column;
+            gap: 5%;
+            font-size: clamp(5px, 0.62vw, 10px);
+            font-weight: 700;
+        }
+
+        .screen-start strong {
+            padding: 5% 13%;
+            border-radius: 999px;
+            background: #191918;
+            color: #fff;
+            font-size: 1.35em;
+        }
+
+        .screen-live {
+            background: #ded7ca;
+        }
+
+        /*
+         * The frames are 3:2, the screen is slightly wider, so cover trims a
+         * little off the bottom. Anchoring to the top keeps faces in view.
+         */
+        .screen-live-image {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: 50% 0;
+        }
+
+        .screen-countdown {
+            position: relative;
+            z-index: 2;
+            color: #fff;
+            font-size: clamp(18px, 3vw, 45px);
+            font-weight: 800;
+            text-shadow: 0 2px 5px #000;
+        }
+
+        .screen-counter {
+            position: absolute;
+            z-index: 2;
+            top: 5%;
+            right: 6%;
+            color: var(--ink);
+            font-size: clamp(5px, 0.65vw, 10px);
+            font-weight: 700;
+        }
+
+        /* The collage is wider than the screen, so it letterboxes; the matching
+           backdrop colour makes the bars invisible. */
+        .screen-choice {
+            background: #4a4844;
+        }
+
+        .choice-sheet {
+            position: relative;
+            width: 100%;
+            max-height: 100%;
+            aspect-ratio: 2400 / 1049;
+        }
+
+        .choice-sheet > img {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /*
+         * Postcard box measured in the collage, tilted like the print itself.
+         * Drawn as an outline so outline-offset pushes the ring clear of the
+         * print edge without touching the measured box.
+         */
+        .choice-pick {
+            position: absolute;
+            left: 3.2%;
+            top: 34.6%;
+            width: 33.4%;
+            height: 50.2%;
+            border-radius: 3%;
+            outline: 2px solid var(--red);
+            outline-offset: 5px;
+            opacity: 0;
+            transform: rotate(-2deg);
+        }
+
+        .choice-pick.selected { opacity: 1; }
+
+        .screen-done {
+            gap: 7%;
+            background: #f7f3eb;
+            font-size: clamp(5px, 0.7vw, 11px);
+            font-weight: 800;
+        }
+
+        .screen-done img {
+            width: 42%;
+            aspect-ratio: 1;
+        }
+
+        .tap-ring {
+            position: absolute;
+            z-index: 8;
+            top: 48%;
+            left: 50%;
+            width: 25%;
+            aspect-ratio: 1;
+            border: 3px solid #d83434;
+            border-radius: 50%;
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(0.4);
+        }
+
+        .guests {
+            --asset-scale: 1;
+            --people-shift: 0px;
+            --people-lift: 0px;
+
+            position: absolute;
+            z-index: 5;
+            bottom: var(--guests-bottom);
+            left: var(--guests-x);
+            height: var(--guests-height);
+            aspect-ratio: 2 / 3;
+            opacity: 0;
+            transform: translateX(calc(-50% + var(--people-shift))) translateY(var(--people-lift)) scale(var(--asset-scale));
+            transform-origin: center top;
+        }
+
+        .guests-frame {
+            position: absolute;
+            inset: 0;
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            opacity: 0;
+        }
+
+        .guests-frame.active { opacity: 1; }
+
+        /* Covers the whole component, not just the scene, so the flash reads as
+           the room going white rather than a rectangle blinking. */
+        .flash {
+            position: absolute;
+            z-index: 30;
+            inset: 0;
+            pointer-events: none;
+            background: #fff;
+            opacity: 0;
+        }
+
+        /* Burst at the booth lamp: soft glow plus hard anime-style spokes. */
+        .lamp {
+            position: absolute;
+            z-index: 4;
+            top: var(--lamp-y);
+            left: var(--lamp-x);
+            width: var(--lamp-size);
+            aspect-ratio: 1;
+            margin: calc(var(--lamp-size) / -2) 0 0 calc(var(--lamp-size) / -2);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .lamp > i {
+            position: absolute;
+            inset: 0;
+            transform: scale(var(--burst, 0.25));
+        }
+
+        .lamp-glow {
+            border-radius: 50%;
+            background: radial-gradient(closest-side,
+                rgba(255, 255, 255, 0.95) 0 13%,
+                rgba(255, 246, 214, 0.5) 30%,
+                rgba(255, 240, 190, 0) 68%);
+        }
+
+        .lamp-rays {
+            background: repeating-conic-gradient(from -8deg,
+                rgba(255, 252, 235, 0.92) 0deg 2.4deg,
+                rgba(255, 252, 235, 0) 2.4deg 13deg);
+            -webkit-mask-image: radial-gradient(closest-side,
+                transparent 9%, #000 26%, transparent 72%);
+            mask-image: radial-gradient(closest-side,
+                transparent 9%, #000 26%, transparent 72%);
+        }
+
+        /* The composed sheet already carries the template's white margin. */
+        .print {
+            position: absolute;
+            z-index: 1;
+            top: 54%;
+            left: 63%;
+            width: 92px;
+            aspect-ratio: 3593 / 2375;
+            overflow: hidden;
+            border: 1px solid rgba(80, 68, 58, 0.22);
+            border-radius: 5px;
+            background: #fff;
+            opacity: 0;
+            box-shadow: 0 10px 25px rgba(36, 25, 18, 0.24);
+            transform-origin: center;
+        }
+
+        .print img {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .confetti {
+            position: absolute;
+            z-index: 8;
+            inset: 4% 6% auto 8%;
+            height: 52%;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Placement is CSS, the fall and the spin are set per frame by the script,
+           so data-tilt / data-speed / data-spin live in the markup. */
+        .confetti i {
+            position: absolute;
+            left: var(--x);
+            top: var(--y);
+            width: 10px;
+            height: 26px;
+            border-radius: 5px;
+        }
+
+        .confetti i:nth-child(3n) {
+            width: 8px;
+            height: 18px;
+        }
+
+        .confetti i:nth-child(4n + 1) { background: var(--red); }
+        .confetti i:nth-child(4n + 2) { background: var(--green); }
+        .confetti i:nth-child(4n + 3) { background: #d8a232; }
+        .confetti i:nth-child(4n)     { background: var(--wine); }
+    </style>
+</head>
+<body>
+    <div class="idle-process" data-idle-process>
+        <div class="progress" aria-hidden="true">
+            <div class="progress-track"></div>
+            <div class="progress-fill"></div>
+            <div class="progress-steps">
+                <span class="progress-step"><span>НАЧАТЬ</span></span>
+                <span class="progress-step"><span>4 КАДРА</span></span>
+                <span class="progress-step"><span>ВЫБОР</span></span>
+                <span class="progress-step"><span>ГОТОВО</span></span>
+            </div>
+        </div>
+
+        <div class="caption">Жмём «Начать»</div>
+        <div class="scene">
+            <div class="floor-shadow"></div>
+            <div class="floor-line"></div>
+
+            <div class="actors">
+            <div class="booth">
+                <img src="../assets/idle-process/booth.png" alt="">
+
+                <div class="booth-screen">
+                    <div class="screen-state screen-start">
+                        <strong>НАЧАТЬ</strong>
+                    </div>
+
+                    <div class="screen-state screen-live">
+                        <img class="screen-live-image" src="../assets/idle-process/frame-1.jpg" alt="">
+                        <b class="screen-countdown"></b>
+                        <small class="screen-counter"></small>
+                    </div>
+
+                    <div class="screen-state screen-choice">
+                        <div class="choice-sheet">
+                            <img src="../assets/idle-process/formats-row.jpg" alt="">
+                            <b class="choice-pick"></b>
+                        </div>
+                    </div>
+
+                    <div class="screen-state screen-done">
+                        <strong>ГОТОВО!</strong>
+                        <img src="../assets/idle-process/qr.png" alt="QR">
+                    </div>
+
+                    <div class="tap-ring"></div>
+                </div>
+
+                <div class="lamp" aria-hidden="true">
+                    <i class="lamp-glow"></i>
+                    <i class="lamp-rays"></i>
+                </div>
+            </div>
+
+            <div class="guests">
+                <img class="guests-frame" data-frame="neutral" src="../assets/idle-process/guests-neutral.png" alt="">
+                <img class="guests-frame" data-frame="reach" src="../assets/idle-process/guests-reach.png" alt="">
+                <img class="guests-frame" data-frame="pose-1" src="../assets/idle-process/guests-pose-1.png" alt="">
+                <img class="guests-frame" data-frame="pose-2" src="../assets/idle-process/guests-pose-2.png" alt="">
+                <img class="guests-frame" data-frame="pose-3" src="../assets/idle-process/guests-pose-3.png" alt="">
+                <img class="guests-frame" data-frame="pose-4" src="../assets/idle-process/guests-pose-4.png" alt="">
+            </div>
+
+            <div class="print">
+                <img src="../assets/idle-process/print-grid.jpg" alt="">
+            </div>
+            </div>
+
+            <div class="confetti" aria-hidden="true">
+                <i style="--x: 2%;  --y: 14%" data-tilt="16"  data-speed="1.15" data-spin="1.6"></i>
+                <i style="--x: 9%;  --y: 2%"  data-tilt="-24" data-speed="0.75" data-spin="-2.4"></i>
+                <i style="--x: 16%; --y: 22%" data-tilt="8"   data-speed="1.40" data-spin="2.9"></i>
+                <i style="--x: 23%; --y: 6%"  data-tilt="-12" data-speed="0.95" data-spin="-1.2"></i>
+                <i style="--x: 31%; --y: 17%" data-tilt="30"  data-speed="1.25" data-spin="3.4"></i>
+                <i style="--x: 38%; --y: 0"   data-tilt="-6"  data-speed="0.70" data-spin="-1.8"></i>
+                <i style="--x: 45%; --y: 11%" data-tilt="22"  data-speed="1.50" data-spin="2.2"></i>
+                <i style="--x: 52%; --y: 25%" data-tilt="-18" data-speed="0.85" data-spin="-3.1"></i>
+                <i style="--x: 59%; --y: 4%"  data-tilt="12"  data-speed="1.30" data-spin="1.4"></i>
+                <i style="--x: 66%; --y: 19%" data-tilt="-28" data-speed="1.05" data-spin="-2.6"></i>
+                <i style="--x: 73%; --y: 8%"  data-tilt="4"   data-speed="0.80" data-spin="3.7"></i>
+                <i style="--x: 80%; --y: 23%" data-tilt="-14" data-speed="1.45" data-spin="-1.5"></i>
+                <i style="--x: 88%; --y: 3%"  data-tilt="26"  data-speed="0.90" data-spin="2.5"></i>
+                <i style="--x: 95%; --y: 15%" data-tilt="-8"  data-speed="1.20" data-spin="-2.0"></i>
+            </div>
+        </div>
+
+        <div class="flash"></div>
+    </div>
+
+    <script>
+        (() => {
+            /*
+             * EDIT TIMING HERE.
+             * Every [from, to] is an interval in seconds inside its stage.
+             */
+            const TIMELINE = {
+                start: {
+                    duration: 2.6,
+                    enter: [0.10, 0.80],
+                    approach: [1.00, 1.50],
+                    reach: [1.20, 2.00],
+                    focus: [1.20, 1.55],
+                    press: [1.60, 1.90],
+                    return: [2.00, 2.50],
+                },
+
+                shots: {
+                    count: 4,
+                    shotDuration: 1.7,
+                    three: [0.00, 0.40],
+                    two: [0.45, 0.85],
+                    one: [0.90, 1.28],
+                    flash: [1.25, 1.68],
+                    flashPeak: 1.33,
+                    burst: [1.25, 1.68],
+                },
+
+                choice: {
+                    duration: 3.0,
+                    approach: [0.60, 1.20],
+                    reach: [0.90, 1.50],
+                    press: [1.20, 1.50],
+                    return: [1.70, 2.10],
+                    selected: [1.50, 3.00],
+                    zoom: [0.00, 0.70],
+                    zoomBack: [2.30, 3.00],
+                },
+
+                done: {
+                    duration: 5.5,
+                    printBack: [0.20, 1.90],
+                    printFront: [1.90, 3.40],
+                    confetti: [0.20, 3.20],
+                    celebrate: [0.30, 5.00],
+                    exit: [5.00, 5.50],
+                },
+            };
+
+            const root = document.querySelector("[data-idle-process]");
+            const actors = root.querySelector(".actors");
+            const booth = root.querySelector(".booth");
+            const guests = root.querySelector(".guests");
+            const frames = Object.fromEntries(
+                [...root.querySelectorAll("[data-frame]")].map(element => [element.dataset.frame, element])
+            );
+            const screenImage = root.querySelector(".screen-live-image");
+            const screenStates = [...root.querySelectorAll(".screen-state")];
+            const caption = root.querySelector(".caption");
+            const progressFill = root.querySelector(".progress-fill");
+            const progressSteps = [...root.querySelectorAll(".progress-step")];
+            const countdown = root.querySelector(".screen-countdown");
+            const counter = root.querySelector(".screen-counter");
+            const tapRing = root.querySelector(".tap-ring");
+            const choiceSheet = root.querySelector(".choice-sheet");
+            const choicePick = root.querySelector(".choice-pick");
+            const flash = root.querySelector(".flash");
+            const lamp = root.querySelector(".lamp");
+            const print = root.querySelector(".print");
+            const confetti = root.querySelector(".confetti");
+            const confettiPieces = [...root.querySelectorAll(".confetti i")].map(element => ({
+                element,
+                tilt: Number(element.dataset.tilt) || 0,
+                speed: Number(element.dataset.speed) || 1,
+                spin: Number(element.dataset.spin) || 0,
+            }));
+            const CONFETTI_FALL = 0.32;   // of the stage height, times each speed
+
+            const captions = {
+                start: "Жмём «Начать»",
+                shots: "Снимаем 4 кадра по отсчёту, меняем позы",
+                choice: "Выбираем формат",
+                done: "Печатаем фото, оригиналы — по QR",
+            };
+
+            const frameSources = {
+                "pose-1": "../assets/idle-process/frame-1.jpg",
+                "pose-2": "../assets/idle-process/frame-2.jpg",
+                "pose-3": "../assets/idle-process/frame-3.jpg",
+                "pose-4": "../assets/idle-process/frame-4.jpg",
+            };
+
+            const stages = {
+                start: { from: 0, to: TIMELINE.start.duration },
+            };
+            stages.shots = {
+                from: stages.start.to,
+                to: stages.start.to + TIMELINE.shots.count * TIMELINE.shots.shotDuration,
+            };
+            stages.choice = {
+                from: stages.shots.to,
+                to: stages.shots.to + TIMELINE.choice.duration,
+            };
+            stages.done = {
+                from: stages.choice.to,
+                to: stages.choice.to + TIMELINE.done.duration,
+            };
+
+            const TOTAL = stages.done.to;
+            const FOCUS_SCALE = Number(
+                getComputedStyle(root).getPropertyValue("--focus-scale")
+            ) || 1.22;
+            const ASSET_FOCUS_SCALE = Number(
+                getComputedStyle(root).getPropertyValue("--asset-focus-scale")
+            ) || 1.48;
+            const CHOICE_ZOOM = Number(
+                getComputedStyle(root).getPropertyValue("--choice-zoom")
+            ) || 1.3;
+            const readOrigin = name => {
+                const parts = getComputedStyle(root).getPropertyValue(name).match(/-?[\d.]+/g);
+                return parts && parts.length === 2 ? parts.map(Number) : [50, 50];
+            };
+            const FOCUS_ORIGIN = readOrigin("--focus-origin");
+            const CHOICE_ORIGIN = readOrigin("--choice-origin");
+            const stageNames = ["start", "shots", "choice", "done"];
+            let activeFrame = "";
+            let activeScreen = "";
+            let startedAt = performance.now();
+            let position = 0;
+            let paused = false;
+
+            const clamp = value => Math.max(0, Math.min(1, value));
+            const between = (value, interval) => value >= interval[0] && value <= interval[1];
+            const progress = (value, interval) => clamp((value - interval[0]) / (interval[1] - interval[0]));
+            const smooth = value => value * value * (3 - 2 * value);
+
+            function locate(time) {
+                const name = stageNames.find(stage => time < stages[stage].to) || "done";
+                return { name, local: time - stages[name].from };
+            }
+
+            function setFrame(name) {
+                if (name === activeFrame) return;
+                Object.entries(frames).forEach(([key, element]) => {
+                    element.classList.toggle("active", key === name);
+                });
+                activeFrame = name;
+            }
+
+            function setScreen(name) {
+                if (name === activeScreen) return;
+                screenStates.forEach(element => {
+                    element.classList.toggle("active", element.classList.contains("screen-" + name));
+                });
+                activeScreen = name;
+            }
+
+            // A step towards the booth to reach the screen: right and a little
+            // down, so it reads as walking closer, not sliding sideways.
+            const APPROACH_X = 0.11;
+            const APPROACH_Y = 0.10;
+
+            function approach(local, stage) {
+                if (local < stage.approach[0]) return 0;
+                if (local <= stage.approach[1]) {
+                    return smooth(progress(local, stage.approach));
+                }
+                if (local < stage.return[0]) return 1;
+                if (local <= stage.return[1]) {
+                    return 1 - smooth(progress(local, stage.return));
+                }
+                return 0;
+            }
+
+            function render(time) {
+                const current = locate(time);
+                const stageIndex = stageNames.indexOf(current.name);
+                const local = current.local;
+                let frame = "neutral";
+                let shift = 0;
+                let opacity = 1;
+                let lift = 0;
+                let sceneScale = FOCUS_SCALE;
+                let assetScale = ASSET_FOCUS_SCALE;
+                let origin = FOCUS_ORIGIN;
+                let digit = "";
+                let flashOpacity = 0;
+                let burst = 0;
+
+                caption.textContent = captions[current.name];
+                setScreen(current.name === "shots" ? "live" : current.name);
+
+                progressSteps.forEach((element, index) => {
+                    element.classList.toggle("active", index <= stageIndex);
+                });
+
+                const stage = stages[current.name];
+                const baseProgress = stageIndex / 3;
+                const nextProgress = Math.min(1, (stageIndex + 1) / 3);
+                const stageProgress = clamp(local / (stage.to - stage.from));
+                progressFill.style.width = ((baseProgress + (nextProgress - baseProgress) * stageProgress) * 100) + "%";
+
+                if (current.name === "start") {
+                    const enter = smooth(progress(local, TIMELINE.start.enter));
+                    const step = approach(local, TIMELINE.start);
+                    opacity = enter;
+                    shift = -root.clientWidth * 0.06 * (1 - enter)
+                        + root.clientWidth * APPROACH_X * step;
+                    lift = root.clientHeight * APPROACH_Y * step;
+                    frame = between(local, TIMELINE.start.reach) ? "reach" : "neutral";
+                    const focus = smooth(progress(local, TIMELINE.start.focus));
+                    sceneScale = 1 + (FOCUS_SCALE - 1) * focus;
+                    assetScale = 1 + (ASSET_FOCUS_SCALE - 1) * focus;
+                }
+
+                if (current.name === "shots") {
+                    const shot = Math.min(
+                        TIMELINE.shots.count - 1,
+                        Math.floor(local / TIMELINE.shots.shotDuration)
+                    );
+                    const shotLocal = local - shot * TIMELINE.shots.shotDuration;
+                    frame = "pose-" + (shot + 1);
+                    screenImage.src = frameSources[frame];
+                    counter.textContent = (shot + 1) + " / " + TIMELINE.shots.count;
+
+                    if (between(shotLocal, TIMELINE.shots.three)) digit = "3";
+                    if (between(shotLocal, TIMELINE.shots.two)) digit = "2";
+                    if (between(shotLocal, TIMELINE.shots.one)) digit = "1";
+
+                    if (between(shotLocal, TIMELINE.shots.burst)) {
+                        burst = progress(shotLocal, TIMELINE.shots.burst);
+                    }
+
+                    if (between(shotLocal, TIMELINE.shots.flash)) {
+                        if (shotLocal <= TIMELINE.shots.flashPeak) {
+                            flashOpacity = progress(shotLocal, [
+                                TIMELINE.shots.flash[0],
+                                TIMELINE.shots.flashPeak,
+                            ]);
+                        } else {
+                            flashOpacity = 1 - progress(shotLocal, [
+                                TIMELINE.shots.flashPeak,
+                                TIMELINE.shots.flash[1],
+                            ]);
+                        }
+                    }
+                }
+
+                if (current.name === "choice") {
+                    const step = approach(local, TIMELINE.choice);
+                    shift = root.clientWidth * APPROACH_X * step;
+                    lift = root.clientHeight * APPROACH_Y * step;
+                    frame = between(local, TIMELINE.choice.reach) ? "reach" : "neutral";
+                    // Push in on the monitor, then back out before the print.
+                    const push = smooth(progress(local, TIMELINE.choice.zoom))
+                        - smooth(progress(local, TIMELINE.choice.zoomBack));
+                    sceneScale = FOCUS_SCALE * (1 + (CHOICE_ZOOM - 1) * push);
+                    origin = FOCUS_ORIGIN.map(
+                        (value, index) => value + (CHOICE_ORIGIN[index] - value) * push
+                    );
+                    choicePick.classList.toggle(
+                        "selected", local >= TIMELINE.choice.selected[0]
+                    );
+                } else {
+                    choicePick.classList.remove("selected");
+                }
+
+                if (current.name === "done") {
+                    frame = "pose-4";
+                    if (between(local, TIMELINE.done.celebrate)) {
+                        lift = -Math.abs(Math.sin(local * 5)) * root.clientHeight * 0.012;
+                    }
+                    if (local >= TIMELINE.done.exit[0]) {
+                        const exit = progress(local, TIMELINE.done.exit);
+                        opacity = 1 - exit;
+                        shift = -root.clientWidth * 0.04 * exit;
+                        sceneScale = FOCUS_SCALE - (FOCUS_SCALE - 1) * smooth(exit);
+                        assetScale = ASSET_FOCUS_SCALE - (ASSET_FOCUS_SCALE - 1) * smooth(exit);
+                    }
+                }
+
+                setFrame(frame);
+                actors.style.setProperty("--scene-scale", sceneScale);
+                actors.style.transformOrigin = origin[0] + "% " + origin[1] + "%";
+                booth.style.setProperty("--asset-scale", assetScale);
+                guests.style.setProperty("--asset-scale", assetScale);
+                guests.style.opacity = opacity;
+                guests.style.setProperty("--people-shift", shift + "px");
+                guests.style.setProperty("--people-lift", lift + "px");
+                countdown.textContent = digit;
+                flash.style.opacity = flashOpacity;
+                // Spokes shoot outwards once and fade: on hard, decay slower.
+                lamp.style.opacity = burst ? Math.pow(1 - burst, 1.5) : 0;
+                lamp.style.setProperty("--burst", 0.25 + burst * 1.15);
+
+                let tap = 0;
+                let tapX = "50%";
+                let tapY = "48%";
+                if (current.name === "start" && between(local, TIMELINE.start.press)) {
+                    tap = progress(local, TIMELINE.start.press);
+                }
+                if (current.name === "choice") {
+                    // The highlight already sits on the postcard, so its own
+                    // offsets place the ring without a second set of numbers.
+                    tapX = (choiceSheet.offsetLeft + choicePick.offsetLeft
+                            + choicePick.offsetWidth / 2) + "px";
+                    tapY = (choiceSheet.offsetTop + choicePick.offsetTop
+                            + choicePick.offsetHeight / 2) + "px";
+                    if (between(local, TIMELINE.choice.press)) {
+                        tap = progress(local, TIMELINE.choice.press);
+                    }
+                }
+                tapRing.style.left = tapX;
+                tapRing.style.top = tapY;
+                tapRing.style.opacity = tap ? 1 - tap : 0;
+                tapRing.style.transform = "translate(-50%, -50%) scale(" + (0.4 + tap * 1.5) + ")";
+
+                print.style.opacity = 0;
+                confetti.style.opacity = 0;
+
+                if (current.name === "done") {
+                    if (local >= TIMELINE.done.printBack[0]) {
+                        const back = progress(local, TIMELINE.done.printBack);
+                        print.style.opacity = 1;
+                        print.style.zIndex = 1;
+                        print.style.transform =
+                            "translate(" + (-back * root.clientWidth * 0.07) + "px, 0) rotate(-3deg)";
+                    }
+
+                    if (local >= TIMELINE.done.printFront[0]) {
+                        const front = progress(local, TIMELINE.done.printFront);
+                        print.style.zIndex = 7;
+                        print.style.transform =
+                            "translate(" + (-root.clientWidth * (0.07 + front * 0.20)) + "px, " +
+                            (-front * root.clientHeight * 0.10) + "px) scale(" + (1 + front * 1.25) +
+                            ") rotate(-4deg)";
+                    }
+
+                    if (between(local, TIMELINE.done.confetti)) {
+                        const fall = progress(local, TIMELINE.done.confetti);
+                        // Holds at full opacity through most of the fall instead
+                        // of peaking for one instant in the middle.
+                        confetti.style.opacity = Math.min(1, Math.sin(fall * Math.PI) * 1.9);
+                        const drop = root.clientHeight * CONFETTI_FALL;
+                        confettiPieces.forEach(piece => {
+                            piece.element.style.transform =
+                                "translateY(" + (fall * drop * piece.speed) + "px) rotate(" +
+                                (piece.tilt + fall * piece.spin * 360) + "deg)";
+                        });
+                    }
+                }
+            }
+
+            function tick(now) {
+                if (!paused) {
+                    position = ((now - startedAt) / 1000) % TOTAL;
+                    render(position);
+                }
+                requestAnimationFrame(tick);
+            }
+
+            const controller = {
+                config: TIMELINE,
+                stages,
+                duration: TOTAL,
+                pause() {
+                    if (paused) return;
+                    position = ((performance.now() - startedAt) / 1000) % TOTAL;
+                    paused = true;
+                },
+                play() {
+                    if (!paused) return;
+                    startedAt = performance.now() - position * 1000;
+                    paused = false;
+                },
+                seek(seconds) {
+                    position = ((seconds % TOTAL) + TOTAL) % TOTAL;
+                    startedAt = performance.now() - position * 1000;
+                    render(position);
+                },
+            };
+
+            root.idleTimeline = controller;
+            window.idleTimeline = controller;
+            render(0);
+            requestAnimationFrame(tick);
+
+            if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+                controller.pause();
+                controller.seek(0);
+            }
+        })();
+    </script>
+</body>
+</html>
