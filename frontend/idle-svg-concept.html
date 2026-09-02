@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photobooth idle cartoon</title>
+    <style>
+        /* Preview shell only. It is not needed when the component is embedded. */
+        * { box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; margin: 0; }
+        body {
+            display: grid;
+            place-items: center;
+            padding: 2vw;
+            overflow: hidden;
+            background: #eee9e1;
+            font-family: "Comfortaa", sans-serif;
+        }
+
+        /* Embeddable component. Animation timing is configured at the bottom. */
+        .idle-process-cartoon {
+            --ipc-ink: #191918;
+            --ipc-green: #173b29;
+            --ipc-wine: #750d22;
+            --ipc-red: #d83434;
+            width: 100%;
+            max-width: 1600px;
+            aspect-ratio: 1400 / 700;
+            overflow: hidden;
+            border-radius: clamp(20px, 2vw, 38px);
+            background: linear-gradient(155deg, #f8f4ec, #e9e2d8);
+        }
+
+        .idle-process-cartoon svg {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .idle-process-cartoon text {
+            font-family: inherit;
+        }
+
+        /* Static appearance only. All timing lives in TIMELINE at the bottom. */
+        .idle-process-cartoon .ipc-progress-fill {
+            stroke-dasharray: 980;
+            stroke-dashoffset: 980;
+        }
+
+        .idle-process-cartoon .ipc-guest-a,
+        .idle-process-cartoon .ipc-guest-b {
+            opacity: 0;
+            transform-box: fill-box;
+            transform-origin: center bottom;
+        }
+
+        .idle-process-cartoon .ipc-caption,
+        .idle-process-cartoon .ipc-screen-state,
+        .idle-process-cartoon .ipc-rest-arms-a,
+        .idle-process-cartoon .ipc-rest-arms-b,
+        .idle-process-cartoon .ipc-action-arm,
+        .idle-process-cartoon .ipc-celebration-arms,
+        .idle-process-cartoon .ipc-pose-one,
+        .idle-process-cartoon .ipc-pose-two,
+        .idle-process-cartoon .ipc-pose-three,
+        .idle-process-cartoon .ipc-pose-four,
+        .idle-process-cartoon .ipc-shooting-only,
+        .idle-process-cartoon .ipc-shot-counter,
+        .idle-process-cartoon .ipc-shot-flash,
+        .idle-process-cartoon .ipc-start-tap-ring,
+        .idle-process-cartoon .ipc-choice-tap,
+        .idle-process-cartoon .ipc-choice-selector,
+        .idle-process-cartoon .ipc-print-sheet-source,
+        .idle-process-cartoon .ipc-print-sheet-foreground,
+        .idle-process-cartoon .ipc-confetti {
+            opacity: 0;
+        }
+
+        .idle-process-cartoon .ipc-pose-one,
+        .idle-process-cartoon .ipc-pose-two,
+        .idle-process-cartoon .ipc-pose-three,
+        .idle-process-cartoon .ipc-pose-four {
+            visibility: hidden;
+        }
+
+        .idle-process-cartoon .ipc-start-tap-ring,
+        .idle-process-cartoon .ipc-choice-tap {
+            fill: none;
+            stroke-width: 5;
+            transform-box: fill-box;
+            transform-origin: center;
+        }
+
+        .idle-process-cartoon .ipc-start-tap-ring {
+            stroke: var(--ipc-red);
+        }
+
+        .idle-process-cartoon .ipc-choice-tap,
+        .idle-process-cartoon .ipc-choice-selector {
+            stroke: var(--ipc-wine);
+        }
+
+        .idle-process-cartoon .ipc-choice-selector {
+            fill: none;
+            stroke-width: 5;
+            transform-box: fill-box;
+            transform-origin: center;
+        }
+
+        .idle-process-cartoon .ipc-countdown {
+            fill: #fff;
+            font-size: 112px;
+            font-weight: 700;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            opacity: 0;
+            filter: url(#ipc-count-shadow);
+            transform-box: fill-box;
+            transform-origin: center;
+        }
+
+        .idle-process-cartoon .ipc-print-sheet-source,
+        .idle-process-cartoon .ipc-print-sheet-foreground,
+        .idle-process-cartoon .ipc-qr,
+        .idle-process-cartoon .ipc-confetti {
+            transform-box: fill-box;
+            transform-origin: center;
+        }
+    </style>
+</head>
+<body>
+    <!-- Component start: this div can be moved into the production idle screen. -->
+    <div class="idle-process-cartoon">
+        <svg viewBox="0 0 1400 700" role="img"
+             aria-label="Гости делают четыре кадра, выбирают формат и забирают напечатанное фото">
+            <defs>
+                <linearGradient id="ipc-wood-light" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#f0c78f"/>
+                    <stop offset="0.5" stop-color="#dca568"/>
+                    <stop offset="1" stop-color="#bd7840"/>
+                </linearGradient>
+                <linearGradient id="ipc-wood-dark" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#6d371b"/>
+                    <stop offset="0.55" stop-color="#3f2113"/>
+                    <stop offset="1" stop-color="#26140d"/>
+                </linearGradient>
+                <radialGradient id="ipc-dish" cx="52%" cy="48%" r="58%">
+                    <stop offset="0" stop-color="#fff"/>
+                    <stop offset="0.42" stop-color="#ddd6ce"/>
+                    <stop offset="1" stop-color="#82766d"/>
+                </radialGradient>
+                <linearGradient id="ipc-live-bg" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#b8d5c1"/>
+                    <stop offset="1" stop-color="#739781"/>
+                </linearGradient>
+                <linearGradient id="ipc-photo" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0" stop-color="#efc3ba"/>
+                    <stop offset="0.55" stop-color="#c97976"/>
+                    <stop offset="1" stop-color="#713047"/>
+                </linearGradient>
+                <linearGradient id="ipc-paper" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#fff"/>
+                    <stop offset="1" stop-color="#eee7dc"/>
+                </linearGradient>
+                <pattern id="ipc-wood-grain" width="90" height="70" patternUnits="userSpaceOnUse">
+                    <path d="M-8 18Q22 2 55 18T102 12M-15 49Q18 35 45 50T105 44"
+                          fill="none" stroke="#7f4525" stroke-width="2" opacity="0.18"/>
+                    <path d="M25 0Q33 20 25 39T28 72M71 0Q63 18 71 36T68 72"
+                          fill="none" stroke="#fff1d5" stroke-width="1.5" opacity="0.2"/>
+                </pattern>
+                <filter id="ipc-booth-shadow" x="-30%" y="-25%" width="170%" height="175%">
+                    <feDropShadow dx="0" dy="13" stdDeviation="13" flood-color="#38271d" flood-opacity="0.24"/>
+                </filter>
+                <filter id="ipc-count-shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.65"/>
+                </filter>
+                <clipPath id="ipc-screen-clip">
+                    <rect x="840" y="275" width="420" height="195" rx="13"/>
+                </clipPath>
+
+                <!-- One postcard artwork is reused behind and in front of the booth. -->
+                <g id="ipc-print-art">
+                    <rect x="825" y="402" width="150" height="108" rx="8"
+                          fill="url(#ipc-paper)" stroke="#cfc6ba" stroke-width="3"/>
+                    <rect x="836" y="411" width="61" height="32" rx="4" fill="url(#ipc-photo)"/>
+                    <rect x="903" y="411" width="61" height="32" rx="4" fill="#9bbca6"/>
+                    <rect x="836" y="449" width="61" height="32" rx="4" fill="#9bbca6"/>
+                    <rect x="903" y="449" width="61" height="32" rx="4" fill="url(#ipc-photo)"/>
+                    <text x="900" y="501" fill="#750d22" font-size="10" font-weight="700"
+                          letter-spacing="1" text-anchor="middle">ОТКРЫТКА</text>
+                </g>
+            </defs>
+
+            <g aria-hidden="true">
+                <path d="M210 20H1190" fill="none" stroke="#d8d0c5" stroke-width="7" stroke-linecap="round"/>
+                <path class="ipc-progress-fill" d="M210 20H1190" fill="none" stroke="#750d22" stroke-width="7" stroke-linecap="round"/>
+                <g fill="#f8f4ec" stroke="#750d22" stroke-width="4">
+                    <circle cx="210" cy="20" r="10"/>
+                    <circle cx="537" cy="20" r="10"/>
+                    <circle cx="863" cy="20" r="10"/>
+                    <circle cx="1190" cy="20" r="10"/>
+                </g>
+                <g fill="#4f4943" font-size="13" font-weight="700" letter-spacing="1.2" text-anchor="middle">
+                    <text x="210" y="49">НАЧАТЬ</text>
+                    <text x="537" y="49">4 КАДРА</text>
+                    <text x="863" y="49">ВЫБОР</text>
+                    <text x="1190" y="49">ГОТОВО</text>
+                </g>
+            </g>
+
+            <g transform="translate(0 60)">
+                <ellipse cx="760" cy="560" rx="540" ry="34" fill="rgba(72,57,46,.11)"/>
+                <path d="M70 550H1340" stroke="rgba(74,61,50,.2)" stroke-width="4" stroke-linecap="round"/>
+
+                <!-- This copy emerges from behind the booth. -->
+                <use href="#ipc-print-art" class="ipc-print-sheet-source"/>
+
+            <!-- Wooden booth based on the supplied tripod photo. -->
+            <g filter="url(#ipc-booth-shadow)">
+                <path d="M1022 477L875 558M1062 477L1215 558M1044 477L1041 573"
+                      fill="none" stroke="url(#ipc-wood-dark)" stroke-width="38" stroke-linecap="round"/>
+                <path d="M1022 477L875 558M1062 477L1215 558M1044 477L1041 573"
+                      fill="none" stroke="#9a5b31" stroke-width="7" stroke-linecap="round" opacity="0.48"/>
+
+                <rect x="1035" y="126" width="20" height="48" rx="8" fill="#51301e"/>
+                <ellipse cx="1045" cy="80" rx="116" ry="76" fill="url(#ipc-dish)" stroke="#423a34" stroke-width="5"/>
+                <ellipse cx="1045" cy="80" rx="46" ry="40" fill="#f8f7f5" stroke="#8f8882" stroke-width="4"/>
+                <circle cx="1069" cy="101" r="5" fill="#2a2420"/>
+
+                <path d="M1300 170L1360 201V468L1300 500Z" fill="url(#ipc-wood-dark)" stroke="#2d180f" stroke-width="5"/>
+                <path d="M1310 184L1348 207V455L1310 478Z" fill="url(#ipc-wood-grain)" opacity="0.55"/>
+                <rect x="785" y="155" width="535" height="355" rx="32" fill="url(#ipc-wood-dark)" stroke="#26140d" stroke-width="5"/>
+                <rect x="800" y="168" width="500" height="329" rx="21" fill="url(#ipc-wood-light)"/>
+                <rect x="800" y="168" width="500" height="329" rx="21" fill="url(#ipc-wood-grain)"/>
+
+                <circle cx="1050" cy="223" r="34" fill="#291b14" stroke="#704329" stroke-width="8"/>
+                <circle cx="1050" cy="223" r="23" fill="#080b0c" stroke="#343a3c" stroke-width="5"/>
+                <circle cx="1043" cy="215" r="7" fill="#7396a3" opacity="0.8"/>
+
+                <rect x="825" y="260" width="450" height="225" rx="24" fill="#181817"/>
+                <rect x="840" y="275" width="420" height="195" rx="13" fill="#f7f3eb"/>
+
+                <g clip-path="url(#ipc-screen-clip)">
+                    <g class="ipc-screen-state ipc-screen-start">
+                        <rect x="840" y="275" width="420" height="195" fill="#f7f3eb"/>
+                        <text x="1050" y="325" fill="#55504a" font-size="18" font-weight="700" letter-spacing="1.5" text-anchor="middle">КОСНИТЕСЬ ЭКРАНА</text>
+                        <rect x="920" y="350" width="260" height="76" rx="38" fill="#191918"/>
+                        <text x="1050" y="399" fill="#fff" font-size="27" font-weight="700" letter-spacing="2" text-anchor="middle">НАЧАТЬ</text>
+                        <circle class="ipc-start-tap-ring" cx="1050" cy="388" r="34"/>
+                    </g>
+
+                    <g class="ipc-screen-state ipc-screen-live">
+                        <rect x="840" y="275" width="420" height="195" fill="url(#ipc-live-bg)"/>
+                        <circle cx="902" cy="311" r="60" fill="rgba(255,255,255,.18)"/>
+                        <path d="M840 426Q980 357 1260 408V470H840Z" fill="#62866f"/>
+                        <circle cx="990" cy="353" r="23" fill="#e5aa8e"/>
+                        <path d="M953 452Q957 382 990 382Q1024 382 1029 452Z" fill="#7b1832"/>
+                        <circle cx="1100" cy="348" r="24" fill="#c8876d"/>
+                        <path d="M1060 452Q1064 377 1100 377Q1137 377 1142 452Z" fill="#173b29"/>
+                        <g>
+                            <g class="ipc-pose-one">
+                                <path d="M968 393Q949 369 943 343M1013 393Q1032 369 1040 343M1078 389Q1065 413 1071 439M1122 389Q1137 412 1132 439"
+                                      fill="none" stroke="#e5aa8e" stroke-width="10" stroke-linecap="round"/>
+                            </g>
+                            <g class="ipc-pose-two">
+                                <path d="M968 393Q948 412 956 439M1013 393Q1033 412 1025 439M1078 389Q1060 365 1056 340M1122 389Q1140 365 1147 340"
+                                      fill="none" stroke="#c8876d" stroke-width="10" stroke-linecap="round"/>
+                            </g>
+                            <g class="ipc-pose-three">
+                                <path d="M968 393Q949 368 954 341M1013 393Q1030 414 1023 440M1078 389Q1064 412 1071 440M1122 389Q1143 364 1152 340"
+                                      fill="none" stroke="#c8876d" stroke-width="10" stroke-linecap="round"/>
+                            </g>
+                            <g class="ipc-pose-four">
+                                <path d="M968 393Q985 405 1003 427M1013 393Q997 406 978 427M1078 389Q1095 403 1113 425M1122 389Q1107 404 1088 425"
+                                      fill="none" stroke="#e5aa8e" stroke-width="10" stroke-linecap="round"/>
+                            </g>
+                        </g>
+                        <text class="ipc-countdown ipc-count-three" x="1050" y="365">3</text>
+                        <text class="ipc-countdown ipc-count-two" x="1050" y="365">2</text>
+                        <text class="ipc-countdown ipc-count-one" x="1050" y="365">1</text>
+                        <rect class="ipc-shot-flash" x="840" y="275" width="420" height="195" fill="#fff"/>
+                        <g fill="#fff" font-size="17" font-weight="700" text-anchor="end">
+                            <text class="ipc-shot-counter ipc-counter-one" x="1238" y="302">1 / 4</text>
+                            <text class="ipc-shot-counter ipc-counter-two" x="1238" y="302">2 / 4</text>
+                            <text class="ipc-shot-counter ipc-counter-three" x="1238" y="302">3 / 4</text>
+                            <text class="ipc-shot-counter ipc-counter-four" x="1238" y="302">4 / 4</text>
+                        </g>
+                    </g>
+
+                    <g class="ipc-screen-state ipc-screen-choice">
+                        <rect x="840" y="275" width="420" height="195" fill="#f7f3eb"/>
+                        <text x="1050" y="307" fill="#191918" font-size="20" font-weight="700"
+                              letter-spacing="1.5" text-anchor="middle">ЧТО ПЕЧАТАЕМ?</text>
+
+                        <!-- 2 strips -->
+                        <rect x="875" y="320" width="100" height="137" rx="10" fill="#fff" stroke="#d2cabf" stroke-width="2"/>
+                        <rect x="887" y="331" width="32" height="84" rx="4" fill="#f5ede6" stroke="#d4cbc1"/>
+                        <rect x="931" y="331" width="32" height="84" rx="4" fill="#f5ede6" stroke="#d4cbc1"/>
+                        <path d="M893 339H913M893 358H913M893 377H913M893 396H913M937 339H957M937 358H957M937 377H957M937 396H957"
+                              stroke="#750d22" stroke-width="10" stroke-linecap="round"/>
+                        <text x="925" y="445" fill="#191918" font-size="10.5" font-weight="700" text-anchor="middle">2 ПОЛОСКИ</text>
+
+                        <!-- Postcard -->
+                        <rect x="990" y="320" width="100" height="137" rx="10" fill="#fff" stroke="#d2cabf" stroke-width="2"/>
+                        <rect x="1001" y="333" width="78" height="81" rx="5" fill="#f7f1e9" stroke="#d4cbc1"/>
+                        <rect x="1007" y="339" width="31" height="27" rx="3" fill="url(#ipc-photo)"/>
+                        <rect x="1042" y="339" width="31" height="27" rx="3" fill="#9bbca6"/>
+                        <rect x="1007" y="370" width="31" height="27" rx="3" fill="#9bbca6"/>
+                        <rect x="1042" y="370" width="31" height="27" rx="3" fill="url(#ipc-photo)"/>
+                        <path d="M1012 406H1068" stroke="#750d22" stroke-width="4" stroke-linecap="round"/>
+                        <text x="1040" y="445" fill="#191918" font-size="10.5" font-weight="700" text-anchor="middle">ОТКРЫТКА</text>
+
+                        <!-- One large photo -->
+                        <rect x="1105" y="320" width="100" height="137" rx="10" fill="#fff" stroke="#d2cabf" stroke-width="2"/>
+                        <rect x="1116" y="332" width="78" height="83" rx="5" fill="url(#ipc-photo)"/>
+                        <circle cx="1146" cy="359" r="12" fill="#efc2ab"/>
+                        <path d="M1123 410Q1144 371 1187 410" fill="#173b29"/>
+                        <text x="1155" y="445" fill="#191918" font-size="10.5" font-weight="700" text-anchor="middle">1 ФОТО</text>
+
+                        <rect class="ipc-choice-selector" x="984" y="314" width="112" height="149" rx="14"/>
+                        <circle class="ipc-choice-tap" cx="1040" cy="387" r="26"/>
+                    </g>
+
+                    <g class="ipc-screen-state ipc-screen-done">
+                        <rect x="840" y="275" width="420" height="195" fill="#f7f3eb"/>
+                        <text x="955" y="342" fill="#191918" font-size="28" font-weight="700" letter-spacing="1.5" text-anchor="middle">ГОТОВО!</text>
+                        <text x="955" y="379" fill="#173b29" font-size="17" font-weight="700" text-anchor="middle">ФОТО И ВИДЕО</text>
+                        <text x="955" y="404" fill="#69635c" font-size="15" font-weight="700" text-anchor="middle">ПО QR</text>
+                        <!-- Valid demo QR: https://example.com -->
+                        <g class="ipc-qr">
+                            <rect x="1080" y="290" width="155" height="155" rx="8" fill="#fff"/>
+                            <path fill="#111" d="M1095 305h5v5h-5zM1100 305h5v5h-5zM1105 305h5v5h-5zM1110 305h5v5h-5zM1115 305h5v5h-5zM1120 305h5v5h-5zM1125 305h5v5h-5zM1145 305h5v5h-5zM1155 305h5v5h-5zM1165 305h5v5h-5zM1185 305h5v5h-5zM1190 305h5v5h-5zM1195 305h5v5h-5zM1200 305h5v5h-5zM1205 305h5v5h-5zM1210 305h5v5h-5zM1215 305h5v5h-5zM1095 310h5v5h-5zM1125 310h5v5h-5zM1135 310h5v5h-5zM1140 310h5v5h-5zM1145 310h5v5h-5zM1160 310h5v5h-5zM1165 310h5v5h-5zM1175 310h5v5h-5zM1185 310h5v5h-5zM1215 310h5v5h-5zM1095 315h5v5h-5zM1105 315h5v5h-5zM1110 315h5v5h-5zM1115 315h5v5h-5zM1125 315h5v5h-5zM1135 315h5v5h-5zM1140 315h5v5h-5zM1150 315h5v5h-5zM1165 315h5v5h-5zM1185 315h5v5h-5zM1195 315h5v5h-5zM1200 315h5v5h-5zM1205 315h5v5h-5zM1215 315h5v5h-5zM1095 320h5v5h-5zM1105 320h5v5h-5zM1110 320h5v5h-5zM1115 320h5v5h-5zM1125 320h5v5h-5zM1135 320h5v5h-5zM1140 320h5v5h-5zM1145 320h5v5h-5zM1160 320h5v5h-5zM1175 320h5v5h-5zM1185 320h5v5h-5zM1195 320h5v5h-5zM1200 320h5v5h-5zM1205 320h5v5h-5zM1215 320h5v5h-5zM1095 325h5v5h-5zM1105 325h5v5h-5zM1110 325h5v5h-5zM1115 325h5v5h-5zM1125 325h5v5h-5zM1140 325h5v5h-5zM1145 325h5v5h-5zM1160 325h5v5h-5zM1175 325h5v5h-5zM1185 325h5v5h-5zM1195 325h5v5h-5zM1200 325h5v5h-5zM1205 325h5v5h-5zM1215 325h5v5h-5zM1095 330h5v5h-5zM1125 330h5v5h-5zM1140 330h5v5h-5zM1150 330h5v5h-5zM1165 330h5v5h-5zM1185 330h5v5h-5zM1215 330h5v5h-5zM1095 335h5v5h-5zM1100 335h5v5h-5zM1105 335h5v5h-5zM1110 335h5v5h-5zM1115 335h5v5h-5zM1120 335h5v5h-5zM1125 335h5v5h-5zM1135 335h5v5h-5zM1145 335h5v5h-5zM1155 335h5v5h-5zM1165 335h5v5h-5zM1175 335h5v5h-5zM1185 335h5v5h-5zM1190 335h5v5h-5zM1195 335h5v5h-5zM1200 335h5v5h-5zM1205 335h5v5h-5zM1210 335h5v5h-5zM1215 335h5v5h-5zM1135 340h5v5h-5zM1140 340h5v5h-5zM1165 340h5v5h-5zM1170 340h5v5h-5zM1175 340h5v5h-5zM1095 345h5v5h-5zM1125 345h5v5h-5zM1135 345h5v5h-5zM1155 345h5v5h-5zM1180 345h5v5h-5zM1185 345h5v5h-5zM1200 345h5v5h-5zM1205 345h5v5h-5zM1210 345h5v5h-5zM1100 350h5v5h-5zM1105 350h5v5h-5zM1110 350h5v5h-5zM1120 350h5v5h-5zM1140 350h5v5h-5zM1150 350h5v5h-5zM1160 350h5v5h-5zM1165 350h5v5h-5zM1170 350h5v5h-5zM1175 350h5v5h-5zM1180 350h5v5h-5zM1190 350h5v5h-5zM1195 350h5v5h-5zM1200 350h5v5h-5zM1205 350h5v5h-5zM1210 350h5v5h-5zM1095 355h5v5h-5zM1100 355h5v5h-5zM1105 355h5v5h-5zM1110 355h5v5h-5zM1115 355h5v5h-5zM1125 355h5v5h-5zM1135 355h5v5h-5zM1140 355h5v5h-5zM1160 355h5v5h-5zM1165 355h5v5h-5zM1170 355h5v5h-5zM1175 355h5v5h-5zM1190 355h5v5h-5zM1200 355h5v5h-5zM1210 355h5v5h-5zM1215 355h5v5h-5zM1095 360h5v5h-5zM1100 360h5v5h-5zM1115 360h5v5h-5zM1120 360h5v5h-5zM1135 360h5v5h-5zM1140 360h5v5h-5zM1145 360h5v5h-5zM1150 360h5v5h-5zM1160 360h5v5h-5zM1175 360h5v5h-5zM1185 360h5v5h-5zM1190 360h5v5h-5zM1200 360h5v5h-5zM1215 360h5v5h-5zM1110 365h5v5h-5zM1115 365h5v5h-5zM1120 365h5v5h-5zM1125 365h5v5h-5zM1130 365h5v5h-5zM1135 365h5v5h-5zM1145 365h5v5h-5zM1155 365h5v5h-5zM1160 365h5v5h-5zM1170 365h5v5h-5zM1175 365h5v5h-5zM1185 365h5v5h-5zM1190 365h5v5h-5zM1215 365h5v5h-5zM1095 370h5v5h-5zM1100 370h5v5h-5zM1105 370h5v5h-5zM1115 370h5v5h-5zM1135 370h5v5h-5zM1140 370h5v5h-5zM1145 370h5v5h-5zM1170 370h5v5h-5zM1175 370h5v5h-5zM1190 370h5v5h-5zM1210 370h5v5h-5zM1095 375h5v5h-5zM1125 375h5v5h-5zM1130 375h5v5h-5zM1145 375h5v5h-5zM1150 375h5v5h-5zM1155 375h5v5h-5zM1170 375h5v5h-5zM1185 375h5v5h-5zM1190 375h5v5h-5zM1195 375h5v5h-5zM1200 375h5v5h-5zM1210 375h5v5h-5zM1215 375h5v5h-5zM1095 380h5v5h-5zM1105 380h5v5h-5zM1115 380h5v5h-5zM1130 380h5v5h-5zM1135 380h5v5h-5zM1140 380h5v5h-5zM1145 380h5v5h-5zM1150 380h5v5h-5zM1180 380h5v5h-5zM1185 380h5v5h-5zM1190 380h5v5h-5zM1200 380h5v5h-5zM1205 380h5v5h-5zM1215 380h5v5h-5zM1095 385h5v5h-5zM1105 385h5v5h-5zM1120 385h5v5h-5zM1125 385h5v5h-5zM1135 385h5v5h-5zM1140 385h5v5h-5zM1145 385h5v5h-5zM1150 385h5v5h-5zM1175 385h5v5h-5zM1180 385h5v5h-5zM1185 385h5v5h-5zM1190 385h5v5h-5zM1195 385h5v5h-5zM1205 385h5v5h-5zM1135 390h5v5h-5zM1155 390h5v5h-5zM1160 390h5v5h-5zM1165 390h5v5h-5zM1175 390h5v5h-5zM1195 390h5v5h-5zM1095 395h5v5h-5zM1100 395h5v5h-5zM1105 395h5v5h-5zM1110 395h5v5h-5zM1115 395h5v5h-5zM1120 395h5v5h-5zM1125 395h5v5h-5zM1145 395h5v5h-5zM1150 395h5v5h-5zM1175 395h5v5h-5zM1185 395h5v5h-5zM1195 395h5v5h-5zM1215 395h5v5h-5zM1095 400h5v5h-5zM1125 400h5v5h-5zM1155 400h5v5h-5zM1160 400h5v5h-5zM1170 400h5v5h-5zM1175 400h5v5h-5zM1195 400h5v5h-5zM1210 400h5v5h-5zM1095 405h5v5h-5zM1105 405h5v5h-5zM1110 405h5v5h-5zM1115 405h5v5h-5zM1125 405h5v5h-5zM1140 405h5v5h-5zM1145 405h5v5h-5zM1155 405h5v5h-5zM1165 405h5v5h-5zM1170 405h5v5h-5zM1175 405h5v5h-5zM1180 405h5v5h-5zM1185 405h5v5h-5zM1190 405h5v5h-5zM1195 405h5v5h-5zM1205 405h5v5h-5zM1215 405h5v5h-5zM1095 410h5v5h-5zM1105 410h5v5h-5zM1110 410h5v5h-5zM1115 410h5v5h-5zM1125 410h5v5h-5zM1140 410h5v5h-5zM1145 410h5v5h-5zM1165 410h5v5h-5zM1175 410h5v5h-5zM1180 410h5v5h-5zM1185 410h5v5h-5zM1210 410h5v5h-5zM1215 410h5v5h-5zM1095 415h5v5h-5zM1105 415h5v5h-5zM1110 415h5v5h-5zM1115 415h5v5h-5zM1125 415h5v5h-5zM1140 415h5v5h-5zM1145 415h5v5h-5zM1150 415h5v5h-5zM1155 415h5v5h-5zM1170 415h5v5h-5zM1200 415h5v5h-5zM1205 415h5v5h-5zM1215 415h5v5h-5zM1095 420h5v5h-5zM1125 420h5v5h-5zM1140 420h5v5h-5zM1150 420h5v5h-5zM1165 420h5v5h-5zM1170 420h5v5h-5zM1175 420h5v5h-5zM1180 420h5v5h-5zM1190 420h5v5h-5zM1195 420h5v5h-5zM1215 420h5v5h-5zM1095 425h5v5h-5zM1100 425h5v5h-5zM1105 425h5v5h-5zM1110 425h5v5h-5zM1115 425h5v5h-5zM1120 425h5v5h-5zM1125 425h5v5h-5zM1135 425h5v5h-5zM1140 425h5v5h-5zM1145 425h5v5h-5zM1160 425h5v5h-5zM1165 425h5v5h-5zM1175 425h5v5h-5zM1185 425h5v5h-5zM1200 425h5v5h-5zM1215 425h5v5h-5z"/>
+                        </g>
+                    </g>
+                </g>
+
+                <!-- Side output slot, drawn over the hidden part of the sheet. -->
+                <rect x="780" y="404" width="34" height="88" rx="7" fill="#171412"/>
+                <path d="M790 414V482" stroke="#514038" stroke-width="6" stroke-linecap="round"/>
+            </g>
+
+            <!-- Guests are inline so every arm state is animated directly. -->
+            <g class="ipc-guest-a">
+                <path d="M407 429L391 548" fill="none" stroke="#343839" stroke-width="30" stroke-linecap="round"/>
+                <path d="M464 429L479 548" fill="none" stroke="#343839" stroke-width="30" stroke-linecap="round"/>
+                <path d="M371 550H414M459 550H503" fill="none" stroke="#171717" stroke-width="19" stroke-linecap="round"/>
+                <path d="M391 314Q435 286 478 314L490 443H380Z" fill="#7b1832"/>
+                <path d="M402 329Q435 309 468 329" fill="none" stroke="#a84b61" stroke-width="7" stroke-linecap="round"/>
+                <circle cx="436" cy="255" r="47" fill="#e5aa8e"/>
+                <path d="M390 260Q386 198 439 202Q489 206 486 265Q468 237 424 234Q410 255 390 260Z" fill="#3c2523"/>
+                <circle cx="452" cy="256" r="4.5" fill="#28211e"/>
+                <path d="M456 274Q469 279 477 269" fill="none" stroke="#9b5148" stroke-width="4" stroke-linecap="round"/>
+                <g class="ipc-rest-arms-a">
+                    <path d="M402 325Q382 374 389 424M469 325Q491 373 480 424" fill="none" stroke="#e5aa8e" stroke-width="21" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-pose-one">
+                    <path d="M402 326Q377 299 366 263M469 326Q498 297 511 263" fill="none" stroke="#e5aa8e" stroke-width="21" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-pose-two">
+                    <path d="M402 326Q369 351 381 393M469 326Q500 350 488 393" fill="none" stroke="#e5aa8e" stroke-width="21" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-pose-three">
+                    <path d="M402 326Q368 297 381 260M469 326Q494 358 481 402" fill="none" stroke="#e5aa8e" stroke-width="21" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-pose-four">
+                    <path d="M402 326Q429 345 456 378M469 326Q445 345 415 378" fill="none" stroke="#e5aa8e" stroke-width="21" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-celebration-arms">
+                    <path d="M402 326Q371 285 359 240M469 326Q504 287 518 241" fill="none" stroke="#e5aa8e" stroke-width="21" stroke-linecap="round"/>
+                </g>
+            </g>
+
+            <g class="ipc-guest-b">
+                <path d="M612 434L600 548" fill="none" stroke="#263b31" stroke-width="31" stroke-linecap="round"/>
+                <path d="M670 434L686 548" fill="none" stroke="#263b31" stroke-width="31" stroke-linecap="round"/>
+                <path d="M580 550H623M667 550H711" fill="none" stroke="#171717" stroke-width="19" stroke-linecap="round"/>
+                <path d="M595 310Q641 285 687 310L699 446H583Z" fill="#173b29"/>
+                <path d="M607 329Q641 305 676 329" fill="none" stroke="#2f6347" stroke-width="8" stroke-linecap="round"/>
+                <circle cx="641" cy="248" r="48" fill="#c8876d"/>
+                <path d="M596 248Q595 197 641 193Q690 197 691 251Q674 226 631 224Q616 244 596 248Z" fill="#20201e"/>
+                <circle cx="658" cy="249" r="4.5" fill="#28211e"/>
+                <path d="M661 269Q674 275 682 265" fill="none" stroke="#8c473d" stroke-width="4" stroke-linecap="round"/>
+                <g class="ipc-rest-arms-b">
+                    <path d="M606 320Q584 372 592 422M674 320Q699 371 688 423" fill="none" stroke="#c8876d" stroke-width="22" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-action-arm">
+                    <path d="M606 320Q584 372 592 422" fill="none" stroke="#c8876d" stroke-width="22" stroke-linecap="round"/>
+                    <path d="M674 321Q730 306 777 340Q808 363 821 379" fill="none" stroke="#c8876d" stroke-width="22" stroke-linecap="round"/>
+                    <circle cx="830" cy="384" r="14" fill="#c8876d"/>
+                </g>
+                <g class="ipc-pose-one">
+                    <path d="M607 321Q580 353 591 397M673 321Q701 347 694 393" fill="none" stroke="#c8876d" stroke-width="22" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-pose-two">
+                    <path d="M607 321Q570 291 579 251M673 321Q710 291 719 250" fill="none" stroke="#c8876d" stroke-width="22" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-pose-three">
+                    <path d="M607 321Q583 346 595 392M673 321Q712 289 729 253" fill="none" stroke="#c8876d" stroke-width="22" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-pose-four">
+                    <path d="M607 321Q634 345 661 378M673 321Q649 346 619 378" fill="none" stroke="#c8876d" stroke-width="22" stroke-linecap="round"/>
+                </g>
+                <g class="ipc-celebration-arms">
+                    <path d="M607 321Q575 284 566 241M673 321Q705 284 716 241" fill="none" stroke="#c8876d" stroke-width="22" stroke-linecap="round"/>
+                </g>
+            </g>
+
+            <g class="ipc-shooting-only" aria-hidden="true">
+                <ellipse class="ipc-shot-flash" cx="1045" cy="80" rx="126" ry="87" fill="rgba(255,255,255,.88)"/>
+                <path class="ipc-shot-flash" d="M1045 0V22M1045 139V171M904 80H929M1161 80H1186M943 0L970 30M1120 130L1146 158M1145 1L1119 31M970 130L944 158"
+                      fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round"/>
+                <rect class="ipc-shot-flash" x="0" y="0" width="1400" height="620" fill="rgba(255,255,255,.46)"/>
+            </g>
+
+            <!-- At the end the same print moves above the booth and guests. -->
+            <use href="#ipc-print-art" class="ipc-print-sheet-foreground"/>
+
+            <g aria-hidden="true">
+                <rect class="ipc-confetti" x="330" y="135" width="11" height="32" rx="5" fill="#d83434"/>
+                <rect class="ipc-confetti" x="405" y="115" width="11" height="32" rx="5" fill="#173b29"/>
+                <rect class="ipc-confetti" x="530" y="130" width="11" height="32" rx="5" fill="#d8a232"/>
+                <rect class="ipc-confetti" x="625" y="108" width="11" height="32" rx="5" fill="#750d22"/>
+                <circle class="ipc-confetti" cx="720" cy="135" r="9" fill="#d83434"/>
+            </g>
+            </g>
+
+            <g aria-hidden="true">
+                <rect x="270" y="646" width="860" height="42" rx="21" fill="#fff" opacity="0.76"/>
+                <g fill="#191918" font-size="18" font-weight="700" letter-spacing="1" text-anchor="middle">
+                    <text class="ipc-caption ipc-caption-start" x="700" y="674">НАЖМИТЕ «НАЧАТЬ»</text>
+                    <text class="ipc-caption ipc-caption-live" x="700" y="674">МЕНЯЙТЕ ПОЗЫ — СНИМАЕМ 4 КАДРА</text>
+                    <text class="ipc-caption ipc-caption-choice" x="700" y="674">ВЫБЕРИТЕ ФОРМАТ ПЕЧАТИ</text>
+                    <text class="ipc-caption ipc-caption-done" x="700" y="674">ЗАБЕРИТЕ ФОТО · ОРИГИНАЛЫ И ВИДЕО ПО QR</text>
+                </g>
+            </g>
+        </svg>
+    </div>
+
+    <script>
+        (() => {
+            /*
+             * EDIT ONLY THIS OBJECT.
+             *
+             * All numbers are seconds relative to their stage.
+             * Every [from, to] pair is a local animation interval.
+             * Total duration is calculated automatically:
+             * start + (shotDuration × count) + choice + done.
+             */
+            const TIMELINE = {
+                start: {
+                    duration: 2.6,
+                    guestAEnter: [0.10, 0.80],
+                    guestBEnter: [0.20, 0.90],
+                    approach: [1.00, 1.50],
+                    arm: [1.20, 2.00],
+                    press: [1.60, 1.90],
+                    return: [2.00, 2.50],
+                },
+
+                shots: {
+                    count: 4,
+                    shotDuration: 1.5,
+                    three: [0.00, 0.40],
+                    two: [0.45, 0.85],
+                    one: [0.90, 1.28],
+                    flash: [1.25, 1.45],
+                    flashPeak: 1.32,
+                },
+
+                choice: {
+                    duration: 3.0,
+                    approach: [0.60, 1.20],
+                    arm: [0.90, 1.50],
+                    press: [1.20, 1.50],
+                    return: [1.70, 2.10],
+                    selected: [1.50, 3.00],
+                },
+
+                done: {
+                    duration: 5.5,
+                    printBack: [0.20, 1.90],
+                    printFront: [1.90, 3.40],
+                    confetti: [0.30, 2.50],
+                    confettiStagger: 0.08,
+                    celebrate: [0.30, 5.00],
+                    exit: [5.00, 5.50],
+                },
+            };
+
+            /* Animation engine below. It uses TIMELINE; normally do not edit it. */
+            const STAGE_ORDER = ["start", "shots", "choice", "done"];
+            const STAGES = {};
+            let cursor = 0;
+
+            for (const name of STAGE_ORDER) {
+                const config = TIMELINE[name];
+                const duration = name === "shots"
+                    ? config.count * config.shotDuration
+                    : config.duration;
+
+                STAGES[name] = { from: cursor, to: cursor + duration, duration };
+                cursor += duration;
+            }
+
+            const TOTAL = cursor;
+            const EPSILON = 0.001;
+            const stageTime = (stage, local = 0) => STAGES[stage].from + local;
+            const frame = (at, styles, easing) => ({
+                at,
+                ...styles,
+                ...(easing ? { easing } : {}),
+            });
+
+            document.querySelectorAll(".idle-process-cartoon").forEach(root => {
+                const animations = [];
+
+                function elements(target) {
+                    if (typeof target === "string") {
+                        return [...root.querySelectorAll(target)];
+                    }
+                    return target instanceof Element ? [target] : [...target];
+                }
+
+                function play(target, sourceFrames) {
+                    const byTime = new Map();
+
+                    sourceFrames
+                        .slice()
+                        .sort((a, b) => a.at - b.at)
+                        .forEach(item => byTime.set(item.at, item));
+
+                    const keyframes = [...byTime.values()].map(({ at, ...styles }) => ({
+                        ...styles,
+                        offset: Math.max(0, Math.min(1, at / TOTAL)),
+                    }));
+
+                    for (const element of elements(target)) {
+                        animations.push(element.animate(keyframes, {
+                            duration: TOTAL * 1000,
+                            iterations: Infinity,
+                            fill: "both",
+                            easing: "linear",
+                        }));
+                    }
+                }
+
+                function opacityWindows(intervals, fade = 0.08, extraOn = {}, extraOff = {}) {
+                    const off = { opacity: 0, ...extraOff };
+                    const on = { opacity: 1, ...extraOn };
+                    const frames = [frame(0, off)];
+
+                    for (const [from, to] of intervals) {
+                        if (from === 0) {
+                            frames.push(frame(0, on));
+                        } else {
+                            frames.push(frame(Math.max(0, from - fade), off));
+                            frames.push(frame(from, on));
+                        }
+
+                        frames.push(frame(Math.max(from, to - fade), on));
+                        frames.push(frame(to, off));
+                    }
+
+                    frames.push(frame(TOTAL, off));
+                    return frames;
+                }
+
+                function pulseFrames(intervals, enterScale = 0.78, exitScale = 1.18) {
+                    const frames = [frame(0, { opacity: 0, transform: `scale(${enterScale})` })];
+
+                    for (const [from, to] of intervals) {
+                        const fade = Math.min(0.05, (to - from) / 4);
+                        frames.push(frame(from, { opacity: 0, transform: `scale(${enterScale})` }));
+                        frames.push(frame(from + fade, { opacity: 1, transform: "scale(1)" }));
+                        frames.push(frame(to - fade, { opacity: 1, transform: "scale(1)" }));
+                        frames.push(frame(to, { opacity: 0, transform: `scale(${exitScale})` }));
+                    }
+
+                    frames.push(frame(TOTAL, { opacity: 0, transform: `scale(${enterScale})` }));
+                    return frames;
+                }
+
+                function ringFrames(from, to) {
+                    const length = to - from;
+                    return [
+                        frame(0, { opacity: 0, transform: "scale(.3)" }),
+                        frame(from, { opacity: 0, transform: "scale(.3)" }),
+                        frame(from + length * 0.25, { opacity: 0.9, transform: "scale(.45)" }),
+                        frame(to, { opacity: 0, transform: "scale(1.7)" }),
+                        frame(TOTAL, { opacity: 0, transform: "scale(.3)" }),
+                    ];
+                }
+
+                const start = TIMELINE.start;
+                const shots = TIMELINE.shots;
+                const choice = TIMELINE.choice;
+                const done = TIMELINE.done;
+
+                const shotIntervals = Array.from({ length: shots.count }, (_, index) => {
+                    const from = STAGES.shots.from + index * shots.shotDuration;
+                    return [from, from + shots.shotDuration];
+                });
+
+                const localShotIntervals = local => shotIntervals.map(([from]) => [
+                    from + local[0],
+                    from + local[1],
+                ]);
+
+                /* Stage screens, captions and top progress. */
+                for (const name of STAGE_ORDER) {
+                    const interval = [[STAGES[name].from, STAGES[name].to]];
+                    play(`.ipc-screen-${name === "shots" ? "live" : name}`, opacityWindows(interval));
+                    play(`.ipc-caption-${name === "shots" ? "live" : name}`, opacityWindows(interval));
+                }
+
+                play(".ipc-progress-fill", [
+                    frame(0, { strokeDashoffset: 980 }),
+                    frame(STAGES.start.to, { strokeDashoffset: 653 }),
+                    frame(STAGES.shots.to, { strokeDashoffset: 327 }),
+                    frame(STAGES.choice.to, { strokeDashoffset: 0 }),
+                    frame(TOTAL, { strokeDashoffset: 0 }),
+                ]);
+
+                /* Guests: enter, approach, press, return, celebrate, exit. */
+                const neutral = "translate(0px, 0px) rotate(0deg)";
+                const hiddenA = { opacity: 0, transform: "translateX(-90px)" };
+                const hiddenB = { opacity: 0, transform: "translateX(-105px)" };
+                const visible = { opacity: 1, transform: neutral };
+                const celebrateFrom = stageTime("done", done.celebrate[0]);
+                const celebrateTo = stageTime("done", done.celebrate[1]);
+                const exitFrom = stageTime("done", done.exit[0]);
+                const exitTo = stageTime("done", done.exit[1]);
+
+                play(".ipc-guest-a", [
+                    frame(0, hiddenA),
+                    frame(start.guestAEnter[0], hiddenA, "ease-in-out"),
+                    frame(start.guestAEnter[1], visible),
+                    frame(celebrateFrom, visible, "ease-in-out"),
+                    frame(celebrateFrom + 0.35, { opacity: 1, transform: "translate(0px, -11px) rotate(-2deg)" }, "ease-in-out"),
+                    frame(celebrateFrom + 0.95, { opacity: 1, transform: "translate(0px, 0px) rotate(2deg)" }, "ease-in-out"),
+                    frame(celebrateFrom + 1.45, { opacity: 1, transform: "translate(0px, -6px) rotate(0deg)" }, "ease-in-out"),
+                    frame(celebrateTo, visible),
+                    frame(exitFrom, visible, "ease-in-out"),
+                    frame(exitTo, { opacity: 0, transform: "translateX(-30px)" }),
+                ]);
+
+                const choiceApproach = choice.approach.map(value => stageTime("choice", value));
+                const choicePress = choice.press.map(value => stageTime("choice", value));
+                const choiceReturn = choice.return.map(value => stageTime("choice", value));
+
+                play(".ipc-guest-b", [
+                    frame(0, hiddenB),
+                    frame(start.guestBEnter[0], hiddenB, "ease-in-out"),
+                    frame(start.guestBEnter[1], visible),
+                    frame(start.approach[0], visible, "ease-in-out"),
+                    frame(start.approach[1], { opacity: 1, transform: "translateX(220px)" }),
+                    frame(start.press[1], { opacity: 1, transform: "translateX(220px)" }, "ease-in-out"),
+                    frame(start.return[1], visible),
+                    frame(choiceApproach[0], visible, "ease-in-out"),
+                    frame(choiceApproach[1], { opacity: 1, transform: "translateX(210px)" }),
+                    frame(choicePress[1], { opacity: 1, transform: "translateX(210px)" }, "ease-in-out"),
+                    frame(choiceReturn[1], visible),
+                    frame(celebrateFrom, visible, "ease-in-out"),
+                    frame(celebrateFrom + 0.35, { opacity: 1, transform: "translate(8px, -11px) rotate(2deg)" }, "ease-in-out"),
+                    frame(celebrateFrom + 0.95, { opacity: 1, transform: "translate(8px, 0px) rotate(-2deg)" }, "ease-in-out"),
+                    frame(celebrateFrom + 1.45, { opacity: 1, transform: "translate(8px, -6px)" }, "ease-in-out"),
+                    frame(celebrateTo, visible),
+                    frame(exitFrom, visible, "ease-in-out"),
+                    frame(exitTo, { opacity: 0, transform: "translateX(-30px)" }),
+                ]);
+
+                const startArm = start.arm;
+                const globalChoicePress = choice.press.map(value => stageTime("choice", value));
+                const globalChoiceArm = choice.arm.map(value => stageTime("choice", value));
+
+                play(".ipc-rest-arms-a", opacityWindows([
+                    [0, STAGES.shots.from],
+                    [STAGES.shots.to, celebrateFrom],
+                    [celebrateTo, exitFrom],
+                ], EPSILON));
+
+                play(".ipc-rest-arms-b", opacityWindows([
+                    [0, startArm[0]],
+                    [startArm[1], STAGES.shots.from],
+                    [STAGES.shots.to, globalChoiceArm[0]],
+                    [globalChoiceArm[1], celebrateFrom],
+                    [celebrateTo, exitFrom],
+                ], EPSILON));
+
+                play(".ipc-action-arm", opacityWindows([
+                    startArm,
+                    globalChoiceArm,
+                ], EPSILON));
+
+                play(".ipc-celebration-arms", opacityWindows([
+                    [celebrateFrom, celebrateTo],
+                ], EPSILON));
+
+                /* Four poses, counters, 3-2-1 and flash. */
+                const poseNames = ["one", "two", "three", "four"];
+                poseNames.forEach((name, index) => {
+                    const interval = [shotIntervals[index]];
+                    play(`.ipc-pose-${name}`, opacityWindows(
+                        interval,
+                        EPSILON,
+                        { visibility: "visible" },
+                        { visibility: "hidden" },
+                    ));
+                    play(`.ipc-counter-${name}`, opacityWindows(interval, EPSILON));
+                });
+
+                play(".ipc-shooting-only", opacityWindows([[
+                    STAGES.shots.from,
+                    STAGES.shots.to,
+                ]]));
+
+                play(".ipc-count-three", pulseFrames(localShotIntervals(shots.three), 1, 1.18));
+                play(".ipc-count-two", pulseFrames(localShotIntervals(shots.two)));
+                play(".ipc-count-one", pulseFrames(localShotIntervals(shots.one)));
+
+                const flashFrames = [frame(0, { opacity: 0 })];
+                shotIntervals.forEach(([from]) => {
+                    flashFrames.push(
+                        frame(from + shots.flash[0], { opacity: 0 }),
+                        frame(from + shots.flashPeak, { opacity: 0.94 }),
+                        frame(from + shots.flash[1], { opacity: 0 }),
+                    );
+                });
+                flashFrames.push(frame(TOTAL, { opacity: 0 }));
+                play(".ipc-shot-flash", flashFrames);
+
+                /* Tap feedback and selected print format. */
+                play(".ipc-start-tap-ring", ringFrames(start.press[0], start.press[1]));
+                play(".ipc-choice-tap", ringFrames(globalChoicePress[0], globalChoicePress[1]));
+                play(".ipc-choice-selector", opacityWindows([[
+                    stageTime("choice", choice.selected[0]),
+                    stageTime("choice", choice.selected[1]),
+                ]]));
+
+                /* Done: QR, print delivery, confetti and final hold. */
+                const printBack = done.printBack.map(value => stageTime("done", value));
+                const printFront = done.printFront.map(value => stageTime("done", value));
+
+                play(".ipc-print-sheet-source", [
+                    frame(0, { opacity: 0, transform: "translate(0px, 0px) rotate(0deg)" }),
+                    frame(printBack[0], { opacity: 0, transform: "translate(0px, 0px) rotate(0deg)" }),
+                    frame(printBack[0] + 0.35, { opacity: 1, transform: "translate(-18px, 0px) rotate(0deg)" }),
+                    frame(printBack[1], { opacity: 1, transform: "translate(-112px, 4px) rotate(-3deg)" }),
+                    frame(printBack[1] + 0.02, { opacity: 0, transform: "translate(-112px, 4px) rotate(-3deg)" }),
+                    frame(TOTAL, { opacity: 0, transform: "translate(-112px, 4px) rotate(-3deg)" }),
+                ]);
+
+                play(".ipc-print-sheet-foreground", [
+                    frame(0, { opacity: 0, transform: "translate(-112px, 4px) scale(1) rotate(-3deg)" }),
+                    frame(printFront[0], { opacity: 0, transform: "translate(-112px, 4px) scale(1) rotate(-3deg)" }),
+                    frame(printFront[0] + 0.02, { opacity: 1, transform: "translate(-112px, 4px) scale(1) rotate(-3deg)" }),
+                    frame(printFront[1], { opacity: 1, transform: "translate(-320px, -110px) scale(2.15) rotate(-4deg)" }),
+                    frame(exitFrom, { opacity: 1, transform: "translate(-320px, -110px) scale(2.15) rotate(-4deg)" }),
+                    frame(exitTo, { opacity: 0, transform: "translate(-330px, -112px) scale(2.15) rotate(-4deg)" }),
+                ]);
+
+                play(".ipc-qr", [
+                    frame(0, { transform: "scale(1)" }),
+                    frame(STAGES.done.from + 0.4, { transform: "scale(1)" }, "ease-in-out"),
+                    frame(STAGES.done.from + 1.1, { transform: "scale(1.025)" }),
+                    frame(exitFrom, { transform: "scale(1.025)" }, "ease-in-out"),
+                    frame(exitTo, { transform: "scale(1)" }),
+                ]);
+
+                root.querySelectorAll(".ipc-confetti").forEach((element, index) => {
+                    const from = stageTime("done", done.confetti[0]) + index * done.confettiStagger;
+                    const to = stageTime("done", done.confetti[1]) + index * done.confettiStagger;
+                    play(element, [
+                        frame(0, { opacity: 0, transform: "translateY(-20px) rotate(0deg)" }),
+                        frame(from, { opacity: 0, transform: "translateY(-20px) rotate(0deg)" }),
+                        frame(from + 0.35, { opacity: 1, transform: "translateY(0px) rotate(0deg)" }),
+                        frame(to - 0.35, { opacity: 0.65, transform: "translateY(62px) rotate(140deg)" }),
+                        frame(to, { opacity: 0, transform: "translateY(72px) rotate(160deg)" }),
+                        frame(TOTAL, { opacity: 0, transform: "translateY(72px) rotate(160deg)" }),
+                    ]);
+                });
+
+                /* Start every track on the same document-timeline tick. */
+                const commonStart = document.timeline.currentTime;
+                animations.forEach(animation => { animation.startTime = commonStart; });
+
+                const controller = {
+                    config: TIMELINE,
+                    stages: STAGES,
+                    duration: TOTAL,
+                    pause: () => animations.forEach(animation => animation.pause()),
+                    play: () => animations.forEach(animation => animation.play()),
+                    seek: seconds => animations.forEach(animation => {
+                        animation.currentTime = ((seconds % TOTAL) + TOTAL) % TOTAL * 1000;
+                    }),
+                };
+
+                root.idleTimeline = controller;
+                window.idleTimeline = controller;
+
+                if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+                    controller.pause();
+                    controller.seek(0);
+                }
+            });
+        })();
+    </script>
+    <!-- Component end. -->
+</body>
+</html>
