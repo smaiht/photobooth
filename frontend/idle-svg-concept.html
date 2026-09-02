@@ -13,7 +13,7 @@
             place-items: center;
             padding: 2vw;
             overflow: hidden;
-            background: #eee9e1;
+            background: #fbfaf8;
             font-family: "Comfortaa", sans-serif;
         }
 
@@ -25,7 +25,7 @@
             --ipc-red: #d83434;
             width: 100%;
             max-width: 1600px;
-            aspect-ratio: 1400 / 700;
+            aspect-ratio: 1200 / 700;
             overflow: hidden;
             border-radius: clamp(20px, 2vw, 38px);
             background: linear-gradient(155deg, #f8f4ec, #e9e2d8);
@@ -131,7 +131,7 @@
 <body>
     <!-- Component start: this div can be moved into the production idle screen. -->
     <div class="idle-process-cartoon">
-        <svg viewBox="0 0 1400 700" role="img"
+        <svg viewBox="100 0 1200 700" role="img"
              aria-label="Гости делают четыре кадра, выбирают формат и забирают напечатанное фото">
             <defs>
                 <linearGradient id="ipc-wood-light" x1="0" y1="0" x2="1" y2="1">
@@ -191,7 +191,7 @@
                 </g>
             </defs>
 
-            <g aria-hidden="true">
+            <g aria-hidden="true" transform="translate(0 10)">
                 <path d="M210 20H1190" fill="none" stroke="#d8d0c5" stroke-width="7" stroke-linecap="round"/>
                 <path class="ipc-progress-fill" d="M210 20H1190" fill="none" stroke="#750d22" stroke-width="7" stroke-linecap="round"/>
                 <g fill="#f8f4ec" stroke="#750d22" stroke-width="4">
@@ -209,7 +209,7 @@
             </g>
 
             <!-- Booth and guests are centered together as one composition. -->
-            <g transform="translate(-160 60)">
+            <g transform="translate(-160 100)">
                 <ellipse cx="760" cy="560" rx="540" ry="34" fill="rgba(72,57,46,.11)" transform="translate(160 0)"/>
                 <path d="M70 550H1340" stroke="rgba(74,61,50,.2)" stroke-width="4" stroke-linecap="round" transform="translate(160 0)"/>
 
@@ -413,7 +413,9 @@
                 <ellipse class="ipc-shot-flash" cx="1045" cy="80" rx="126" ry="87" fill="rgba(255,255,255,.88)"/>
                 <path class="ipc-shot-flash" d="M1045 0V22M1045 139V171M904 80H929M1161 80H1186M943 0L970 30M1120 130L1146 158M1145 1L1119 31M970 130L944 158"
                       fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round"/>
-                <rect class="ipc-shot-flash" x="0" y="0" width="1400" height="620" fill="rgba(255,255,255,.46)"/>
+                <!-- Full-canvas flash cancels the scene's horizontal offset. -->
+                <rect class="ipc-shot-flash" x="0" y="0" width="1400" height="620"
+                      fill="rgba(255,255,255,.46)" transform="translate(160 0)"/>
             </g>
 
             <!-- At the end the same print moves above the booth and guests. -->
@@ -430,11 +432,14 @@
 
             <g aria-hidden="true">
                 <rect x="130" y="75" width="500" height="80" rx="21" fill="#fff" opacity="0.76"/>
-                <g fill="#191918" font-size="16" font-weight="700" letter-spacing="0.6" text-anchor="middle">
+                <g fill="#191918" font-size="21" font-weight="700" letter-spacing="0.4" text-anchor="middle">
                     <text class="ipc-caption ipc-caption-start" x="380" y="120">Жмём «Начать»</text>
                     <text class="ipc-caption ipc-caption-live" x="380" y="120">Делаем 4 кадра, меняем позы</text>
                     <text class="ipc-caption ipc-caption-choice" x="380" y="120">Выбираем формат печати</text>
-                    <text class="ipc-caption ipc-caption-done" x="380" y="120">Забираем фото, оригиналы доступны по QR</text>
+                    <text class="ipc-caption ipc-caption-done" x="380" y="108">
+                        <tspan x="380">Забираем фото,</tspan>
+                        <tspan x="380" dy="26">оригиналы доступны по QR</tspan>
+                    </text>
                 </g>
             </g>
         </svg>
