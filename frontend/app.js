@@ -44,12 +44,8 @@ const IDLE_EXPLAINER_KEY = "photobooth.idleExplainer";
 let idleExplainerEnabled = localStorage.getItem(IDLE_EXPLAINER_KEY) !== "off";
 let idleExplainerActive = false;
 
-/*
- * The explainer runs its own timeline inside the iframe. It plays only while the
- * switch is on and the idle screen is up; rewound on every entry so a guest
- * always sees the story from the start, and stopped otherwise so the kiosk is
- * not animating around the clock.
- */
+// Play only on the idle screen; pause everywhere else so decoding stops during
+// a photo session. Rewind on entry so every guest sees it from the beginning.
 function refreshIdleExplainer() {
     if (btnIdleExplainer) {
         btnIdleExplainer.textContent = idleExplainerEnabled
@@ -58,14 +54,11 @@ function refreshIdleExplainer() {
     }
     if (!idleExplainer) return;
     idleExplainer.hidden = !idleExplainerEnabled;
-    const timeline = idleExplainer.contentWindow
-        && idleExplainer.contentWindow.idleTimeline;
-    if (!timeline) return;
     if (idleExplainerEnabled && idleExplainerActive) {
-        timeline.seek(0);
-        timeline.play();
+        idleExplainer.currentTime = 0;
+        idleExplainer.play().catch(() => {});
     } else {
-        timeline.pause();
+        idleExplainer.pause();
     }
 }
 
@@ -83,9 +76,9 @@ function toggleIdleExplainer() {
         : "Объяснялка выключена");
 }
 
-// The first state can arrive before the iframe is ready, so apply it on load.
+// The first state can arrive before the video is ready, so apply it when loaded.
 if (idleExplainer) {
-    idleExplainer.addEventListener("load", refreshIdleExplainer);
+    idleExplainer.addEventListener("loadeddata", refreshIdleExplainer);
 }
 refreshIdleExplainer();
 const idlePoseRows = Array.from(document.querySelectorAll(".idle-pose-row"));

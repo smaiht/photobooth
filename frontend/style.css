@@ -174,7 +174,7 @@ html, body {
 }
 
 /*
- * The explainer document is edge to edge, so the iframe carries its exact
+ * The explainer video is edge to edge, so it carries its exact
  * 1200:700 ratio and nothing of the host shows through it. Driven by height,
  * since what is scarce is the room left under the title row.
  */
