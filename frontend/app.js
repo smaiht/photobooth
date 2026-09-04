@@ -2293,39 +2293,85 @@ function closeServiceModal() {
     serviceModal.hidden = true;
 }
 
-// 2 taps in the top-left corner, then 2 in the top-right corner.
-let secretTapsLeft = 0;
-let secretTapsRight = 0;
+// Left tap, left tap, right tap, then hold in the right corner. Listening on
+// window in capture mode keeps the gesture above every screen without putting
+// an element over the real UI.
+let secretTapStep = 0;
 let secretTapTimer = null;
+let secretHoldTimer = null;
+let secretHoldPointerId = null;
+let serviceOpeningPointerId = null;
 const secretCornerSize = 200;
+const secretTapTimeout = 3500;
+const secretHoldDuration = 1000;
 
 function resetSecretTaps() {
-    secretTapsLeft = 0;
-    secretTapsRight = 0;
+    secretTapStep = 0;
+    secretHoldPointerId = null;
     clearTimeout(secretTapTimer);
+    clearTimeout(secretHoldTimer);
     secretTapTimer = null;
+    secretHoldTimer = null;
 }
 
-window.addEventListener("pointerdown", (e) => {
-    if (serviceModal && !serviceModal.hidden) return;
-    const atTop = e.clientY <= secretCornerSize;
-    const atLeft = atTop && e.clientX <= secretCornerSize;
-    const atRight = atTop && e.clientX >= window.innerWidth - secretCornerSize;
+function secretCorner(e) {
+    if (e.clientY > secretCornerSize) return null;
+    if (e.clientX <= secretCornerSize) return "left";
+    if (e.clientX >= window.innerWidth - secretCornerSize) return "right";
+    return null;
+}
 
-    if (atLeft && secretTapsRight === 0) {
-        if (secretTapsLeft === 0) {
-            secretTapTimer = setTimeout(resetSecretTaps, 3500);
-        }
-        secretTapsLeft = Math.min(2, secretTapsLeft + 1);
-    } else if (atRight && secretTapsLeft >= 2) {
-        secretTapsRight++;
-        if (secretTapsRight >= 2) {
-            resetSecretTaps();
-            openServiceModal();
-        }
-    } else {
+window.addEventListener("pointerdown", e => {
+    if (serviceModal && !serviceModal.hidden) return;
+
+    const corner = secretCorner(e);
+    const expectedCorner = secretTapStep < 2 ? "left" : "right";
+    if (corner !== expectedCorner) {
+        resetSecretTaps();
+        if (corner !== "left") return;
+    }
+
+    secretTapStep++;
+    clearTimeout(secretTapTimer);
+    secretTapTimer = setTimeout(resetSecretTaps, secretTapTimeout);
+    if (secretTapStep !== 4) return;
+
+    secretHoldPointerId = e.pointerId;
+    secretHoldTimer = setTimeout(() => {
+        serviceOpeningPointerId = secretHoldPointerId;
+        resetSecretTaps();
+        openServiceModal();
+    }, secretHoldDuration);
+}, { capture: true });
+
+window.addEventListener("pointermove", e => {
+    if (e.pointerId === secretHoldPointerId && secretCorner(e) !== "right") {
         resetSecretTaps();
     }
+}, { capture: true });
+
+function finishSecretPointer(e) {
+    if (e.pointerId === serviceOpeningPointerId) {
+        const pointerId = e.pointerId;
+        setTimeout(() => {
+            if (serviceOpeningPointerId === pointerId) {
+                serviceOpeningPointerId = null;
+            }
+        }, 500);
+    }
+    if (e.pointerId === secretHoldPointerId) resetSecretTaps();
+}
+
+window.addEventListener("pointerup", finishSecretPointer, { capture: true });
+window.addEventListener("pointercancel", finishSecretPointer, { capture: true });
+
+// The release which follows the hold belongs to the opening gesture. Do not
+// let its synthetic click close the backdrop or activate a newly appeared item.
+window.addEventListener("click", e => {
+    if (serviceOpeningPointerId === null) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    serviceOpeningPointerId = null;
 }, { capture: true });
 
 serviceClose?.addEventListener("click", () => closeServiceModal());
