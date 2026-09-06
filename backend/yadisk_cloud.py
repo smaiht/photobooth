@@ -23,6 +23,8 @@ from typing import Awaitable, Callable
 
 import aiohttp
 
+from .ca import ca_context
+
 log = logging.getLogger(__name__)
 
 API = "https://cloud-api.yandex.net/v1/disk"
@@ -362,9 +364,11 @@ async def _connect() -> bool:
             "User-Agent": YADISK_API_USER_AGENT,
         },
         timeout=timeout,
+        connector=aiohttp.TCPConnector(ssl=ca_context()),
     )
     _transfer_session = aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=600, connect=30))
+        timeout=aiohttp.ClientTimeout(total=600, connect=30),
+        connector=aiohttp.TCPConnector(ssl=ca_context()))
 
     try:
         paths = [_folder, sessions_root(_folder)]

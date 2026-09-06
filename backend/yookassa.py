@@ -9,6 +9,7 @@ from pathlib import Path
 
 import aiohttp
 
+from .ca import ca_context
 from .config import ROOT_DIR
 from . import yadisk_updates
 
@@ -29,6 +30,15 @@ class PaymentAPIError(Exception):
         self.status = status
         self.detail = detail
         super().__init__(f"YooKassa HTTP {status}{f': {detail}' if detail else ''}")
+
+
+def payment_session(credentials: dict) -> aiohttp.ClientSession:
+    """One authenticated session with a short timeout for the whole poll loop."""
+    return aiohttp.ClientSession(
+        auth=aiohttp.BasicAuth(credentials["SHOPID"], credentials["SHOPTOKEN"]),
+        timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+        connector=aiohttp.TCPConnector(ssl=ca_context()),
+    )
 
 
 async def request_payment(session: aiohttp.ClientSession, attempt: dict) -> dict:
@@ -113,7 +123,8 @@ def _download_credentials(token: str) -> bytes:
     # must not carry the Disk OAuth token.
     request = urllib.request.Request(
         link, headers={"User-Agent": "photobooth-yookassa/1"})
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+    with urllib.request.urlopen(
+            request, timeout=REQUEST_TIMEOUT, context=ca_context()) as response:
         archive = response.read(MAX_ARCHIVE_SIZE + 1)
     if len(archive) > MAX_ARCHIVE_SIZE:
         raise ValueError("credentials archive is too large")

@@ -10,6 +10,7 @@ attrs==26.1.0
 autocommand==2.2.2
 backports.tarfile==1.2.0
 bottle==0.13.4
+certifi==2026.2.25
 cffi==2.1.1
 click==8.4.2
 clr-loader==0.3.1

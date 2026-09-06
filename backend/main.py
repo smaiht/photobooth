@@ -684,10 +684,7 @@ async def _poll_cafe_payment() -> None:
     credentials = app.state.yookassa_credentials
     attempts = 0
     last_error = ""
-    async with aiohttp.ClientSession(
-        auth=aiohttp.BasicAuth(credentials["SHOPID"], credentials["SHOPTOKEN"]),
-        timeout=aiohttp.ClientTimeout(total=yookassa.REQUEST_TIMEOUT),
-    ) as session:
+    async with yookassa.payment_session(credentials) as session:
         while _payment_in_flight():
             attempts += 1
             try:

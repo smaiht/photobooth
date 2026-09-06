@@ -17,6 +17,8 @@ import zipfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from .ca import ca_context
+
 API = "https://cloud-api.yandex.net/v1/disk"
 MAX_UPDATE_SIZE = 2 * 1024 * 1024 * 1024
 MAX_FOLDER_ARCHIVE_OVERHEAD = 64 * 1024 * 1024
@@ -78,7 +80,7 @@ def _request(method: str, url: str, token: str, *, params: dict | None = None,
             "User-Agent": "photobooth-update/1",
         },
     )
-    return urllib.request.urlopen(request, timeout=timeout)
+    return urllib.request.urlopen(request, timeout=timeout, context=ca_context())
 
 
 def _read_status_once(root: str, token: str, cancel_event=None) -> dict:
@@ -103,6 +105,7 @@ def _read_status_once(root: str, token: str, cancel_event=None) -> dict:
         with urllib.request.urlopen(
             request,
             timeout=STATUS_REQUEST_TIMEOUT,
+            context=ca_context(),
         ) as response:
             payload = response.read(MAX_STATUS_ARCHIVE_SIZE + 1)
     except urllib.error.HTTPError as exc:
@@ -312,7 +315,8 @@ def _download_artifact_once(
     )
     started = time.monotonic()
     try:
-        with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response:
+        with urllib.request.urlopen(
+            request, timeout=DOWNLOAD_TIMEOUT, context=ca_context()) as response:
             with folder_archive.open("wb") as output:
                 while True:
                     _raise_if_cancelled(cancel_event)

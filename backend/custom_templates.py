@@ -10,8 +10,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
 from collections.abc import Callable
 from pathlib import Path
+
+from .ca import ca_context
 
 API = "https://cloud-api.yandex.net/v1/disk"
 REMOTE_ROOT = "/photobooth_system/templates_custom"
@@ -37,7 +40,7 @@ def _request_json(method: str, url: str, token: str, **params) -> dict:
         method=method,
         headers={"Authorization": f"OAuth {token}", "User-Agent": USER_AGENT},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with urllib.request.urlopen(request, timeout=30, context=ca_context()) as response:
         raw = response.read()
     if not raw:
         return {}
@@ -141,7 +144,9 @@ def _download_file(
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".tmp")
     try:
-        with urllib.request.urlopen(request, timeout=60) as response, temporary.open("wb") as output:
+        with urllib.request.urlopen(
+                request, timeout=60, context=ca_context()) as response, \
+                temporary.open("wb") as output:
             while True:
                 _raise_if_cancelled(cancel_event)
                 chunk = response.read(256 * 1024)
