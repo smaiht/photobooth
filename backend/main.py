@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
+import aiohttp
+
 from fastapi import BackgroundTasks, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -54,7 +56,7 @@ from .composer import (
 from .text_layer import date_values
 from .log import read_log_snapshot
 from .video import VideoRecorder
-from . import system_service, yadisk_cloud, yadisk_control
+from . import system_service, yadisk_cloud, yadisk_control, yookassa
 
 log = logging.getLogger(__name__)
 
@@ -406,18 +408,21 @@ def _cafe_unlock_state_path() -> Path:
     return ROOT_DIR / CAFE_UNLOCK_STATE_FILENAME
 
 
-def _serialize_cafe_unlock_state(remaining: int) -> bytes:
+def _serialize_cafe_unlock_state(remaining: int, payment: dict | None = None) -> bytes:
+    payload = {"remaining_sessions": remaining}
+    if payment is not None:
+        payload["payment"] = payment
     return (
         json.dumps(
-            {"remaining_sessions": remaining},
+            payload,
             ensure_ascii=False,
             indent=4,
         ) + "\n"
     ).encode("utf-8")
 
 
-def _load_cafe_unlock_sessions() -> int:
-    """Load the durable allowance, failing closed for any unusable state."""
+def _load_cafe_unlock_state() -> tuple[int, dict | None]:
+    """Allowance and payment receipt must survive a restart together."""
     path = _cafe_unlock_state_path()
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -425,23 +430,42 @@ def _load_cafe_unlock_sessions() -> int:
         if (type(remaining) is not int
                 or not 0 <= remaining <= MAX_UNLOCK_SESSIONS):
             raise ValueError("remaining_sessions must be an integer from 0 to 1000")
-        return remaining
+        payment = payload.get("payment")
+        if payment is not None:
+            if not isinstance(payment, dict):
+                raise ValueError("invalid payment state")
+            if payment.get("status") != "review" and (
+                payment.get("status") not in (
+                    "creating", "pending", "waiting_for_capture", "succeeded")
+                or not isinstance(payment.get("request"), dict)
+                or not all(isinstance(payment.get(key), str) and payment[key]
+                           for key in ("request_id", "shop_id", "event"))
+            ):
+                raise ValueError("invalid payment state")
+        return remaining, payment
     except FileNotFoundError:
-        return 0
+        return 0, None
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         log.warning("Cafe unlock state is invalid; start remains locked: %s", exc)
-        return 0
+        return 0, {"status": "review"}
 
 
-def _write_cafe_unlock_sessions(remaining: int) -> None:
-    """Atomically persist a validated session allowance."""
+def _load_cafe_unlock_sessions() -> int:
+    return _load_cafe_unlock_state()[0]
+
+
+def _write_cafe_unlock_sessions(remaining: int, payment: dict | None = None) -> None:
+    """Atomically persist a validated session allowance and its payment."""
     if (type(remaining) is not int
             or not 0 <= remaining <= MAX_UNLOCK_SESSIONS):
         raise ValueError("remaining_sessions must be an integer from 0 to 1000")
     path = _cafe_unlock_state_path()
     temporary = path.with_name(path.name + ".tmp")
     try:
-        temporary.write_bytes(_serialize_cafe_unlock_state(remaining))
+        with temporary.open("wb") as file:
+            file.write(_serialize_cafe_unlock_state(remaining, payment))
+            file.flush()
+            os.fsync(file.fileno())
         temporary.replace(path)
     finally:
         try:
@@ -450,12 +474,16 @@ def _write_cafe_unlock_sessions(remaining: int) -> None:
             pass
 
 
-_cafe_unlock_sessions_remaining = _load_cafe_unlock_sessions()
+_cafe_unlock_sessions_remaining, _cafe_payment = _load_cafe_unlock_state()
+_payment_task: asyncio.Task | None = None
+_payment_notice = ""
+_payment_alert_until = 0.0
+PAYMENT_ALERT_SECONDS = 60
 
 
 def _set_cafe_unlock_sessions(remaining: int) -> None:
     global _cafe_unlock_sessions_remaining
-    _write_cafe_unlock_sessions(remaining)
+    _write_cafe_unlock_sessions(remaining, _cafe_payment)
     _cafe_unlock_sessions_remaining = remaining
 
 
@@ -492,6 +520,200 @@ def _consume_cafe_unlock_session() -> int:
 
 def _start_locked() -> bool:
     return _is_technical_event() and _cafe_unlock_sessions_remaining <= 0
+
+
+def _payment_active() -> bool:
+    """An unpaid or unresolved payment is kept; anything else is forgotten."""
+    return bool(_cafe_payment) and not _cafe_payment.get("credited")
+
+
+def _payment_in_flight() -> bool:
+    """A guest can still pay this request, so nobody may drop it silently."""
+    return bool(_cafe_payment and _cafe_payment["status"] in (
+        "creating", "pending", "waiting_for_capture"))
+
+
+def _payment_price() -> int:
+    value = CONFIG.get("technical_event_price_rubles")
+    return value if type(value) is int and value > 0 else 0
+
+
+def _payment_state() -> dict:
+    """Public presentation only: never send credentials or the saved request."""
+    available = bool(getattr(app.state, "yookassa_credentials", None) and _payment_price())
+    state = {"available": available, "status": "idle"}
+    if not _is_technical_event():
+        return {"available": False, "status": "idle"}
+    if _cafe_payment and _cafe_payment.get("credited"):
+        if not _start_locked():
+            state["status"] = "succeeded"
+    elif _payment_in_flight():
+        state.update({
+            "status": _cafe_payment["status"],
+            "qr": _cafe_payment.get("qr", "") if _cafe_payment["status"] == "pending" else "",
+            "amount": _cafe_payment.get("request", {}).get("amount", {}).get("value", ""),
+            "message": _payment_notice,
+        })
+    elif time.monotonic() < _payment_alert_until:
+        # A payment kept for the admin stops asking the guest for help after a minute.
+        state["status"] = "review"
+    return state
+
+
+_PAYMENT_STATUS_LABELS = {
+    "creating": "создаём QR-код",
+    "pending": "ждём оплату по QR",
+    "waiting_for_capture": "подтверждается",
+    "succeeded": "оплачена, сессия начислена",
+    "review": "⚠️ проверьте платёж в ЮKassa вручную",
+}
+
+
+def _payment_status_line() -> str:
+    """Show a stuck payment to the admin without reading the log."""
+    if not _payment_price():
+        return "выключена (technical_event_price_rubles=0)"
+    if not getattr(app.state, "yookassa_credentials", None):
+        return "🔴 нет ключей ЮKassa"
+    if not _cafe_payment:
+        return f"🟢 готова, {_payment_price()} ₽"
+    status = _cafe_payment["status"]
+    line = _PAYMENT_STATUS_LABELS.get(status, status)
+    if _cafe_payment.get("id"):
+        line += f" · {_cafe_payment['id']}"
+    return line
+
+
+def _save_cafe_payment(payment: dict | None, remaining: int | None = None) -> None:
+    """Persist the allowance and its payment together; None forgets the payment."""
+    global _cafe_payment, _cafe_unlock_sessions_remaining
+    if remaining is None:
+        remaining = _cafe_unlock_sessions_remaining
+    _write_cafe_unlock_sessions(remaining, payment)
+    _cafe_payment = payment
+    _cafe_unlock_sessions_remaining = remaining
+
+
+def _ensure_payment_task() -> None:
+    global _payment_task
+    if (_payment_in_flight()
+            and (_payment_task is None or _payment_task.done())
+            and getattr(app.state, "yookassa_credentials", None)):
+        _payment_task = asyncio.create_task(_poll_cafe_payment())
+        _service_tasks.add(_payment_task)
+        _payment_task.add_done_callback(_service_tasks.discard)
+
+
+def _fail_cafe_payment(exc: Exception) -> None:
+    """Ask for the admin once; a created payment stays until the admin closes it."""
+    global _payment_notice, _payment_alert_until
+    payment = {**_cafe_payment, "status": "review"} if _cafe_payment.get("id") else None
+    try:
+        _save_cafe_payment(payment)
+    except OSError:
+        _payment_notice = "Не получается связаться с оплатой. Повторяем…"
+        return
+    _payment_notice = ""
+    _payment_alert_until = time.monotonic() + PAYMENT_ALERT_SECONDS
+    log.error("Cafe payment failed (%s); kept for the admin: %s",
+              type(exc).__name__, bool(payment))
+
+
+async def _start_cafe_payment() -> None:
+    global _payment_notice, _payment_alert_until
+    if STATE != "idle" or _session_running or not _start_locked():
+        return
+    if _payment_active():
+        if not _payment_in_flight():
+            # A payment is waiting for the admin: say so instead of doing nothing.
+            _payment_alert_until = time.monotonic() + PAYMENT_ALERT_SECONDS
+    elif _payment_state()["available"]:
+        request_id = str(uuid.uuid4())
+        payment = {
+            "request_id": request_id,
+            "shop_id": app.state.yookassa_credentials["SHOPID"],
+            "event": _active_event_name(),
+            "status": "creating",
+            "request": {
+                "amount": {"value": f"{_payment_price()}.00", "currency": "RUB"},
+                "payment_method_data": {"type": "sbp"},
+                "confirmation": {"type": "qr"},
+                "capture": True,
+                "description": "Покупка одной фотосессии",
+                "metadata": {"request_id": request_id},
+            },
+        }
+        try:
+            # No await before saving: concurrent clicks cannot create two requests.
+            _save_cafe_payment(payment)
+        except OSError:
+            log.exception("Could not save new Cafe payment")
+            await broadcast({"type": "error", "message": "Не удалось начать оплату. Обратитесь к администратору"})
+            await broadcast(_state_message(STATE))
+            return
+        _payment_notice = ""
+        _record_event_history({
+            "type": "payment", "status": "creating", "request_id": request_id,
+            "amount": payment["request"]["amount"],
+        })
+    _ensure_payment_task()
+    await broadcast(_state_message(STATE))
+
+
+async def _poll_cafe_payment() -> None:
+    global _payment_notice
+    credentials = app.state.yookassa_credentials
+    async with aiohttp.ClientSession(
+        auth=aiohttp.BasicAuth(credentials["SHOPID"], credentials["SHOPTOKEN"]),
+        timeout=aiohttp.ClientTimeout(total=yookassa.REQUEST_TIMEOUT),
+    ) as session:
+        while _payment_in_flight():
+            try:
+                response = await yookassa.request_payment(session, _cafe_payment)
+                result = yookassa.payment_result(response, _cafe_payment)
+                payment = {**_cafe_payment, **result}
+                remaining = _cafe_unlock_sessions_remaining
+                if result["status"] == "succeeded":
+                    if not _is_technical_event() or payment["event"] != _active_event_name():
+                        raise ValueError("payment event changed")
+                    if remaining >= MAX_UNLOCK_SESSIONS:
+                        raise ValueError("Cafe allowance limit reached")
+                    payment["credited"] = True
+                    remaining += 1
+                if result["status"] == "canceled":
+                    # Nobody paid, so the screen just goes back to the plain idle card.
+                    payment = None
+                changed = payment != _cafe_payment
+                if changed:
+                    record = {
+                        "type": "payment",
+                        "request_id": _cafe_payment["request_id"],
+                        "payment_id": result["id"],
+                        "status": result["status"],
+                        "amount": _cafe_payment["request"]["amount"],
+                        "credited_sessions": 1 if result["status"] == "succeeded" else 0,
+                        "cancellation_reason": result.get("cancellation_reason", ""),
+                    }
+                    # Credit and its receipt are one atomic write, before the UI unlocks.
+                    _save_cafe_payment(payment, remaining)
+                    _record_event_history(record)
+                    log.info("Cafe payment %s: %s", result["id"], result["status"])
+                recovered = bool(_payment_notice)
+                _payment_notice = ""
+                if changed or recovered:
+                    await broadcast(_state_message(STATE))
+            except (yookassa.PaymentAPIError, aiohttp.ClientError, TimeoutError,
+                    OSError, ValueError, KeyError, TypeError) as exc:
+                if isinstance(exc, (aiohttp.ClientError, TimeoutError, OSError)) or (
+                        isinstance(exc, yookassa.PaymentAPIError)
+                        and (exc.status == 429 or exc.status >= 500)):
+                    # Network trouble passes by itself: keep retrying, keep the card.
+                    _payment_notice = "Не получается связаться с оплатой. Повторяем…"
+                else:
+                    _fail_cafe_payment(exc)
+                await broadcast(_state_message(STATE))
+            if _payment_in_flight():
+                await asyncio.sleep(yookassa.PAYMENT_POLL_INTERVAL_SECONDS)
 
 
 def _multi_print_max_sheets() -> int:
@@ -688,6 +910,7 @@ def _state_message(new_state: str) -> dict:
         "start_locked": _start_locked(),
         "technical_event_active": _is_technical_event(),
         "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
+        "payment": _payment_state(),
     }
     if SESSION_ID:
         msg["session_id"] = SESSION_ID
@@ -997,6 +1220,13 @@ async def run_session(test_session: bool = False):
     previous_session_id = SESSION_ID
     _session_running = True
     try:
+        if (not test_session and _is_technical_event()
+                and _cafe_payment and _cafe_payment.get("credited")):
+            try:
+                # The paid session is starting: the receipt has done its job.
+                _save_cafe_payment(None)
+            except (OSError, ValueError):
+                log.warning("Could not clear the used Cafe payment")
         await _run_session(test_session=test_session)
     except CameraSessionAborted as exc:
         log.warning("Session aborted: %s", exc)
@@ -2097,6 +2327,7 @@ async def _status_report_text() -> str:
             f"• Допуск: {'🔴 закрыт' if start_locked else '🟢 открыт'} · "
             f"сессий осталось: {_cafe_unlock_sessions_remaining}"
         )
+        session_lines.append(f"• Оплата: {_payment_status_line()}")
     else:
         session_lines.append("• Допуск: ♾ без ограничений")
 
@@ -2707,27 +2938,42 @@ async def handle_disk_command(command: dict) -> dict:
                 "message": "sessions должно быть целым числом от 0 до 1000",
             }
         previous_sessions = _cafe_unlock_sessions_remaining
+        remaining = previous_sessions + sessions if sessions else 0
+        if remaining > MAX_UNLOCK_SESSIONS:
+            return {
+                "status": "error",
+                "message": (
+                    f"Нельзя добавить {sessions}: сейчас {previous_sessions}, "
+                    f"максимальный остаток — {MAX_UNLOCK_SESSIONS}"
+                ),
+            }
         try:
-            _set_cafe_unlock_sessions(sessions)
+            # Granting sessions by hand also resolves any payment except one the
+            # guest can still pay, so nothing can block the screen forever.
+            keep = _payment_in_flight() and _cafe_payment.get("id")
+            _save_cafe_payment(_cafe_payment if keep else None, remaining)
         except (OSError, ValueError) as exc:
             return {
                 "status": "error",
                 "message": f"Фотобудка не разблокирована: {exc}",
             }
-        log.info("Cafe unlock updated: remaining sessions=%d", sessions)
-        if previous_sessions != sessions:
+        log.info("Cafe unlock updated: %d -> %d", previous_sessions, remaining)
+        if previous_sessions != remaining:
             _record_event_history({
                 "type": "access_changed",
                 "field": "unlock_sessions_remaining",
                 "old": previous_sessions,
-                "new": sessions,
+                "new": remaining,
                 "source": _command_history_source(command),
             })
         if STATE == "idle":
             await broadcast(_state_message(STATE))
         return {
             "status": "ok",
-            "message": f"Остаток разрешённых фотосессий: {sessions}",
+            "message": (
+                f"Добавлено фотосессий: {sessions}. Остаток: {remaining}"
+                if sessions else "Остаток разрешённых фотосессий: 0"
+            ),
             "start_locked": _start_locked(),
             "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
         }
@@ -2750,6 +2996,8 @@ async def handle_disk_command(command: dict) -> dict:
 
     if cmd == "set_event":
         name = data.get("name", "") if isinstance(data, dict) else ""
+        if _payment_active():
+            return {"status": "error", "message": "Event не изменён: есть незавершённая оплата"}
         if STATE not in ("idle", "no_camera", "camera_searching"):
             return {"status": "error", "message": f"Event не изменён: state={STATE}"}
         if _background_uploads:
@@ -2757,7 +3005,7 @@ async def handle_disk_command(command: dict) -> dict:
         previous_unlock_sessions = _cafe_unlock_sessions_remaining
         if name == _technical_event_name():
             try:
-                _set_cafe_unlock_sessions(0)
+                _save_cafe_payment(None, 0)
             except (OSError, ValueError) as exc:
                 return {
                     "status": "error",
@@ -2839,6 +3087,13 @@ async def _control_service():
     await yadisk_control.control_poll_loop(handle_disk_command)
 
 
+async def _yookassa_service():
+    app.state.yookassa_credentials = await asyncio.to_thread(
+        yookassa.load_credentials)
+    _ensure_payment_task()
+    await broadcast(_state_message(STATE))
+
+
 async def _shutdown_services() -> None:
     """Stop EDSDK and all aiohttp owners before the process exits."""
     global _services_stopping
@@ -2914,6 +3169,9 @@ async def websocket_endpoint(ws: WebSocket):
                 else:
                     await set_state("camera_searching" if camera else "no_camera")
 
+            elif msg["type"] == "start_payment":
+                await _start_cafe_payment()
+
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)
                 if cb:
@@ -2970,6 +3228,8 @@ async def startup():
     else:
         log.info("Running without camera (not Windows or EDSDK not found)")
 
+    app.state.yookassa_credentials = None
+    _service_tasks.add(asyncio.create_task(_yookassa_service()))
     _service_tasks.add(asyncio.create_task(_control_service()))
     _service_tasks.add(asyncio.create_task(_yadisk_service()))
     _service_tasks.add(asyncio.create_task(_periodic_status_service()))

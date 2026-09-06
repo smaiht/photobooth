@@ -40,7 +40,10 @@
     "_multi_print_max_sheets_comment": "Maximum number of 4x6 sheets one multi-select basket may print. One strips sheet already holds two strips. Range 1..20.",
     "mirror_live_view": true,
     "live_view_fit": "contain",
-    "_live_view_fit_options": ["contain", "cover"],
+    "_live_view_fit_options": [
+        "contain",
+        "cover"
+    ],
     "_live_view_fit_comment": "contain shows the full Canon EVF frame with black bars; cover fills the display by cropping edges.",
     "live_view_margin_top_percent": 3,
     "live_view_margin_bottom_percent": 12,
@@ -54,7 +57,7 @@
     "technical_event_name": "Кафе",
     "_technical_event_name_comment": "When this exact event is active, the idle screen stays locked until an admin grants sessions with /unblock.",
     "technical_event_price_rubles": 100,
-    "_technical_event_price_rubles_comment": "Price shown on the idle-screen badge only while technical_event_name is the active event. Set 0 to hide the badge.",
+    "_technical_event_price_rubles_comment": "Whole rubles for one Cafe photo session: SBP payment amount and idle-screen badge. Set 0 to disable payments and hide the badge.",
     "print_enabled": true,
     "keep_custom_print_files": true,
     "_keep_custom_print_files_comment": "Keep Telegram source images and prepared 4x6 JPEGs under photos_print_jobs/<job_id> after printing.",

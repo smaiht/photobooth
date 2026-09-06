@@ -856,7 +856,7 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
              patch.object(main, "_background_uploads", set()), \
              patch("backend.main.yadisk_cloud.set_event_folder", AsyncMock()), \
              patch("backend.main._save_event_folder") as save, \
-             patch("backend.main._set_cafe_unlock_sessions") as reset:
+             patch("backend.main._save_cafe_payment") as reset:
             result = await main.handle_disk_command(command)
 
         self.assertEqual(result["status"], "ok")
@@ -1155,7 +1155,7 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(main._technical_event_name(), "Кафе")
             self.assertTrue(main._start_locked())
 
-    async def test_unblock_persists_allowance_and_rebroadcasts_idle(self):
+    async def test_unblock_adds_to_allowance_and_rebroadcasts_idle(self):
         command = {
             "command_id": "a" * 32,
             "command": "unblock",
@@ -1181,17 +1181,33 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertFalse(result["start_locked"])
-        self.assertEqual(result["unlock_sessions_remaining"], 3)
-        self.assertEqual(persisted, {"remaining_sessions": 3})
+        self.assertEqual(result["unlock_sessions_remaining"], 12)
+        self.assertEqual(persisted, {"remaining_sessions": 12})
         self.assertFalse(temporary_exists)
         broadcast.assert_awaited_once()
         state_payload = broadcast.await_args.args[0]
         self.assertFalse(state_payload["start_locked"])
-        self.assertEqual(state_payload["unlock_sessions_remaining"], 3)
+        self.assertEqual(state_payload["unlock_sessions_remaining"], 12)
+
+    async def test_unblock_rejects_total_above_limit_without_changing_allowance(self):
+        remaining = main.MAX_UNLOCK_SESSIONS - 1
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "_cafe_unlock_sessions_remaining", remaining):
+            main._write_cafe_unlock_sessions(remaining)
+            result = await main.handle_disk_command({
+                "command_id": "a" * 32,
+                "command": "unblock",
+                "data": {"sessions": 2},
+            })
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(main._cafe_unlock_sessions_remaining, remaining)
+            self.assertEqual(main._load_cafe_unlock_sessions(), remaining)
 
     async def test_unblock_rejects_non_integer_or_out_of_range_sessions(self):
         invalid_values = (None, True, 1.5, "2", -1, 1001)
-        with patch("backend.main._set_cafe_unlock_sessions") as save:
+        with patch("backend.main._write_cafe_unlock_sessions") as save:
             for sessions in invalid_values:
                 with self.subTest(sessions=sessions):
                     result = await main.handle_disk_command({
@@ -1524,7 +1540,7 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
             "_background_uploads",
             set(),
         ), patch(
-            "backend.main._set_cafe_unlock_sessions",
+            "backend.main._save_cafe_payment",
             side_effect=OSError("disk full"),
         ), patch(
             "backend.main.yadisk_cloud.set_event_folder",

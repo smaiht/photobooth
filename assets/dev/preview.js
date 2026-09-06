@@ -112,6 +112,25 @@
                 api.switchScreen("idle", {
                     start_locked: locked,
                     technical_event_active: locked,
+                    payment: { available: true, status: "idle" },
+                });
+            } else if (route.startsWith("payment_")) {
+                const status = {
+                    payment_loading: "creating",
+                    payment_qr: "pending",
+                    payment_success: "succeeded",
+                    payment_review: "review",
+                }[route];
+                api.switchScreen("idle", {
+                    start_locked: status !== "succeeded",
+                    technical_event_active: true,
+                    payment: {
+                        available: true,
+                        status,
+                        amount: appConfig.technical_event_price_rubles,
+                        qr: "https://example.com/photobooth-payment-preview",
+                        message: status === "pending" ? "Макет QR-кода — без оплаты" : "",
+                    },
                 });
             } else if (route === "shooting") {
                 const total = Math.max(

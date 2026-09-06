@@ -36,6 +36,7 @@
                     </h1>
                     <div class="tap-prompt">
                         <button class="idle-start-button" id="idle-start-button" type="button" tabindex="-1" disabled>
+                            <span class="payment-spinner payment-button-spinner" id="idle-payment-spinner" hidden aria-hidden="true"></span>
                             <span class="idle-start-label">НАЧАТЬ</span>
                             <span class="idle-tap-cue" aria-hidden="true">
                                 <span class="idle-tap-ring"></span>
@@ -52,6 +53,18 @@
                        src="../assets/idle-process/idle-process.mp4"
                        muted loop playsinline preload="auto"
                        aria-hidden="true"></video>
+
+                <section class="idle-payment" id="idle-payment" hidden aria-label="Оплата фотосессии">
+                    <div class="payment-spinner payment-panel-spinner" id="payment-loader" hidden aria-hidden="true"></div>
+                    <svg class="payment-success-icon" id="payment-success-icon" hidden viewBox="0 0 80 80" aria-hidden="true">
+                        <circle cx="40" cy="40" r="40" />
+                        <path d="m23 40 11 11 23-24" />
+                    </svg>
+                    <h2 class="payment-title" id="payment-title" aria-live="polite"></h2>
+                    <div class="payment-qr" id="payment-qr" hidden aria-label="QR-код для оплаты по СБП"></div>
+                    <p class="payment-hint" id="payment-hint" aria-live="polite"></p>
+                    <button class="payment-start-button" id="payment-start-button" type="button" hidden>НАЧАТЬ</button>
+                </section>
             </div>
         </div>
 
@@ -250,7 +263,7 @@
                         <h2 class="service-section-title">Съёмка</h2>
                         <div class="service-grid">
                             <button id="btn-test-session" class="service-btn" type="button">Тестовая съёмка</button>
-                            <button id="btn-booth-unblock" class="service-btn" type="button">Разблокировать на N</button>
+                            <button id="btn-booth-unblock" class="service-btn" type="button">Добавить сессии</button>
                             <button id="btn-booth-block" class="service-btn service-btn-danger" type="button">Заблокировать съёмку</button>
                         </div>
                     </section>
@@ -310,7 +323,7 @@
                     </div>
                     <div class="service-config-footer">
                         <button id="service-unlock-cancel" class="service-btn" type="button">Отмена</button>
-                        <button id="service-unlock-save" class="service-btn service-btn-apply" type="button">Разблокировать</button>
+                        <button id="service-unlock-save" class="service-btn service-btn-apply" type="button">Добавить</button>
                     </div>
                 </div>
 

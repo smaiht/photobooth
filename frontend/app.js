@@ -33,6 +33,14 @@ const poseIntro = document.getElementById("pose-intro");
 const poseIntroCards = document.getElementById("pose-intro-cards");
 const idlePoseField = document.getElementById("idle-pose-field");
 const idleExplainer = document.getElementById("idle-explainer");
+const idlePayment = document.getElementById("idle-payment");
+const paymentTitle = document.getElementById("payment-title");
+const paymentHint = document.getElementById("payment-hint");
+const paymentQr = document.getElementById("payment-qr");
+const paymentLoader = document.getElementById("payment-loader");
+const paymentSuccessIcon = document.getElementById("payment-success-icon");
+const paymentStartButton = document.getElementById("payment-start-button");
+const idlePaymentSpinner = document.getElementById("idle-payment-spinner");
 const btnIdleExplainer = document.getElementById("btn-idle-explainer");
 
 /*
@@ -53,10 +61,12 @@ function refreshIdleExplainer() {
             : "Объяснялка на главном: ВЫКЛ";
     }
     if (!idleExplainer) return;
-    idleExplainer.hidden = !idleExplainerEnabled;
-    if (idleExplainerEnabled && idleExplainerActive) {
-        idleExplainer.currentTime = 0;
-        idleExplainer.play().catch(() => {});
+    idleExplainer.hidden = !idleExplainerEnabled || !idlePayment.hidden;
+    if (!idleExplainer.hidden && idleExplainerActive) {
+        if (idleExplainer.paused) {
+            idleExplainer.currentTime = 0;
+            idleExplainer.play().catch(() => {});
+        }
     } else {
         idleExplainer.pause();
     }
@@ -188,6 +198,9 @@ const printBasket = new Map();
 let currentShootingPhotoIndex = 0;
 let technicalEventActive = false;
 let technicalEventPriceRubles = 0;
+let paymentState = { available: false, status: "idle" };
+let renderedPaymentQr = "";
+let idleStartRequested = false;
 const sessionLinks = new Map();
 
 let poseExampleUrls = [];
@@ -582,6 +595,8 @@ function connect() {
     };
 
     ws.onclose = () => {
+        idleStartRequested = false;
+        renderIdlePayment();
         clearTimeout(wsReconnectTimer);
         wsReconnectTimer = setTimeout(connect, 1000);
     };
@@ -598,6 +613,7 @@ if (!previewMode) {
             } else {
                 syncStartLock(s);
                 syncTechnicalEvent(s);
+                syncPayment(s);
                 syncSessionContext(s.state, s);
                 if (s.state === "template_select") {
                     syncMultiPrintConfig(s);
@@ -759,8 +775,74 @@ let sessionStarting = false;
 function syncStartLock(data = {}) {
     if (typeof data.start_locked !== "boolean") return;
     startLocked = data.start_locked;
-    tapLockStatus.hidden = !startLocked;
-    idleStartButton.disabled = startLocked;
+}
+
+function syncPayment(data = {}) {
+    if (data.payment) paymentState = data.payment;
+    renderIdlePayment();
+}
+
+function renderIdlePayment() {
+    const online = previewMode || ws?.readyState === WebSocket.OPEN;
+    const buying = technicalEventActive && startLocked;
+    const status = buying ? paymentState.status
+        : technicalEventActive && paymentState.status === "succeeded" ? "succeeded" : "idle";
+    const busy = ["creating", "pending", "waiting_for_capture"].includes(status);
+    const success = status === "succeeded";
+    const visible = status !== "idle" && currentState === "idle";
+    const label = busy ? status === "creating" ? "ГОТОВИМ QR…" : "ЖДЁМ ОПЛАТУ"
+        : buying ? "ОПЛАТИТЬ ПО QR" : "НАЧАТЬ";
+    idleStartButton.querySelector(".idle-start-label").textContent = label;
+    idleStartButton.classList.toggle("is-payment", buying);
+    idleStartButton.setAttribute("aria-busy", String(busy));
+    idlePaymentSpinner.hidden = !busy;
+    idleStartButton.disabled = !online || idleStartRequested || (startLocked && (
+        !buying || !paymentState.available || busy || status === "review"));
+    tapLockStatus.hidden = !startLocked || (buying && (paymentState.available || visible));
+    tapLockStatus.textContent = buying ? "Оплата временно недоступна" : "(ЗАБЛОКИРОВАНО)";
+    idlePayment.hidden = !visible;
+    idlePayment.closest(".idle-hero-wrap").classList.toggle("payment-active", visible);
+    paymentLoader.hidden = !["creating", "waiting_for_capture"].includes(status);
+    paymentSuccessIcon.hidden = !success;
+    paymentStartButton.hidden = !success;
+    paymentStartButton.disabled = idleStartButton.disabled;
+    paymentQr.hidden = status !== "pending";
+
+    const titles = {
+        creating: "Готовим QR-код…",
+        pending: `Оплатите ${Number(paymentState.amount).toLocaleString("ru-RU")} ₽`,
+        waiting_for_capture: "Проверяем оплату…",
+        succeeded: "Оплата прошла!",
+        review: "Нужна помощь администратора",
+    };
+    const hints = {
+        creating: "Это займёт несколько секунд",
+        pending: "Сканируйте в приложении банка",
+        waiting_for_capture: "Дождитесь подтверждения",
+        succeeded: "Чтобы начать, нажмите «Начать»",
+        review: "Обратитесь к администратору",
+    };
+    paymentTitle.textContent = titles[status] || "";
+    paymentHint.textContent = !online && visible ? "Восстанавливаем соединение…"
+        : [paymentState.message || hints[status] || "",
+           busy ? "Ждёте слишком долго? Позовите администратора" : ""]
+            .filter(Boolean).join("\n");
+
+    if (status === "pending" && paymentState.qr && paymentState.qr !== renderedPaymentQr) {
+        try {
+            const qr = qrcode(0, "M");
+            qr.addData(paymentState.qr);
+            qr.make();
+            paymentQr.innerHTML = qr.createSvgTag(8);
+            renderedPaymentQr = paymentState.qr;
+        } catch (error) {
+            console.error("Could not render payment QR", error);
+            paymentQr.replaceChildren();
+            renderedPaymentQr = "";
+            paymentHint.textContent = "Не удалось показать QR-код. Обратитесь к администратору";
+        }
+    }
+    refreshIdleExplainer();
 }
 
 function setLiveView(active) {
@@ -776,6 +858,7 @@ function setLiveView(active) {
 function switchScreen(state, data = {}) {
     syncStartLock(data);
     syncTechnicalEvent(data);
+    if (data.payment) paymentState = data.payment;
     syncSessionContext(state, data);
 
     // First countdown of a new session — delay screen switch, animate tap prompt
@@ -799,6 +882,8 @@ function switchScreen(state, data = {}) {
 function _doSwitch(state, data) {
     const previousState = currentState;
     currentState = state;
+    idleStartRequested = false;
+    renderIdlePayment();
     if (state === "idle" && previousState !== "idle") {
         resetIdlePoseGroups();
         renderIdlePoseBackdrop();
@@ -1530,10 +1615,20 @@ function requestTemplateExtension() {
 screens.template.addEventListener("pointerdown", requestTemplateExtension);
 
 // --- Start session ---
-idleStartButton.addEventListener("click", () => {
-    if (currentState !== "idle" || startLocked || idleStartButton.disabled) return;
-    if (send({ type: "start_session" })) idleStartButton.disabled = true;
-});
+function handleIdleAction() {
+    if (currentState !== "idle" || idleStartButton.disabled || previewMode) return;
+    if (startLocked) {
+        if (send({ type: "start_payment" })) {
+            paymentState = { ...paymentState, status: "creating", message: "", qr: "" };
+            renderIdlePayment();
+        }
+    } else if (send({ type: "start_session" })) {
+        idleStartRequested = true;
+        renderIdlePayment();
+    }
+}
+idleStartButton.addEventListener("click", handleIdleAction);
+paymentStartButton.addEventListener("click", handleIdleAction);
 
 // --- Config ---
 let config = {};
@@ -1865,8 +1960,8 @@ function updateServiceLabels() {
         ? `Выбрать шаблон · ${currentTemplate}`
         : "Выбрать шаблон";
     btnBoothUnblock.textContent = serviceConfig
-        ? `Разблокировать на N · сейчас ${serviceConfig.unlock_sessions_remaining}`
-        : "Разблокировать на N";
+        ? `Добавить сессии · сейчас ${serviceConfig.unlock_sessions_remaining}`
+        : "Добавить сессии";
 }
 
 function showServiceHome() {
@@ -1905,13 +2000,13 @@ function showUnlockPage() {
     const remaining = serviceConfig?.unlock_sessions_remaining || 0;
     serviceUnlockCurrent.textContent =
         `Текущий остаток разрешённых сессий: ${remaining}`;
-    setUnlockSessions(Math.max(1, remaining));
+    setUnlockSessions(1);
     serviceHome.hidden = true;
     serviceConfigPage.hidden = true;
     serviceEditorPage.hidden = true;
     serviceUnlockPage.hidden = false;
     serviceBack.hidden = false;
-    serviceTitle.textContent = "РАЗБЛОКИРОВКА";
+    serviceTitle.textContent = "ДОБАВИТЬ СЕССИИ";
     serviceModal.querySelector(".service-dialog").scrollTop = 0;
 }
 

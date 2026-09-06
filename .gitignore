@@ -41,6 +41,8 @@ diagnostics/yadisk_network_*.log
 yadisk_queue.json
 cafe_unlock_state.json
 cafe_unlock_state.json.tmp
+yookassa_credentials.json
+yookassa_credentials.json.*.tmp
 event_history.json
 event_history.json.tmp
 event_history_archive/
