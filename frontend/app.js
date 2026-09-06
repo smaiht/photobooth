@@ -57,8 +57,8 @@ let idleExplainerActive = false;
 function refreshIdleExplainer() {
     if (btnIdleExplainer) {
         btnIdleExplainer.textContent = idleExplainerEnabled
-            ? "Объяснялка на главном: ВКЛ"
-            : "Объяснялка на главном: ВЫКЛ";
+            ? "Объяснялка: ВКЛ"
+            : "Объяснялка: ВЫКЛ";
     }
     if (!idleExplainer) return;
     idleExplainer.hidden = !idleExplainerEnabled || !idlePayment.hidden;
@@ -790,7 +790,7 @@ function renderIdlePayment() {
     const busy = ["creating", "pending", "waiting_for_capture"].includes(status);
     const success = status === "succeeded";
     const visible = status !== "idle" && currentState === "idle";
-    const label = busy ? status === "creating" ? "ГОТОВИМ ОПЛАТУ…" : "ЖДЁМ ОПЛАТУ"
+    const label = busy ? status === "creating" ? "…" : "ЖДЁМ ОПЛАТУ"
         : buying ? "ОПЛАТИТЬ ПО СБП" : "НАЧАТЬ";
     idleStartButton.querySelector(".idle-start-label").textContent = label;
     idleStartButton.classList.toggle("is-payment", buying);
@@ -1957,10 +1957,10 @@ function updateServiceLabels() {
         : "Конфиг камеры";
     const currentTemplate = serviceConfig?.application?.template_pack;
     btnTemplatePack.textContent = currentTemplate
-        ? `Выбрать шаблон · ${currentTemplate}`
-        : "Выбрать шаблон";
+        ? `Шаблон: ${currentTemplate}`
+        : "Шаблон";
     btnBoothUnblock.textContent = serviceConfig
-        ? `Добавить сессии · сейчас ${serviceConfig.unlock_sessions_remaining}`
+        ? `Добавить сессии (${serviceConfig.unlock_sessions_remaining})`
         : "Добавить сессии";
 }
 

@@ -250,50 +250,44 @@
                     </section>
 
                     <section class="service-section">
-                        <h2 class="service-section-title">Настройки</h2>
-                        <div class="service-grid">
-                            <button id="btn-config-app" class="service-btn" type="button">Конфиг приложения</button>
-                            <button id="btn-config-camera" class="service-btn" type="button">Конфиг камеры</button>
-                            <button id="btn-template-pack" class="service-btn service-btn-wide" type="button">Выбрать шаблон</button>
-                            <button id="btn-idle-explainer" class="service-btn service-btn-wide" type="button">Объяснялка на главном: ВКЛ</button>
+                        <h2 class="service-section-title">Сеть</h2>
+                        <div id="network-adapters" class="service-grid">
+                            <div class="service-loader"><span></span>Загрузка адаптеров…</div>
                         </div>
                     </section>
 
                     <section class="service-section">
-                        <h2 class="service-section-title">Съёмка</h2>
-                        <div class="service-grid">
-                            <button id="btn-test-session" class="service-btn" type="button">Тестовая съёмка</button>
-                            <button id="btn-booth-unblock" class="service-btn" type="button">Добавить сессии</button>
-                            <button id="btn-booth-block" class="service-btn service-btn-danger" type="button">Заблокировать съёмку</button>
+                        <h2 class="service-section-title">Настройки</h2>
+                        <div class="service-grid service-grid-4">
+                            <button id="btn-config-app" class="service-btn" type="button">Конфиг приложения</button>
+                            <button id="btn-config-camera" class="service-btn" type="button">Конфиг камеры</button>
+                            <button id="btn-template-pack" class="service-btn" type="button">Шаблон</button>
+                            <button id="btn-idle-explainer" class="service-btn" type="button">Объяснялка: ВКЛ</button>
+                            <button id="btn-booth-unblock" class="service-btn service-btn-half" type="button">Добавить сессии</button>
+                            <button id="btn-booth-block" class="service-btn service-btn-danger service-btn-half" type="button">Блокировать сессии</button>
                         </div>
                     </section>
 
                     <section class="service-section">
                         <h2 class="service-section-title">Очистка</h2>
-                        <div class="service-grid">
-                            <button id="btn-clear-all" class="service-btn service-btn-danger service-btn-wide" type="button">Очистить всё</button>
-                            <button id="btn-clear-print-queue" class="service-btn service-btn-danger" type="button">Очистить очереди печати</button>
-                            <button id="btn-clear-photos" class="service-btn service-btn-danger" type="button">Очистить photos</button>
-                            <button id="btn-clear-print-jobs" class="service-btn service-btn-danger" type="button">Очистить photos_print_jobs</button>
-                            <button id="btn-clear-logs" class="service-btn service-btn-danger" type="button">Очистить логи</button>
+                        <div class="service-grid service-grid-5">
+                            <button id="btn-clear-all" class="service-btn service-btn-danger" type="button">Очистить всё</button>
+                            <button id="btn-clear-print-queue" class="service-btn" type="button">Очереди печати</button>
+                            <button id="btn-clear-photos" class="service-btn" type="button">photos</button>
+                            <button id="btn-clear-print-jobs" class="service-btn" type="button">photos_print_jobs</button>
+                            <button id="btn-clear-logs" class="service-btn" type="button">Логи</button>
                         </div>
                     </section>
 
                     <section class="service-section">
                         <h2 class="service-section-title">Система</h2>
-                        <div class="service-grid">
-                            <button id="btn-sys-lock" class="service-btn" type="button">Заблокировать экран</button>
-                            <button id="btn-sys-taskmgr" class="service-btn" type="button">Диспетчер задач</button>
-                            <button id="btn-sys-keyboard" class="service-btn" type="button">Экранная клавиатура</button>
-                            <button id="btn-app-restart" class="service-btn service-btn-danger" type="button">Перезапустить приложение</button>
-                            <button id="btn-sys-logoff" class="service-btn service-btn-danger" type="button">Выйти из системы</button>
-                        </div>
-                    </section>
-
-                    <section class="service-section">
-                        <h2 class="service-section-title">Сеть</h2>
-                        <div id="network-adapters" class="service-grid">
-                            <div class="service-loader"><span></span>Загрузка адаптеров…</div>
+                        <div class="service-grid service-grid-6">
+                            <button id="btn-test-session" class="service-btn" type="button">Тест съёмка</button>
+                            <button id="btn-app-restart" class="service-btn service-btn-danger" type="button">Перезапуск app</button>
+                            <button id="btn-sys-taskmgr" class="service-btn" type="button">Task Manager</button>
+                            <button id="btn-sys-keyboard" class="service-btn" type="button">Клавиатура</button>
+                            <button id="btn-sys-lock" class="service-btn" type="button">Lock Screen</button>
+                            <button id="btn-sys-logoff" class="service-btn service-btn-danger" type="button">Sign Out</button>
                         </div>
                     </section>
                 </div>

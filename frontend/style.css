@@ -16,7 +16,7 @@
     --idle-hero-motion-duration: 54s;
     /* The gesture still takes about 1.75s; only the empty pause is shorter. */
     --idle-tap-cycle-duration: 3.5s;
-    /* One accent for every primary action: start, pay-and-start, print. */
+    /* Accent of the primary print action on the template screen. */
     --accent: #FF2973;
     --accent-glow: rgba(255, 41, 115, 0.38);
 }
@@ -271,8 +271,8 @@ html, body {
     padding: 2.2vh 5vw;
     border: 0;
     border-radius: 999px;
-    background: var(--accent);
-    box-shadow: 0 0.8vh 2vh var(--accent-glow);
+    background: #191919;
+    box-shadow: 0 0.8vh 2vh rgba(0, 0, 0, 0.2);
     color: #fff;
     font: 700 clamp(26px, 2vw, 38px) 'Comfortaa', sans-serif;
     letter-spacing: 0.07em;
@@ -366,8 +366,8 @@ html, body {
     padding: 2.4vh;
     border: 0;
     border-radius: 999px;
-    background: var(--accent);
-    box-shadow: 0 1.2vh 2.8vh var(--accent-glow);
+    background: #191919;
+    box-shadow: 0 1.2vh 2.8vh rgba(0, 0, 0, 0.2);
     color: #fff;
     font: 700 clamp(32px, 2.4vw, 46px) 'Comfortaa', sans-serif;
     letter-spacing: 0.07em;
@@ -1840,6 +1840,12 @@ html, body {
     gap: 14px;
 }
 
+/* Fixed column counts keep each section's rows exactly as designed. */
+.service-grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.service-grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.service-grid-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.service-btn-half { grid-column: span 2; }
+
 .service-status-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1890,15 +1896,12 @@ html, body {
     color: #ff8a80;
 }
 
-.service-btn-wide {
-    grid-column: 1 / -1;
-}
-
 #network-adapters:empty {
     display: none;
 }
 
 #network-adapters {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     min-height: 150px;
     align-content: start;
 }
