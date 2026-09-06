@@ -790,8 +790,8 @@ function renderIdlePayment() {
     const busy = ["creating", "pending", "waiting_for_capture"].includes(status);
     const success = status === "succeeded";
     const visible = status !== "idle" && currentState === "idle";
-    const label = busy ? status === "creating" ? "ГОТОВИМ QR…" : "ЖДЁМ ОПЛАТУ"
-        : buying ? "ОПЛАТИТЬ ПО QR" : "НАЧАТЬ";
+    const label = busy ? status === "creating" ? "ГОТОВИМ ОПЛАТУ…" : "ЖДЁМ ОПЛАТУ"
+        : buying ? "ОПЛАТИТЬ ПО СБП" : "НАЧАТЬ";
     idleStartButton.querySelector(".idle-start-label").textContent = label;
     idleStartButton.classList.toggle("is-payment", buying);
     idleStartButton.setAttribute("aria-busy", String(busy));

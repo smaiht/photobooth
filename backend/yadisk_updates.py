@@ -158,14 +158,15 @@ def _extract_folder_member_bytes(
     filename: str,
     max_size: int,
 ) -> bytes:
+    """Read one named file out of a folder ZIP, ignoring its neighbours."""
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-        files = _safe_folder_archive_members(archive)
         expected = f"{folder_name}/{filename}"
-        if len(files) != 1 or files[0].filename != expected:
-            raise ValueError("folder archive does not contain the expected file")
-        if files[0].file_size > max_size:
-            raise ValueError("folder archive member is too large")
-        return archive.read(files[0])
+        for member in _safe_folder_archive_members(archive):
+            if member.filename == expected:
+                if member.file_size > max_size:
+                    raise ValueError("folder archive member is too large")
+                return archive.read(member)
+        raise ValueError("folder archive does not contain the expected file")
 
 
 def read_status(

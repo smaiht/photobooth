@@ -1,6 +1,9 @@
+import io
 import json
 import tempfile
 import unittest
+import urllib.request
+import zipfile
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -29,6 +32,19 @@ class CredentialsTests(unittest.TestCase):
         with patch.object(yookassa, "_download_credentials",
                           side_effect=TimeoutError), \
                 self.assertLogs(yookassa.log, level="WARNING"):
+            self.assertEqual(yookassa.load_credentials(self.root), self.new)
+
+    def test_credentials_are_read_from_the_shared_configs_folder(self):
+        # The folder ZIP will later hold the app and camera configs too.
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as folder:
+            folder.writestr("configs/config_app.json", '{"print_enabled": true}')
+            folder.writestr(f"configs/{yookassa.REMOTE_FILENAME}",
+                            json.dumps(self.new))
+        with patch.object(yookassa.yadisk_updates, "_download_link",
+                          return_value="https://storage.test/configs.zip"), \
+                patch.object(urllib.request, "urlopen",
+                             return_value=io.BytesIO(archive.getvalue())):
             self.assertEqual(yookassa.load_credentials(self.root), self.new)
 
     def test_invalid_remote_file_does_not_replace_valid_cache(self):

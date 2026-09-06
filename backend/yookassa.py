@@ -14,10 +14,11 @@ from . import yadisk_updates
 
 log = logging.getLogger(__name__)
 
-REMOTE_FOLDER = "/photobooth_system/yookassa"
+REMOTE_FOLDER = "/photobooth_system/configs"
+REMOTE_FILENAME = "yookassa_credentials.json"
 CACHE_FILENAME = "yookassa_credentials.json"
 MAX_CREDENTIALS_SIZE = 4096
-MAX_ARCHIVE_SIZE = 64 * 1024
+MAX_ARCHIVE_SIZE = 256 * 1024
 REQUEST_TIMEOUT = 10
 PAYMENT_POLL_INTERVAL_SECONDS = 2
 API_URL = "https://api.yookassa.ru/v3"
@@ -97,8 +98,9 @@ def _download_credentials(token: str) -> bytes:
         REMOTE_FOLDER, token, timeout=REQUEST_TIMEOUT)
     if not link.startswith("https://"):
         raise ValueError("credentials download requires HTTPS")
-    # Credentials travel as a folder ZIP, like the other system data. The
-    # temporary storage request must not carry the Disk OAuth token.
+    # The whole configs folder travels as one ZIP, like the other system data,
+    # so later configs need no extra request. The temporary storage request
+    # must not carry the Disk OAuth token.
     request = urllib.request.Request(
         link, headers={"User-Agent": "photobooth-yookassa/1"})
     with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
@@ -108,7 +110,7 @@ def _download_credentials(token: str) -> bytes:
     return yadisk_updates._extract_folder_member_bytes(
         archive,
         folder_name=REMOTE_FOLDER.rsplit("/", 1)[-1],
-        filename="credentials.json",
+        filename=REMOTE_FILENAME,
         max_size=MAX_CREDENTIALS_SIZE,
     )
 

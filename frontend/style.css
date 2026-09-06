@@ -16,6 +16,9 @@
     --idle-hero-motion-duration: 54s;
     /* The gesture still takes about 1.75s; only the empty pause is shorter. */
     --idle-tap-cycle-duration: 3.5s;
+    /* One accent for every primary action: start, pay-and-start, print. */
+    --accent: #FF2973;
+    --accent-glow: rgba(255, 41, 115, 0.38);
 }
 
 * {
@@ -268,7 +271,8 @@ html, body {
     padding: 2.2vh 5vw;
     border: 0;
     border-radius: 999px;
-    background: #21844b;
+    background: var(--accent);
+    box-shadow: 0 0.8vh 2vh var(--accent-glow);
     color: #fff;
     font: 700 clamp(26px, 2vw, 38px) 'Comfortaa', sans-serif;
     letter-spacing: 0.07em;
@@ -346,6 +350,8 @@ html, body {
 }
 
 .tap-prompt {
+    /* Fill the whole title row so the button is not a thin strip. */
+    align-self: stretch;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -354,12 +360,14 @@ html, body {
 
 .idle-start-button {
     position: relative;
+    flex: 1;
     width: 100%;
+    min-height: 12vh;
     padding: 2.4vh;
     border: 0;
     border-radius: 999px;
-    background: #191919;
-    box-shadow: 0 1.2vh 2.8vh rgba(0, 0, 0, 0.2);
+    background: var(--accent);
+    box-shadow: 0 1.2vh 2.8vh var(--accent-glow);
     color: #fff;
     font: 700 clamp(32px, 2.4vw, 46px) 'Comfortaa', sans-serif;
     letter-spacing: 0.07em;
@@ -1083,13 +1091,13 @@ html, body {
     padding: 0.5vw 1.2vw;
     border: 0.18vw solid #0c2b18;
     border-radius: 999px;
-    background: #FF2973;
+    background: var(--accent);
     color: #fff;
     font-family: inherit;
     cursor: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
-    box-shadow: 0 0.5vw 1.6vw rgba(255, 41, 115, 0.38);
+    box-shadow: 0 0.5vw 1.6vw var(--accent-glow);
     transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.15s ease;
 }
 #template-print[hidden] { display: none; }
