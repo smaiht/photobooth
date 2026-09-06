@@ -25,9 +25,10 @@ API_URL = "https://api.yookassa.ru/v3"
 
 
 class PaymentAPIError(Exception):
-    def __init__(self, status: int):
+    def __init__(self, status: int, detail: str = ""):
         self.status = status
-        super().__init__(f"YooKassa HTTP {status}")
+        self.detail = detail
+        super().__init__(f"YooKassa HTTP {status}{f': {detail}' if detail else ''}")
 
 
 async def request_payment(session: aiohttp.ClientSession, attempt: dict) -> dict:
@@ -40,9 +41,18 @@ async def request_payment(session: aiohttp.ClientSession, attempt: dict) -> dict
         "headers": {"Idempotence-Key": attempt["request_id"]},
     }
     async with session.request(method, url, **options) as response:
-        if response.status != 200:
-            # Error bodies may contain merchant or customer data.
-            raise PaymentAPIError(response.status)
+        if response.status not in (200, 201):
+            # Keep only the machine-readable reason: bodies may carry merchant
+            # or customer data, but code/description are what the log needs.
+            detail = ""
+            try:
+                body = await response.json()
+            except (aiohttp.ClientError, ValueError):
+                body = None
+            if isinstance(body, dict):
+                detail = " ".join(str(body.get(key, "")) for key in
+                                  ("code", "description")).strip()
+            raise PaymentAPIError(response.status, detail)
         return await response.json()
 
 

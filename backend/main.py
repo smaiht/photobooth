@@ -596,9 +596,14 @@ def _save_cafe_payment(payment: dict | None, remaining: int | None = None) -> No
 
 def _ensure_payment_task() -> None:
     global _payment_task
-    if (_payment_in_flight()
-            and (_payment_task is None or _payment_task.done())
-            and getattr(app.state, "yookassa_credentials", None)):
+    if not _payment_in_flight():
+        return
+    if not getattr(app.state, "yookassa_credentials", None):
+        log.error("Cafe payment cannot be polled: YooKassa credentials are missing")
+        return
+    if _payment_task is None or _payment_task.done():
+        log.info("Cafe payment polling started: %s %s",
+                 _cafe_payment["status"], _cafe_payment.get("id", "(not created yet)"))
         _payment_task = asyncio.create_task(_poll_cafe_payment())
         _service_tasks.add(_payment_task)
         _payment_task.add_done_callback(_service_tasks.discard)
@@ -610,23 +615,31 @@ def _fail_cafe_payment(exc: Exception) -> None:
     payment = {**_cafe_payment, "status": "review"} if _cafe_payment.get("id") else None
     try:
         _save_cafe_payment(payment)
-    except OSError:
+    except OSError as save_exc:
         _payment_notice = "Не получается связаться с оплатой. Повторяем…"
+        log.error("Cafe payment state could not be saved: %s", save_exc)
         return
     _payment_notice = ""
     _payment_alert_until = time.monotonic() + PAYMENT_ALERT_SECONDS
-    log.error("Cafe payment failed (%s); kept for the admin: %s",
-              type(exc).__name__, bool(payment))
+    log.error("Cafe payment failed (%s: %s); kept for the admin: %s",
+              type(exc).__name__, exc, bool(payment))
 
 
 async def _start_cafe_payment() -> None:
     global _payment_notice, _payment_alert_until
     if STATE != "idle" or _session_running or not _start_locked():
+        log.info("Cafe payment tap ignored: state=%s session_running=%s locked=%s",
+                 STATE, _session_running, _start_locked())
         return
     if _payment_active():
-        if not _payment_in_flight():
+        if _payment_in_flight():
+            log.info("Cafe payment tap ignored: %s is already in progress",
+                     _cafe_payment["status"])
+        else:
             # A payment is waiting for the admin: say so instead of doing nothing.
             _payment_alert_until = time.monotonic() + PAYMENT_ALERT_SECONDS
+            log.warning("Cafe payment tap while payment %s waits for the admin",
+                        _cafe_payment.get("id", ""))
     elif _payment_state()["available"]:
         request_id = str(uuid.uuid4())
         payment = {
@@ -656,6 +669,12 @@ async def _start_cafe_payment() -> None:
             "type": "payment", "status": "creating", "request_id": request_id,
             "amount": payment["request"]["amount"],
         })
+        log.info("Cafe payment requested: %s ₽, request_id=%s",
+                 _payment_price(), request_id)
+    else:
+        log.warning("Cafe payment tap but payments are unavailable: keys=%s price=%s",
+                    bool(getattr(app.state, "yookassa_credentials", None)),
+                    _payment_price())
     _ensure_payment_task()
     await broadcast(_state_message(STATE))
 
@@ -663,11 +682,14 @@ async def _start_cafe_payment() -> None:
 async def _poll_cafe_payment() -> None:
     global _payment_notice
     credentials = app.state.yookassa_credentials
+    attempts = 0
+    last_error = ""
     async with aiohttp.ClientSession(
         auth=aiohttp.BasicAuth(credentials["SHOPID"], credentials["SHOPTOKEN"]),
         timeout=aiohttp.ClientTimeout(total=yookassa.REQUEST_TIMEOUT),
     ) as session:
         while _payment_in_flight():
+            attempts += 1
             try:
                 response = await yookassa.request_payment(session, _cafe_payment)
                 result = yookassa.payment_result(response, _cafe_payment)
@@ -709,11 +731,18 @@ async def _poll_cafe_payment() -> None:
                         and (exc.status == 429 or exc.status >= 500)):
                     # Network trouble passes by itself: keep retrying, keep the card.
                     _payment_notice = "Не получается связаться с оплатой. Повторяем…"
+                    error = f"{type(exc).__name__}: {exc}"
+                    # Retrying forever must leave a trail without filling the log.
+                    if error != last_error or attempts % 30 == 0:
+                        log.warning("Cafe payment %s attempt %d failed: %s",
+                                    _cafe_payment.get("id") or "creation", attempts, error)
+                    last_error = error
                 else:
                     _fail_cafe_payment(exc)
                 await broadcast(_state_message(STATE))
             if _payment_in_flight():
                 await asyncio.sleep(yookassa.PAYMENT_POLL_INTERVAL_SECONDS)
+    log.info("Cafe payment polling stopped after %d attempts", attempts)
 
 
 def _multi_print_max_sheets() -> int:
