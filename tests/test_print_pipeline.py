@@ -2245,7 +2245,7 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
         return PreviewBatch(paths, {"single": choices})
 
     async def _run(self, choose, *, multi_print=True, max_sheets=6,
-                   select_timeout=30):
+                   remaining=6, select_timeout=30):
         """Run one full session, letting ``choose`` drive the basket."""
         composed = []
         unframed = []
@@ -2306,6 +2306,7 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
                  _session_running=False,
                  _background_uploads=set(),
                  _camera_disconnected_event=asyncio.Event(),
+                 _cafe_unlock_sessions_remaining=remaining,
              ), \
              patch("backend.main._start_locked", return_value=False), \
              patch("backend.main.yadisk_cloud.current_event_folder",
@@ -2402,6 +2403,33 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
         result = await self._run(choose, multi_print=False)
 
         self.assertEqual(result["queued"], [("print_grid.jpg", "grid")])
+
+    async def test_last_paid_session_prints_one_sheet_without_a_basket(self):
+        # One paid session buys one sheet, so the basket is off for this guest.
+        def choose(select):
+            select("", None, None, [{"template": "grid", "copies": 2}])
+            select("grid")
+
+        with patch.object(main, "_is_technical_event", return_value=True), \
+                patch.object(main, "_cafe_unlock_sessions_remaining", 1):
+            self.assertFalse(main._session_multi_print())
+            self.assertEqual(main._session_sheet_limit(), 1)
+
+        result = await self._run(choose, remaining=1)
+
+        self.assertEqual(result["queued"], [("print_grid.jpg", "grid")])
+
+    async def test_basket_is_capped_by_the_remaining_paid_sessions(self):
+        def choose(select):
+            select("", None, None, [{"template": "grid", "copies": 3}])
+            select("", None, None, [{"template": "grid", "copies": 2}])
+
+        result = await self._run(choose, remaining=2)
+
+        self.assertEqual(result["queued"], [
+            ("print_grid.jpg", "grid"),
+            ("print_grid.jpg", "grid"),
+        ])
 
     async def test_single_tap_still_prints_exactly_one_sheet(self):
         def choose(select):

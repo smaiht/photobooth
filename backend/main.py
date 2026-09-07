@@ -533,17 +533,38 @@ def _payment_in_flight() -> bool:
         "creating", "pending", "waiting_for_capture"))
 
 
-def _payment_price() -> int:
-    value = CONFIG.get("technical_event_price_rubles")
-    return value if type(value) is int and value > 0 else 0
+def _payment_packages() -> list[dict]:
+    """One validated list drives the idle tiles and the allowed amounts."""
+    raw = CONFIG.get("technical_event_packages")
+    if not isinstance(raw, list):
+        log.error("technical_event_packages must be a list; payments are off")
+        return []
+    packages = []
+    for entry in raw:
+        sessions = entry.get("sessions") if isinstance(entry, dict) else None
+        price = entry.get("price_rubles") if isinstance(entry, dict) else None
+        if (type(sessions) is not int or not 1 <= sessions <= MAX_UNLOCK_SESSIONS
+                or type(price) is not int or price <= 0
+                or any(package["sessions"] == sessions for package in packages)):
+            log.error("Unusable payment package %r is ignored", entry)
+            continue
+        packages.append({"sessions": sessions, "price": price})
+    return packages
+
+
+def _payment_sessions(payment: dict | None) -> int:
+    """A payment credits its own package; a record from before them credits one."""
+    sessions = (payment or {}).get("sessions")
+    return sessions if type(sessions) is int and sessions >= 1 else 1
 
 
 def _payment_state() -> dict:
     """Public presentation only: never send credentials or the saved request."""
-    available = bool(getattr(app.state, "yookassa_credentials", None) and _payment_price())
-    state = {"available": available, "status": "idle"}
+    packages = _payment_packages()
+    available = bool(getattr(app.state, "yookassa_credentials", None) and packages)
+    state = {"available": available, "status": "idle", "packages": packages}
     if not _is_technical_event():
-        return {"available": False, "status": "idle"}
+        return {"available": False, "status": "idle", "packages": []}
     if _cafe_payment and _cafe_payment.get("credited"):
         if not _start_locked():
             state["status"] = "succeeded"
@@ -564,21 +585,25 @@ _PAYMENT_STATUS_LABELS = {
     "creating": "создаём QR-код",
     "pending": "ждём оплату по QR",
     "waiting_for_capture": "подтверждается",
-    "succeeded": "оплачена, сессия начислена",
+    "succeeded": "оплачена, сессии начислены",
     "review": "⚠️ проверьте платёж в ЮKassa вручную",
 }
 
 
 def _payment_status_line() -> str:
     """Show a stuck payment to the admin without reading the log."""
-    if not _payment_price():
-        return "выключена (technical_event_price_rubles=0)"
+    packages = _payment_packages()
+    if not packages:
+        return "выключена (technical_event_packages пуст)"
     if not getattr(app.state, "yookassa_credentials", None):
         return "🔴 нет ключей ЮKassa"
     if not _cafe_payment:
-        return f"🟢 готова, {_payment_price()} ₽"
+        offer = " · ".join(f"{package['sessions']} за {package['price']} ₽"
+                           for package in packages)
+        return f"🟢 готова: {offer}"
     status = _cafe_payment["status"]
     line = _PAYMENT_STATUS_LABELS.get(status, status)
+    line += f" · сессий: {_payment_sessions(_cafe_payment)}"
     if _cafe_payment.get("id"):
         line += f" · {_cafe_payment['id']}"
     elif _cafe_payment.get("request_id"):
@@ -627,12 +652,15 @@ def _fail_cafe_payment(exc: Exception) -> None:
               type(exc).__name__, exc, payment.get("request_id"), payment.get("id"))
 
 
-async def _start_cafe_payment() -> None:
+async def _start_cafe_payment(sessions) -> None:
+    """Buy one configured package; a paid allowance may be topped up as well."""
     global _payment_notice, _payment_alert_until
-    if STATE != "idle" or _session_running or not _start_locked():
-        log.info("Cafe payment tap ignored: state=%s session_running=%s locked=%s",
-                 STATE, _session_running, _start_locked())
+    if STATE != "idle" or _session_running or not _is_technical_event():
+        log.info("Cafe payment tap ignored: state=%s session_running=%s technical=%s",
+                 STATE, _session_running, _is_technical_event())
         return
+    package = next((option for option in _payment_packages()
+                    if option["sessions"] == sessions), None)
     if _payment_active():
         if _payment_in_flight():
             log.info("Cafe payment tap ignored: %s is already in progress",
@@ -642,7 +670,14 @@ async def _start_cafe_payment() -> None:
             _payment_alert_until = time.monotonic() + PAYMENT_ALERT_SECONDS
             log.warning("Cafe payment tap while payment %s waits for the admin",
                         _cafe_payment.get("id", ""))
-    elif _payment_state()["available"]:
+    elif package is None or not _payment_state()["available"]:
+        log.warning("Cafe payment tap for %r ignored: keys=%s packages=%s",
+                    sessions, bool(getattr(app.state, "yookassa_credentials", None)),
+                    _payment_packages())
+    elif _cafe_unlock_sessions_remaining + sessions > MAX_UNLOCK_SESSIONS:
+        log.warning("Cafe payment for %d sessions refused: remaining=%d is already at the limit",
+                    sessions, _cafe_unlock_sessions_remaining)
+    else:
         request_id = str(uuid.uuid4())
         payment = {
             "request_id": request_id,
@@ -650,12 +685,13 @@ async def _start_cafe_payment() -> None:
             "shop_id": app.state.yookassa_credentials["SHOPID"],
             "event": _active_event_name(),
             "status": "creating",
+            "sessions": sessions,
             "request": {
-                "amount": {"value": f"{_payment_price()}.00", "currency": "RUB"},
+                "amount": {"value": f"{package['price']}.00", "currency": "RUB"},
                 "payment_method_data": {"type": "sbp"},
                 "confirmation": {"type": "qr"},
                 "capture": True,
-                "description": "Покупка одной фотосессии",
+                "description": f"Покупка фотосессий: {sessions}",
                 "metadata": {"request_id": request_id},
             },
         }
@@ -670,14 +706,10 @@ async def _start_cafe_payment() -> None:
         _payment_notice = ""
         _record_event_history({
             "type": "payment", "status": "creating", "request_id": request_id,
-            "amount": payment["request"]["amount"],
+            "sessions": sessions, "amount": payment["request"]["amount"],
         })
-        log.info("Cafe payment requested: %s ₽, request_id=%s",
-                 _payment_price(), request_id)
-    else:
-        log.warning("Cafe payment tap but payments are unavailable: keys=%s price=%s",
-                    bool(getattr(app.state, "yookassa_credentials", None)),
-                    _payment_price())
+        log.info("Cafe payment requested: %d sessions for %d ₽, request_id=%s",
+                 sessions, package["price"], request_id)
     _ensure_payment_task()
     await broadcast(_state_message(STATE))
 
@@ -705,13 +737,14 @@ async def _poll_cafe_payment() -> None:
                 result = yookassa.payment_result(response, attempt)
                 payment = {**attempt, **result}
                 remaining = _cafe_unlock_sessions_remaining
+                credited = _payment_sessions(attempt)
                 if result["status"] == "succeeded":
                     if not _is_technical_event() or payment["event"] != _active_event_name():
                         raise ValueError("payment event changed")
-                    if remaining >= MAX_UNLOCK_SESSIONS:
+                    if remaining + credited > MAX_UNLOCK_SESSIONS:
                         raise ValueError("Cafe allowance limit reached")
                     payment["credited"] = True
-                    remaining += 1
+                    remaining += credited
                 if result["status"] == "canceled":
                     # Nobody paid, so the screen just goes back to the plain idle card.
                     payment = None
@@ -723,7 +756,7 @@ async def _poll_cafe_payment() -> None:
                         "payment_id": result["id"],
                         "status": result["status"],
                         "amount": _cafe_payment["request"]["amount"],
-                        "credited_sessions": 1 if result["status"] == "succeeded" else 0,
+                        "credited_sessions": credited if result["status"] == "succeeded" else 0,
                         "cancellation_reason": result.get("cancellation_reason", ""),
                     }
                     # Credit and its receipt are one atomic write, before the UI unlocks.
@@ -772,6 +805,21 @@ def _multi_print_max_sheets() -> int:
 def _multi_print_available() -> bool:
     """Return the global multi-select switch for every event mode."""
     return CONFIG.get("multi_print_enabled") is True
+
+
+def _session_sheet_limit() -> int:
+    """In the technical event one paid session buys one sheet, never more."""
+    limit = _multi_print_max_sheets()
+    if not _is_technical_event():
+        return limit
+    # The running session is still part of the allowance, and a test session
+    # without any allowance still prints its own single sheet.
+    return min(limit, max(1, _cafe_unlock_sessions_remaining))
+
+
+def _session_multi_print() -> bool:
+    """Hide the basket when the guest may print only one sheet anyway."""
+    return _multi_print_available() and _session_sheet_limit() > 1
 
 CLIENTS: list[WebSocket] = []
 
@@ -962,8 +1010,8 @@ def _state_message(new_state: str) -> dict:
     if new_state == "template_select":
         msg["timeout"] = int(CONFIG["template_select_timeout"])
         msg["templates"] = [dict(option) for option in TEMPLATE_OPTIONS]
-        msg["multi_print"] = _multi_print_available()
-        msg["multi_print_max_sheets"] = _multi_print_max_sheets()
+        msg["multi_print"] = _session_multi_print()
+        msg["multi_print_max_sheets"] = _session_sheet_limit()
     return msg
 
 
@@ -1541,8 +1589,6 @@ async def _run_session(test_session: bool = False):
     # One source of truth for the frame default: the frontend reads the same
     # config field through /api/config.
     default_with_frame = CONFIG["photo_choice_default_with_frame"] is True
-    multi_print_allowed = _multi_print_available()
-    max_sheets = _multi_print_max_sheets()
     # A single tap is the one-item case of the same basket, so there is only one
     # code path from here to the printer.
     chosen = {
@@ -1572,9 +1618,9 @@ async def _run_session(test_session: bool = False):
         elif not isinstance(items, list) or not items:
             log.warning("Ignoring empty or malformed print basket: %r", items)
             return
-        elif not multi_print_allowed:
+        elif not _session_multi_print():
             log.warning(
-                "Ignoring print basket: multi-select is disabled"
+                "Ignoring print basket: multi-select is off for this session"
             )
             return
         else:
@@ -1594,7 +1640,7 @@ async def _run_session(test_session: bool = False):
 
         normalized = _merge_print_items(normalized)
         sheets = sum(item["copies"] for item in normalized)
-        limit = max_sheets if items is not None else 1
+        limit = _session_sheet_limit() if items is not None else 1
         if sheets > limit:
             log.warning(
                 "Ignoring print basket of %d sheets: limit is %d",
@@ -3211,7 +3257,7 @@ async def websocket_endpoint(ws: WebSocket):
                     await set_state("camera_searching" if camera else "no_camera")
 
             elif msg["type"] == "start_payment":
-                await _start_cafe_payment()
+                await _start_cafe_payment(msg.get("sessions"))
 
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)

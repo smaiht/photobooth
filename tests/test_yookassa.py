@@ -91,7 +91,7 @@ def _attempt(**overrides) -> dict:
             "payment_method_data": {"type": "sbp"},
             "confirmation": {"type": "qr"},
             "capture": True,
-            "description": "Покупка одной фотосессии",
+            "description": "Покупка фотосессий: 1",
             "metadata": {"request_id": "1e4f9a1c-0000-4000-8000-000000000001"},
         },
     }
@@ -167,7 +167,11 @@ class CafePaymentTests(unittest.IsolatedAsyncioTestCase):
             patch.object(main, "CONFIG", {
                 "technical_event_name": "Кафе",
                 "yadisk_folder": "Кафе",
-                "technical_event_price_rubles": int(float(self.payment["request"]["amount"]["value"])),
+                "technical_event_packages": [
+                    {"sessions": 1, "price_rubles": int(float(
+                        self.payment["request"]["amount"]["value"]))},
+                    {"sessions": 3, "price_rubles": 250},
+                ],
             }),
             patch.dict(main.app.state._state, {"yookassa_credentials": {
                 "SHOPID": "shop-1", "SHOPTOKEN": "secret"}}),
@@ -269,24 +273,55 @@ class CafePaymentTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("credited", payment)
         self.assertEqual(state["status"], "review")
 
-    async def test_double_tap_saves_one_request_with_the_configured_price(self):
+    async def test_double_tap_saves_one_request_with_the_package_price(self):
         from backend import main
         with ExitStack() as stack:
             for context in self._booth():
                 stack.enter_context(context)
             stack.enter_context(patch.object(main, "_cafe_payment", None))
             stack.enter_context(patch.object(main, "_ensure_payment_task"))
-            configured_price = 237
-            main.CONFIG["technical_event_price_rubles"] = configured_price
-            await main._start_cafe_payment()
+            configured_price = 250
+            await main._start_cafe_payment(3)
             saved = copy.deepcopy(main._cafe_payment)
-            main.CONFIG["technical_event_price_rubles"] += 50
-            await main._start_cafe_payment()
+            main.CONFIG["technical_event_packages"][1]["price_rubles"] += 50
+            await main._start_cafe_payment(3)
 
             self.assertEqual(main._cafe_payment, saved)
+            self.assertEqual(saved["sessions"], 3)
             self.assertEqual(saved["request"]["amount"], {
                 "value": f"{configured_price}.00", "currency": "RUB"})
             self.assertEqual(main._load_cafe_unlock_state(), (0, saved))
+
+    async def test_only_a_configured_package_can_be_bought(self):
+        from backend import main
+        for sessions in (5, 0, "1", None):
+            with self.subTest(sessions=sessions), ExitStack() as stack:
+                for context in self._booth():
+                    stack.enter_context(context)
+                stack.enter_context(patch.object(main, "_cafe_payment", None))
+                stack.enter_context(patch.object(main, "_ensure_payment_task"))
+                await main._start_cafe_payment(sessions)
+                self.assertIsNone(main._cafe_payment)
+
+    async def test_paid_package_credits_all_its_sessions_on_top_of_the_rest(self):
+        # A guest may buy more while sessions remain: both amounts add up.
+        from backend import main
+        with ExitStack() as stack:
+            for context in self._booth(remaining=2):
+                stack.enter_context(context)
+            stack.enter_context(patch.object(main, "_cafe_payment", None))
+            stack.enter_context(patch.object(main, "_ensure_payment_task"))
+            self.assertFalse(main._start_locked())
+            await main._start_cafe_payment(3)
+            self.assertEqual(main._cafe_payment["sessions"], 3)
+
+            stack.enter_context(patch.object(yookassa, "request_payment", AsyncMock(
+                return_value=_response(status="succeeded", paid=True,
+                                       amount={"value": "250.00", "currency": "RUB"},
+                                       metadata=main._cafe_payment["request"]["metadata"]))))
+            await main._poll_cafe_payment()
+            self.assertEqual(main._cafe_unlock_sessions_remaining, 5)
+            self.assertTrue(main._cafe_payment["credited"])
 
     async def test_unblock_during_post_keeps_the_request_and_payment_adds_one(self):
         from backend import main
@@ -322,7 +357,7 @@ class CafePaymentTests(unittest.IsolatedAsyncioTestCase):
                     await main._poll_cafe_payment()
 
             main._cafe_unlock_sessions_remaining, main._cafe_payment = main._load_cafe_unlock_state()
-            main.CONFIG["technical_event_price_rubles"] += 50
+            main.CONFIG["technical_event_packages"][0]["price_rubles"] += 50
             with patch.object(yookassa, "request_payment", AsyncMock(
                     return_value=_response(status="succeeded", paid=True))) as request:
                 await main._poll_cafe_payment()

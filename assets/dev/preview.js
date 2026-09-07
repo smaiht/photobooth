@@ -74,6 +74,19 @@
         return assetUrl(`photo-${number}-${variant}.svg`);
     }
 
+    // Same shape the backend sends, built from the real technical_event_packages.
+    function previewPackages(appConfig) {
+        const packages = appConfig.technical_event_packages;
+        return Array.isArray(packages)
+            ? packages
+                .filter(pack => pack?.sessions > 0 && pack?.price_rubles > 0)
+                .map(pack => ({
+                    sessions: pack.sessions,
+                    price: pack.price_rubles,
+                }))
+            : [];
+    }
+
     function showError(error) {
         console.error("Could not open photobooth preview:", error);
         document.querySelectorAll(".screen").forEach(screen => {
@@ -107,12 +120,16 @@
 
             if (route === "no_camera" || route === "camera_searching") {
                 api.switchScreen(route, { start_locked: false });
-            } else if (route === "idle" || route === "idle_locked") {
+            } else if (route === "idle" || route === "idle_locked" || route === "idle_cafe") {
                 const locked = route === "idle_locked";
                 api.switchScreen("idle", {
                     start_locked: locked,
-                    technical_event_active: locked,
-                    payment: { available: true, status: "idle" },
+                    technical_event_active: route !== "idle",
+                    payment: {
+                        available: true,
+                        status: "idle",
+                        packages: previewPackages(appConfig),
+                    },
                 });
             } else if (route.startsWith("payment_")) {
                 const status = {
@@ -127,7 +144,8 @@
                     payment: {
                         available: true,
                         status,
-                        amount: appConfig.technical_event_price_rubles,
+                        packages: previewPackages(appConfig),
+                        amount: previewPackages(appConfig)[0]?.price ?? 0,
                         qr: "https://example.com/photobooth-payment-preview",
                         message: status === "pending" ? "Макет QR-кода — без оплаты" : "",
                     },

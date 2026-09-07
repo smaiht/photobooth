@@ -24,11 +24,6 @@
             </div>
 
             <div class="idle-hero-wrap">
-                <div class="idle-price-badge" id="idle-price-badge" hidden>
-                    <span>ЦЕНА:</span>
-                    <strong id="idle-price-value">100 ₽</strong>
-                </div>
-
                 <section class="idle-hero">
                     <h1>
                         <span class="idle-title-main">ФОТОБУДКА</span>
@@ -36,7 +31,6 @@
                     </h1>
                     <div class="tap-prompt">
                         <button class="idle-start-button" id="idle-start-button" type="button" tabindex="-1" disabled>
-                            <span class="payment-spinner payment-button-spinner" id="idle-payment-spinner" hidden aria-hidden="true"></span>
                             <span class="idle-start-label">НАЧАТЬ</span>
                             <span class="idle-tap-cue" aria-hidden="true">
                                 <span class="idle-tap-ring"></span>
@@ -48,6 +42,26 @@
                         <div class="tap-lock-status">(ЗАБЛОКИРОВАНО)</div>
                     </div>
                 </section>
+
+                <!-- Tiles come from technical_event_packages; app.js clones the template. -->
+                <section class="idle-packages" id="idle-packages" hidden aria-label="Пакеты фотосессий с оплатой по СБП"></section>
+                <template id="idle-package-template">
+                    <button class="idle-package" type="button">
+                        <span class="idle-package-save" hidden></span>
+                        <span class="idle-package-name"></span>
+                        <strong class="idle-package-price">
+                            <span class="idle-package-amount"></span>
+                            <span class="idle-package-currency">&#8202;₽</span>
+                        </strong>
+                        <span class="idle-package-action">
+                            <svg class="idle-package-qr" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <path class="frames" d="M3 3h5v5H3zM12 3h5v5h-5zM3 12h5v5H3z" />
+                                <path class="dots" d="M12 12h2v2h-2zM15 12h2v2h-2zM12 15h2v2h-2zM15 15h2v2h-2z" />
+                            </svg>
+                            ОПЛАТИТЬ ПО СБП
+                        </span>
+                    </button>
+                </template>
 
                 <video class="idle-explainer" id="idle-explainer"
                        src="../assets/idle-process/idle-process.mp4"

@@ -19,6 +19,9 @@
     /* Accent of the primary print action on the template screen. */
     --accent: #FF2973;
     --accent-glow: rgba(255, 41, 115, 0.38);
+    /* Paid actions use the deep wine of the idle concept, not the pink accent. */
+    --wine: #750d22;
+    --wine-glow: rgba(117, 13, 34, 0.3);
 }
 
 * {
@@ -176,6 +179,100 @@ html, body {
     animation: idle-hero-breathe var(--idle-hero-motion-duration) ease-in-out infinite;
 }
 
+.idle-hero-wrap.has-packages { --idle-panel-height: 52vh; }
+
+.idle-packages {
+    display: flex;
+    gap: 1.2vw;
+    width: 100%;
+}
+
+.idle-packages[hidden] { display: none; }
+
+.idle-package {
+    position: relative;
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3vh;
+    min-width: 0;
+    padding: 1.8vh 0.8vw 1.6vh;
+    border: 2px solid #ece6dc;
+    border-radius: clamp(18px, 2vh, 28px);
+    background: linear-gradient(180deg, #fffdfa, #f5f0e7);
+    box-shadow: 0 0.5vh 1.4vh rgba(24, 24, 24, 0.07);
+    color: #242321;
+    font: inherit;
+    transition: border-color 0.5s ease, box-shadow 0.5s ease, opacity 0.3s ease;
+}
+
+/* One travelling highlight; app.js moves it. Nothing here is preselected. */
+.idle-package.is-highlighted {
+    border-color: var(--wine);
+    box-shadow: 0 0.6vh 2vh var(--wine-glow);
+}
+
+.idle-package:active { filter: brightness(0.96); }
+.idle-package:disabled { opacity: 0.4; }
+.idle-package:focus-visible { outline: 3px solid var(--wine); outline-offset: 3px; }
+
+.idle-package-name {
+    font-size: clamp(17px, 1.8vh, 23px);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+}
+
+.idle-package-price {
+    font-size: clamp(30px, 3.6vh, 48px);
+    font-weight: 700;
+    line-height: 1.1;
+    white-space: nowrap;
+}
+
+.idle-package-currency { font-size: 0.62em; font-weight: 600; }
+
+/* The dark pill is the whole point: a card that looks like a button. */
+.idle-package-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    max-width: 100%;
+    margin-top: 1vh;
+    padding: 0.95vh 1.1em;
+    border-radius: 999px;
+    background: #191919;
+    color: #fff;
+    font-size: clamp(12px, 1.35vh, 17px);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    transition: background 0.5s ease;
+}
+
+.idle-package.is-highlighted .idle-package-action { background: var(--wine); }
+
+.idle-package-qr { width: 1.15em; height: 1.15em; flex: none; }
+.idle-package-qr .frames { fill: none; stroke: currentColor; stroke-width: 2; }
+.idle-package-qr .dots { fill: currentColor; }
+
+.idle-package-save {
+    position: absolute;
+    top: 0;
+    right: 0;
+    transform: translate(18%, -42%) rotate(6deg);
+    padding: 0.5vh 0.9vw;
+    border-radius: 999px;
+    background: var(--wine);
+    box-shadow: 0 0.3vh 0.9vh var(--wine-glow);
+    color: #fff;
+    font-size: clamp(12px, 1.4vh, 18px);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
 /*
  * The explainer video is edge to edge, so it carries its exact
  * 1200:700 ratio and nothing of the host shows through it. Driven by height,
@@ -183,7 +280,7 @@ html, body {
  */
 .idle-explainer {
     display: block;
-    height: 62vh;
+    height: var(--idle-panel-height, 62vh);
     max-width: 92vw;
     aspect-ratio: 1200 / 700;
     border: 0;
@@ -206,16 +303,16 @@ html, body {
     align-items: center;
     gap: 2vh;
     box-sizing: border-box;
-    width: calc(62vh * 1200 / 700);
+    width: calc(var(--idle-panel-height, 62vh) * 1200 / 700);
     max-width: 92vw;
-    height: 62vh;
+    height: var(--idle-panel-height, 62vh);
     padding: 3vh;
     border-radius: clamp(18px, 1.8vw, 34px);
     background: #f8f4ec;
     text-align: center;
 }
 
-.idle-payment[hidden], .idle-payment [hidden], .payment-button-spinner[hidden] {
+.idle-payment[hidden], .idle-payment [hidden] {
     display: none;
 }
 
@@ -259,7 +356,6 @@ html, body {
 }
 
 .payment-panel-spinner { width: 7vh; height: 7vh; font-size: 5vh; }
-.payment-button-spinner { width: 1em; height: 1em; margin-right: 0.4em; vertical-align: -0.12em; }
 @keyframes payment-spin { to { transform: rotate(360deg); } }
 
 .payment-success-icon { width: 11vh; height: 11vh; flex-shrink: 0; }
@@ -320,33 +416,6 @@ html, body {
     font-size: 3vh;
     font-weight: 600;
     letter-spacing: 0.06em;
-}
-
-.idle-price-badge {
-    position: absolute;
-    z-index: 3;
-    top: 0;
-    right: 0;
-    transform: translate(24%, -38%) rotate(6deg);
-    padding: 2vh;
-    border: 2px solid #fff;
-    border-radius: clamp(38px, 1.8vw, 48px);
-    background: #d83434;
-    box-shadow: 0 0.8vh 1.8vh rgba(126, 18, 18, 0.28);
-    color: #fff;
-    display: flex;
-    align-items: baseline;
-    gap: 0.38em;
-    font-size: clamp(24px, 1.8vw, 36px);
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    white-space: nowrap;
-}
-
-.idle-price-badge[hidden] { display: none; }
-
-.idle-price-badge strong {
-    font-weight: 900;
 }
 
 .tap-prompt {
@@ -428,8 +497,6 @@ html, body {
     box-shadow: none;
 }
 
-.idle-start-button.is-payment { font-size: clamp(22px, 1.75vw, 34px); }
-.idle-start-button[aria-busy="true"] { opacity: 0.8; }
 
 .idle-start-button:disabled .idle-tap-cue {
     display: none;

@@ -10,6 +10,9 @@ const TEST_POSE_INTRO_HOLD_MS = POSE_INTRO_HOLD_MS;
 
 const POSE_INTRO_MOVE_MS = 300;
 
+// How long one package tile keeps the idle highlight before it moves on.
+const PACKAGE_HIGHLIGHT_STEP_MS = 3000;
+
 const screens = {
     no_camera: document.getElementById("screen-no-camera"),
     idle: document.getElementById("screen-idle"),
@@ -33,6 +36,7 @@ const poseIntro = document.getElementById("pose-intro");
 const poseIntroCards = document.getElementById("pose-intro-cards");
 const idlePoseField = document.getElementById("idle-pose-field");
 const idleExplainer = document.getElementById("idle-explainer");
+const idlePackages = document.getElementById("idle-packages");
 const idlePayment = document.getElementById("idle-payment");
 const paymentTitle = document.getElementById("payment-title");
 const paymentHint = document.getElementById("payment-hint");
@@ -40,7 +44,6 @@ const paymentQr = document.getElementById("payment-qr");
 const paymentLoader = document.getElementById("payment-loader");
 const paymentSuccessIcon = document.getElementById("payment-success-icon");
 const paymentStartButton = document.getElementById("payment-start-button");
-const idlePaymentSpinner = document.getElementById("idle-payment-spinner");
 const btnIdleExplainer = document.getElementById("btn-idle-explainer");
 
 /*
@@ -92,8 +95,7 @@ if (idleExplainer) {
 }
 refreshIdleExplainer();
 const idlePoseRows = Array.from(document.querySelectorAll(".idle-pose-row"));
-const idlePriceBadge = document.getElementById("idle-price-badge");
-const idlePriceValue = document.getElementById("idle-price-value");
+const idlePackageTemplate = document.getElementById("idle-package-template");
 const idleStartButton = document.getElementById("idle-start-button");
 const templateTimer = document.getElementById("template-timer");
 const templateOptions = document.getElementById("template-options");
@@ -197,8 +199,10 @@ let multiSelectActive = false;
 const printBasket = new Map();
 let currentShootingPhotoIndex = 0;
 let technicalEventActive = false;
-let technicalEventPriceRubles = 0;
-let paymentState = { available: false, status: "idle" };
+let paymentState = { available: false, status: "idle", packages: [] };
+let renderedPackages = "";
+let highlightedPackage = 0;
+let packageHighlightTimer = null;
 let renderedPaymentQr = "";
 let idleStartRequested = false;
 const sessionLinks = new Map();
@@ -495,23 +499,62 @@ function renderDoneTitle(data = {}) {
         : "Идёт печать";
 }
 
-function renderTechnicalEventBadge() {
-    const savedPrice = Number(paymentState.amount);
-    const price = ["creating", "pending", "waiting_for_capture"].includes(paymentState.status)
-        && savedPrice > 0 ? savedPrice : technicalEventPriceRubles;
-    const visible = technicalEventActive && price > 0;
-    idlePriceBadge.hidden = !visible;
-    if (visible) {
-        idlePriceValue.textContent = (
-            `${price.toLocaleString("ru-RU")} ₽`
-        );
+// Tiles are rebuilt only when the configured packages change, so the running
+// highlight is not restarted by every state message.
+function renderIdlePackages(packages) {
+    const signature = JSON.stringify(packages);
+    if (signature === renderedPackages) return;
+    renderedPackages = signature;
+    // The discount compares a package with the priciest session on offer.
+    const dearest = Math.max(...packages.map(pack => pack.price / pack.sessions), 0);
+    idlePackages.replaceChildren(...packages.map(pack => {
+        const tile = idlePackageTemplate.content.firstElementChild.cloneNode(true);
+        const discount = dearest > 0
+            ? Math.round((1 - pack.price / pack.sessions / dearest) * 100)
+            : 0;
+        const save = tile.querySelector(".idle-package-save");
+        save.hidden = discount <= 0;
+        save.textContent = `−${discount}%`;
+        tile.querySelector(".idle-package-name").textContent =
+            `${pack.sessions} ${core.sessionWord(pack.sessions)}`;
+        tile.querySelector(".idle-package-amount").textContent =
+            pack.price.toLocaleString("ru-RU");
+        tile.addEventListener("click", () => buyPackage(pack.sessions));
+        return tile;
+    }));
+    highlightedPackage = 0;
+}
+
+// One tile at a time carries the highlight, so a guest who is not looking at
+// the screen still sees the row is meant to be pressed.
+function showIdleHighlight() {
+    const tiles = [...idlePackages.children];
+    tiles.forEach((tile, index) => tile.classList.toggle(
+        "is-highlighted",
+        tiles.length > 1 && index === highlightedPackage % tiles.length,
+    ));
+}
+
+function moveIdleHighlight(active) {
+    if (!active) {
+        clearInterval(packageHighlightTimer);
+        packageHighlightTimer = null;
+        [...idlePackages.children].forEach(
+            tile => tile.classList.remove("is-highlighted"));
+        return;
     }
+    if (packageHighlightTimer === null) {
+        packageHighlightTimer = setInterval(() => {
+            highlightedPackage += 1;
+            showIdleHighlight();
+        }, PACKAGE_HIGHLIGHT_STEP_MS);
+    }
+    showIdleHighlight();
 }
 
 function syncTechnicalEvent(data = {}) {
     if (typeof data.technical_event_active === "boolean") {
         technicalEventActive = data.technical_event_active;
-        renderTechnicalEventBadge();
     }
 }
 
@@ -786,26 +829,28 @@ function syncPayment(data = {}) {
 }
 
 function renderIdlePayment() {
-    renderTechnicalEventBadge();
+    const packages = technicalEventActive && Array.isArray(paymentState.packages)
+        ? paymentState.packages : [];
     const online = previewMode || ws?.readyState === WebSocket.OPEN;
-    const buying = technicalEventActive && startLocked;
-    const status = buying ? paymentState.status
-        : technicalEventActive && paymentState.status === "succeeded" ? "succeeded" : "idle";
+    const status = technicalEventActive ? paymentState.status : "idle";
     const busy = ["creating", "pending", "waiting_for_capture"].includes(status);
     const success = status === "succeeded";
     const visible = status !== "idle" && currentState === "idle";
-    const label = busy ? status === "creating" ? "…" : "ЖДЁМ ОПЛАТУ"
-        : buying ? "ОПЛАТИТЬ ПО СБП" : "НАЧАТЬ";
-    idleStartButton.querySelector(".idle-start-label").textContent = label;
-    idleStartButton.classList.toggle("is-payment", buying);
-    idleStartButton.setAttribute("aria-busy", String(busy));
-    idlePaymentSpinner.hidden = !busy;
-    idleStartButton.disabled = !online || idleStartRequested || (startLocked && (
-        !buying || !paymentState.available || busy || status === "review"));
-    tapLockStatus.hidden = !startLocked || (buying && (paymentState.available || visible));
-    tapLockStatus.textContent = buying ? "Оплата временно недоступна" : "(ЗАБЛОКИРОВАНО)";
+    // Buying and shooting are separate: one payment at a time, and a paid
+    // allowance can still be topped up while НАЧАТЬ stays available.
+    const canBuy = online && paymentState.available && !busy && status !== "review";
+    renderIdlePackages(packages);
+    idlePackages.hidden = packages.length === 0 || currentState !== "idle";
+    [...idlePackages.children].forEach(tile => { tile.disabled = !canBuy; });
+    moveIdleHighlight(!idlePackages.hidden && canBuy);
+    const hero = idlePackages.closest(".idle-hero-wrap");
+    hero.classList.toggle("has-packages", !idlePackages.hidden);
+    idleStartButton.disabled = !online || idleStartRequested || startLocked;
+    tapLockStatus.hidden = !startLocked || (packages.length > 0 && paymentState.available);
+    tapLockStatus.textContent = technicalEventActive && !paymentState.available
+        ? "Оплата временно недоступна" : "(ЗАБЛОКИРОВАНО)";
     idlePayment.hidden = !visible;
-    idlePayment.closest(".idle-hero-wrap").classList.toggle("payment-active", visible);
+    hero.classList.toggle("payment-active", visible);
     paymentLoader.hidden = !["creating", "waiting_for_capture"].includes(status);
     paymentSuccessIcon.hidden = !success;
     paymentStartButton.hidden = !success;
@@ -1621,13 +1666,16 @@ screens.template.addEventListener("pointerdown", requestTemplateExtension);
 // --- Start session ---
 function handleIdleAction() {
     if (currentState !== "idle" || idleStartButton.disabled || previewMode) return;
-    if (startLocked) {
-        if (send({ type: "start_payment" })) {
-            paymentState = { ...paymentState, status: "creating", message: "", qr: "" };
-            renderIdlePayment();
-        }
-    } else if (send({ type: "start_session" })) {
+    if (send({ type: "start_session" })) {
         idleStartRequested = true;
+        renderIdlePayment();
+    }
+}
+
+function buyPackage(sessions) {
+    if (currentState !== "idle" || previewMode) return;
+    if (send({ type: "start_payment", sessions })) {
+        paymentState = { ...paymentState, status: "creating", message: "", qr: "" };
         renderIdlePayment();
     }
 }
@@ -1639,11 +1687,6 @@ let config = {};
 
 function applyConfig(cfg) {
     config = cfg;
-    const configuredPrice = Math.floor(Number(cfg.technical_event_price_rubles));
-    technicalEventPriceRubles = Number.isFinite(configuredPrice)
-        ? Math.max(0, configuredPrice)
-        : 0;
-    renderTechnicalEventBadge();
     if (cfg.mirror_live_view) liveView.style.transform = "scaleX(-1)";
     const rootStyle = document.documentElement.style;
     const fit = cfg.live_view_fit === "cover" ? "cover" : "contain";

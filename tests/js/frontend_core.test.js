@@ -61,6 +61,19 @@ test("Russian sheet counter uses the correct word forms", () => {
     }
 });
 
+test("Russian session counter uses the correct word forms", () => {
+    const cases = [
+        [1, "сессия"],
+        [3, "сессии"],
+        [5, "сессий"],
+        [11, "сессий"],
+        [21, "сессия"],
+    ];
+    for (const [count, sessions] of cases) {
+        assert.equal(core.sessionWord(count), sessions);
+    }
+});
+
 test("shuffle returns the same members without mutating its input", () => {
     const source = ["a", "b", "c", "d"];
     const shuffled = core.shuffledCopy(source, () => 0);

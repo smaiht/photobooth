@@ -19,6 +19,7 @@
         "camera-searching": "camera_searching",
         idle: "idle",
         "idle-locked": "idle_locked",
+        "idle-cafe": "idle_cafe",
         "payment-loading": "payment_loading",
         "payment-qr": "payment_qr",
         "payment-success": "payment_success",
@@ -65,6 +66,15 @@
         if (mod10 === 1) return "лист";
         if (mod10 >= 2 && mod10 <= 4) return "листа";
         return "листов";
+    }
+
+    function sessionWord(count) {
+        const mod100 = count % 100;
+        const mod10 = count % 10;
+        if (mod100 >= 11 && mod100 <= 14) return "сессий";
+        if (mod10 === 1) return "сессия";
+        if (mod10 >= 2 && mod10 <= 4) return "сессии";
+        return "сессий";
     }
 
     function printItemKey(item) {
@@ -204,6 +214,7 @@
         printItemKey,
         qrPresentation,
         screenForState,
+        sessionWord,
         sheetWord,
         shuffledCopy,
         viewerReleaseAction,

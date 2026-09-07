@@ -25,7 +25,6 @@
         "pose_examples_per_side",
         "live_view_warmup",
         "show_qr",
-        "technical_event_price_rubles",
         "print_enabled",
         "keep_custom_print_files"
     ],
@@ -56,8 +55,12 @@
     "_show_qr_comment": "Show a direct Yandex.Disk link to the current <event>_by_sessions folder while media uploads.",
     "technical_event_name": "Кафе",
     "_technical_event_name_comment": "When this exact event is active, the idle screen stays locked until a payment succeeds or an admin grants sessions with /unblock.",
-    "technical_event_price_rubles": 100,
-    "_technical_event_price_rubles_comment": "Whole rubles for one Cafe photo session: SBP payment amount and idle-screen badge. Set 0 to disable payments and hide the badge.",
+    "technical_event_packages": [
+        { "sessions": 1, "price_rubles": 150 },
+        { "sessions": 2, "price_rubles": 250 },
+        { "sessions": 3, "price_rubles": 300 }
+    ],
+    "_technical_event_packages_comment": "Payment tiles on the Cafe idle screen, in this order. Each entry is one SBP button that credits `sessions` photo sessions for `price_rubles` whole rubles. The tile discount is computed from the most expensive session price in this list. An empty or invalid list disables payments.",
     "print_enabled": true,
     "keep_custom_print_files": true,
     "_keep_custom_print_files_comment": "Keep Telegram source images and prepared 4x6 JPEGs under photos_print_jobs/<job_id> after printing.",
