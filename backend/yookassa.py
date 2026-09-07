@@ -22,6 +22,7 @@ MAX_CREDENTIALS_SIZE = 4096
 MAX_ARCHIVE_SIZE = 256 * 1024
 REQUEST_TIMEOUT = 10
 PAYMENT_POLL_INTERVAL_SECONDS = 2
+IDEMPOTENCE_TTL_SECONDS = 24 * 60 * 60
 API_URL = "https://api.yookassa.ru/v3"
 
 
@@ -81,6 +82,7 @@ def payment_result(response: dict, attempt: dict) -> dict:
             or response["recipient"].get("account_id") != attempt["shop_id"]
             or response["metadata"].get("request_id") != attempt["request_id"]
             or response["payment_method"].get("type") != "sbp"
+            or response.get("test") is True
             or status not in ("pending", "waiting_for_capture", "succeeded", "canceled")
             or (status == "succeeded" and response.get("paid") is not True)):
         raise ValueError("payment does not match the booth request")

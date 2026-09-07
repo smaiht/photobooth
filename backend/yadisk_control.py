@@ -17,6 +17,8 @@ from typing import Any, Awaitable, Callable
 
 import aiohttp
 
+from .ca import ca_context
+
 log = logging.getLogger(__name__)
 
 API = "https://cloud-api.yandex.net/v1/disk"
@@ -180,9 +182,11 @@ async def _connect() -> bool:
             "User-Agent": YADISK_API_USER_AGENT,
         },
         timeout=aiohttp.ClientTimeout(total=60, connect=15),
+        connector=aiohttp.TCPConnector(ssl=ca_context()),
     )
     _transfer_session = aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=120, connect=20),
+        connector=aiohttp.TCPConnector(ssl=ca_context()),
         # Match urllib updater: honour the Windows/system proxy for CDN links.
         trust_env=True,
     )

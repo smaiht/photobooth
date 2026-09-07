@@ -91,6 +91,7 @@ EVENT_HISTORY_ARCHIVE_DIRNAME = "event_history_archive"
 EVENT_HISTORY_SCHEMA_VERSION = 1
 STATUS_REPORT_INTERVAL_SECONDS = 30 * 60
 MAX_UNLOCK_SESSIONS = 1000
+PAYMENT_ALERT_SECONDS = 60
 DEFAULT_MULTI_PRINT_MAX_SHEETS = 6
 MAX_MULTI_PRINT_SHEETS = 20
 LOCAL_CLEAR_ACTIONS = (
@@ -478,7 +479,6 @@ _cafe_unlock_sessions_remaining, _cafe_payment = _load_cafe_unlock_state()
 _payment_task: asyncio.Task | None = None
 _payment_notice = ""
 _payment_alert_until = 0.0
-PAYMENT_ALERT_SECONDS = 60
 
 
 def _set_cafe_unlock_sessions(remaining: int) -> None:
@@ -581,6 +581,8 @@ def _payment_status_line() -> str:
     line = _PAYMENT_STATUS_LABELS.get(status, status)
     if _cafe_payment.get("id"):
         line += f" · {_cafe_payment['id']}"
+    elif _cafe_payment.get("request_id"):
+        line += f" · запрос {_cafe_payment['request_id']}"
     return line
 
 
@@ -610,9 +612,9 @@ def _ensure_payment_task() -> None:
 
 
 def _fail_cafe_payment(exc: Exception) -> None:
-    """Ask for the admin once; a created payment stays until the admin closes it."""
+    """An error does not prove that an unanswered POST created no payment."""
     global _payment_notice, _payment_alert_until
-    payment = {**_cafe_payment, "status": "review"} if _cafe_payment.get("id") else None
+    payment = {**_cafe_payment, "status": "review"}
     try:
         _save_cafe_payment(payment)
     except OSError as save_exc:
@@ -621,8 +623,8 @@ def _fail_cafe_payment(exc: Exception) -> None:
         return
     _payment_notice = ""
     _payment_alert_until = time.monotonic() + PAYMENT_ALERT_SECONDS
-    log.error("Cafe payment failed (%s: %s); kept for the admin: %s",
-              type(exc).__name__, exc, bool(payment))
+    log.error("Cafe payment failed (%s: %s); kept for the admin: request_id=%s id=%s",
+              type(exc).__name__, exc, payment.get("request_id"), payment.get("id"))
 
 
 async def _start_cafe_payment() -> None:
@@ -644,6 +646,7 @@ async def _start_cafe_payment() -> None:
         request_id = str(uuid.uuid4())
         payment = {
             "request_id": request_id,
+            "created_at": time.time(),
             "shop_id": app.state.yookassa_credentials["SHOPID"],
             "event": _active_event_name(),
             "status": "creating",
@@ -687,10 +690,20 @@ async def _poll_cafe_payment() -> None:
     async with yookassa.payment_session(credentials) as session:
         while _payment_in_flight():
             attempts += 1
+            attempt = _cafe_payment
             try:
-                response = await yookassa.request_payment(session, _cafe_payment)
-                result = yookassa.payment_result(response, _cafe_payment)
-                payment = {**_cafe_payment, **result}
+                if credentials["SHOPID"] != attempt["shop_id"]:
+                    raise ValueError("payment merchant changed")
+                if not attempt.get("id"):
+                    created_at = attempt.get("created_at")
+                    if (type(created_at) not in (int, float)
+                            or not 0 <= time.time() - created_at < yookassa.IDEMPOTENCE_TTL_SECONDS):
+                        raise ValueError("cannot safely repeat an expired or undated payment request")
+                response = await yookassa.request_payment(session, attempt)
+                if _cafe_payment is not attempt:
+                    continue
+                result = yookassa.payment_result(response, attempt)
+                payment = {**attempt, **result}
                 remaining = _cafe_unlock_sessions_remaining
                 if result["status"] == "succeeded":
                     if not _is_technical_event() or payment["event"] != _active_event_name():
@@ -723,6 +736,8 @@ async def _poll_cafe_payment() -> None:
                     await broadcast(_state_message(STATE))
             except (yookassa.PaymentAPIError, aiohttp.ClientError, TimeoutError,
                     OSError, ValueError, KeyError, TypeError) as exc:
+                if _cafe_payment is not attempt:
+                    continue
                 if isinstance(exc, (aiohttp.ClientError, TimeoutError, OSError)) or (
                         isinstance(exc, yookassa.PaymentAPIError)
                         and (exc.status == 429 or exc.status >= 500)):
@@ -2976,7 +2991,7 @@ async def handle_disk_command(command: dict) -> dict:
         try:
             # Granting sessions by hand also resolves any payment except one the
             # guest can still pay, so nothing can block the screen forever.
-            keep = _payment_in_flight() and _cafe_payment.get("id")
+            keep = _payment_in_flight()
             _save_cafe_payment(_cafe_payment if keep else None, remaining)
         except (OSError, ValueError) as exc:
             return {

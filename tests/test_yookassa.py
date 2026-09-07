@@ -1,6 +1,9 @@
+import asyncio
+import copy
 import io
 import json
 import tempfile
+import time
 import unittest
 import urllib.request
 import zipfile
@@ -79,6 +82,7 @@ class CredentialsTests(unittest.TestCase):
 def _attempt(**overrides) -> dict:
     attempt = {
         "request_id": "1e4f9a1c-0000-4000-8000-000000000001",
+        "created_at": time.time(),
         "shop_id": "shop-1",
         "event": "Кафе",
         "status": "creating",
@@ -134,6 +138,7 @@ class PaymentResultTests(unittest.TestCase):
             "another request": _response(metadata={"request_id": "other"}),
             "another payment id": _response(id="2f0a1b2c-000f-5000-a000-000000000010"),
             "unpaid success": _response(status="succeeded", paid=False),
+            "test payment": _response(status="succeeded", paid=True, test=True),
             "no qr": _response(confirmation={"type": "qr"}),
             "foreign qr": _response(
                 confirmation={"type": "qr", "confirmation_data": "https://evil.example/qr"}),
@@ -162,7 +167,12 @@ class CafePaymentTests(unittest.IsolatedAsyncioTestCase):
             patch.object(main, "CONFIG", {
                 "technical_event_name": "Кафе",
                 "yadisk_folder": "Кафе",
+                "technical_event_price_rubles": int(float(self.payment["request"]["amount"]["value"])),
             }),
+            patch.dict(main.app.state._state, {"yookassa_credentials": {
+                "SHOPID": "shop-1", "SHOPTOKEN": "secret"}}),
+            patch.object(main, "STATE", "idle"),
+            patch.object(main, "_session_running", False),
             patch.object(main, "_cafe_payment", payment or self.payment),
             patch.object(main, "_cafe_unlock_sessions_remaining", remaining),
             patch.object(main, "_payment_notice", ""),
@@ -239,14 +249,14 @@ class CafePaymentTests(unittest.IsolatedAsyncioTestCase):
             (self.root / "cafe_unlock_state.json").read_text(encoding="utf-8"))
         self.assertEqual(persisted, {"remaining_sessions": 0})
 
-    async def test_rejected_response_without_a_payment_is_forgotten(self):
-        # The POST was refused, so nothing can be paid: ask for the admin and
-        # let the next guest start a fresh payment.
+    async def test_bad_creation_response_keeps_the_request_for_review(self):
+        # Even without an ID, a bad response does not prove the POST was refused.
         remaining, payment, state = await self._poll(
             payment=_attempt(), response=_response(recipient={"account_id": "shop-2"}))
 
         self.assertEqual(remaining, 0)
-        self.assertIsNone(payment)
+        self.assertEqual(payment["status"], "review")
+        self.assertEqual(payment["request_id"], _attempt()["request_id"])
         self.assertEqual(state["status"], "review")
 
     async def test_foreign_payment_never_credits_a_session(self):
@@ -258,6 +268,146 @@ class CafePaymentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payment["status"], "review")
         self.assertNotIn("credited", payment)
         self.assertEqual(state["status"], "review")
+
+    async def test_double_tap_saves_one_request_with_the_configured_price(self):
+        from backend import main
+        with ExitStack() as stack:
+            for context in self._booth():
+                stack.enter_context(context)
+            stack.enter_context(patch.object(main, "_cafe_payment", None))
+            stack.enter_context(patch.object(main, "_ensure_payment_task"))
+            configured_price = 237
+            main.CONFIG["technical_event_price_rubles"] = configured_price
+            await main._start_cafe_payment()
+            saved = copy.deepcopy(main._cafe_payment)
+            main.CONFIG["technical_event_price_rubles"] += 50
+            await main._start_cafe_payment()
+
+            self.assertEqual(main._cafe_payment, saved)
+            self.assertEqual(saved["request"]["amount"], {
+                "value": f"{configured_price}.00", "currency": "RUB"})
+            self.assertEqual(main._load_cafe_unlock_state(), (0, saved))
+
+    async def test_unblock_during_post_keeps_the_request_and_payment_adds_one(self):
+        from backend import main
+        request = _attempt()
+        with ExitStack() as stack:
+            for context in self._booth(payment=request):
+                stack.enter_context(context)
+
+            async def respond(session, attempt):
+                result = await main.handle_disk_command({
+                    "command_id": "a" * 32,
+                    "command": "unblock", "data": {"sessions": 3}})
+                self.assertEqual(result["status"], "ok")
+                self.assertIs(main._cafe_payment, attempt)
+                self.assertEqual(main._load_cafe_unlock_state(), (3, request))
+                return _response(status="succeeded", paid=True)
+
+            stack.enter_context(patch.object(yookassa, "request_payment", side_effect=respond))
+            await main._poll_cafe_payment()
+            self.assertEqual(main._cafe_unlock_sessions_remaining, 4)
+            self.assertTrue(main._cafe_payment["credited"])
+
+    async def test_lost_create_reply_reboots_and_repeats_the_saved_post(self):
+        from backend import main
+        with ExitStack() as stack:
+            for context in self._booth(payment=_attempt()):
+                stack.enter_context(context)
+            main._save_cafe_payment(main._cafe_payment)
+            original = copy.deepcopy(main._cafe_payment)
+            with patch.object(yookassa, "request_payment", side_effect=TimeoutError), \
+                    patch.object(main.asyncio, "sleep", side_effect=asyncio.CancelledError):
+                with self.assertRaises(asyncio.CancelledError):
+                    await main._poll_cafe_payment()
+
+            main._cafe_unlock_sessions_remaining, main._cafe_payment = main._load_cafe_unlock_state()
+            main.CONFIG["technical_event_price_rubles"] += 50
+            with patch.object(yookassa, "request_payment", AsyncMock(
+                    return_value=_response(status="succeeded", paid=True))) as request:
+                await main._poll_cafe_payment()
+
+            self.assertEqual(request.await_args.args[1], original)
+            self.assertEqual(main._cafe_unlock_sessions_remaining, 1)
+
+    async def test_unconfirmed_old_or_undated_post_is_not_recreated(self):
+        from backend import main
+        expired = time.time() - yookassa.IDEMPOTENCE_TTL_SECONDS - 1
+        for created_at in (expired, None):
+            with self.subTest(created_at=created_at), ExitStack() as stack:
+                for context in self._booth(payment=_attempt(created_at=created_at)):
+                    stack.enter_context(context)
+                request = stack.enter_context(patch.object(yookassa, "request_payment", AsyncMock()))
+                await main._poll_cafe_payment()
+                request.assert_not_awaited()
+                self.assertEqual(main._cafe_unlock_sessions_remaining, 0)
+                self.assertEqual(main._cafe_payment["status"], "review")
+
+    async def test_failed_credit_write_retries_without_unlocking_twice(self):
+        from backend import main
+        with ExitStack() as stack:
+            for context in self._booth():
+                stack.enter_context(context)
+            main._save_cafe_payment(main._cafe_payment)
+            write = main._write_cafe_unlock_sessions
+            writes = 0
+
+            def save(remaining, payment):
+                nonlocal writes
+                writes += 1
+                if writes == 1:
+                    raise OSError("disk full")
+                self.assertTrue(main._start_locked())
+                self.assertEqual(main._load_cafe_unlock_state()[0], 0)
+                write(remaining, payment)
+
+            stack.enter_context(patch.object(main, "_write_cafe_unlock_sessions", side_effect=save))
+            stack.enter_context(patch.object(yookassa, "request_payment", AsyncMock(
+                return_value=_response(status="succeeded", paid=True))))
+            await main._poll_cafe_payment()
+            self.assertEqual(writes, 2)
+            self.assertEqual(main._load_cafe_unlock_state()[0], 1)
+            self.assertEqual(main._payment_state()["status"], "succeeded")
+
+    async def test_late_response_cannot_be_applied_to_a_replaced_request(self):
+        from backend import main
+        with ExitStack() as stack:
+            for context in self._booth():
+                stack.enter_context(context)
+
+            async def respond(session, attempt):
+                main._save_cafe_payment(None)
+                return _response(status="succeeded", paid=True)
+
+            stack.enter_context(patch.object(yookassa, "request_payment", side_effect=respond))
+            await main._poll_cafe_payment()
+            self.assertEqual(main._cafe_unlock_sessions_remaining, 0)
+            self.assertIsNone(main._cafe_payment)
+
+    async def test_crash_after_credit_file_replace_does_not_credit_again(self):
+        from backend import main
+        with ExitStack() as stack:
+            for context in self._booth():
+                stack.enter_context(context)
+            write = main._write_cafe_unlock_sessions
+
+            def write_then_crash(remaining, payment):
+                write(remaining, payment)
+                raise asyncio.CancelledError
+
+            stack.enter_context(patch.object(
+                main, "_write_cafe_unlock_sessions", side_effect=write_then_crash))
+            request = stack.enter_context(patch.object(yookassa, "request_payment", AsyncMock(
+                return_value=_response(status="succeeded", paid=True))))
+            with self.assertRaises(asyncio.CancelledError):
+                await main._poll_cafe_payment()
+            self.assertEqual(main._cafe_unlock_sessions_remaining, 0)
+
+            main._cafe_unlock_sessions_remaining, main._cafe_payment = main._load_cafe_unlock_state()
+            await main._poll_cafe_payment()
+            request.assert_awaited_once()
+            self.assertEqual(main._cafe_unlock_sessions_remaining, 1)
+            self.assertTrue(main._cafe_payment["credited"])
 
 
 if __name__ == "__main__":

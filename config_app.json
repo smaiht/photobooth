@@ -55,7 +55,7 @@
     "show_qr": true,
     "_show_qr_comment": "Show a direct Yandex.Disk link to the current <event>_by_sessions folder while media uploads.",
     "technical_event_name": "Кафе",
-    "_technical_event_name_comment": "When this exact event is active, the idle screen stays locked until an admin grants sessions with /unblock.",
+    "_technical_event_name_comment": "When this exact event is active, the idle screen stays locked until a payment succeeds or an admin grants sessions with /unblock.",
     "technical_event_price_rubles": 100,
     "_technical_event_price_rubles_comment": "Whole rubles for one Cafe photo session: SBP payment amount and idle-screen badge. Set 0 to disable payments and hide the badge.",
     "print_enabled": true,

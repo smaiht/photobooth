@@ -496,11 +496,14 @@ function renderDoneTitle(data = {}) {
 }
 
 function renderTechnicalEventBadge() {
-    const visible = technicalEventActive && technicalEventPriceRubles > 0;
+    const savedPrice = Number(paymentState.amount);
+    const price = ["creating", "pending", "waiting_for_capture"].includes(paymentState.status)
+        && savedPrice > 0 ? savedPrice : technicalEventPriceRubles;
+    const visible = technicalEventActive && price > 0;
     idlePriceBadge.hidden = !visible;
     if (visible) {
         idlePriceValue.textContent = (
-            `${technicalEventPriceRubles.toLocaleString("ru-RU")} ₽`
+            `${price.toLocaleString("ru-RU")} ₽`
         );
     }
 }
@@ -783,6 +786,7 @@ function syncPayment(data = {}) {
 }
 
 function renderIdlePayment() {
+    renderTechnicalEventBadge();
     const online = previewMode || ws?.readyState === WebSocket.OPEN;
     const buying = technicalEventActive && startLocked;
     const status = buying ? paymentState.status
