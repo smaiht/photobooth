@@ -55,8 +55,15 @@ const IDLE_EXPLAINER_KEY = "photobooth.idleExplainer";
 let idleExplainerEnabled = localStorage.getItem(IDLE_EXPLAINER_KEY) !== "off";
 let idleExplainerActive = false;
 
-// Play only on the idle screen; pause everywhere else so decoding stops during
-// a photo session. Rewind on entry so every guest sees it from the beginning.
+/*
+ * The explainer runs its own timeline inside the iframe: it plays only while the
+ * switch is on and the idle screen is up, rewound on every entry so a guest
+ * always sees the story from the start, and stopped otherwise so the kiosk is
+ * not animating around the clock. The last applied intent is remembered, because
+ * payment updates call this often and each seek(0) would restart the story.
+ */
+let idleExplainerPlaying = null;
+
 function refreshIdleExplainer() {
     if (btnIdleExplainer) {
         btnIdleExplainer.textContent = idleExplainerEnabled
@@ -65,13 +72,17 @@ function refreshIdleExplainer() {
     }
     if (!idleExplainer) return;
     idleExplainer.hidden = !idleExplainerEnabled || !idlePayment.hidden;
-    if (!idleExplainer.hidden && idleExplainerActive) {
-        if (idleExplainer.paused) {
-            idleExplainer.currentTime = 0;
-            idleExplainer.play().catch(() => {});
-        }
+    const timeline = idleExplainer.contentWindow
+        && idleExplainer.contentWindow.idleTimeline;
+    if (!timeline) return;
+    const play = !idleExplainer.hidden && idleExplainerActive;
+    if (play === idleExplainerPlaying) return;
+    idleExplainerPlaying = play;
+    if (play) {
+        timeline.seek(0);
+        timeline.play();
     } else {
-        idleExplainer.pause();
+        timeline.pause();
     }
 }
 
@@ -89,9 +100,9 @@ function toggleIdleExplainer() {
         : "Объяснялка выключена");
 }
 
-// The first state can arrive before the video is ready, so apply it when loaded.
+// The first state can arrive before the iframe is ready, so apply it on load.
 if (idleExplainer) {
-    idleExplainer.addEventListener("loadeddata", refreshIdleExplainer);
+    idleExplainer.addEventListener("load", refreshIdleExplainer);
 }
 refreshIdleExplainer();
 const idlePoseRows = Array.from(document.querySelectorAll(".idle-pose-row"));
