@@ -32,6 +32,15 @@
         done: "done",
     });
 
+    // A 2.4 GHz presenter is a plain HID keyboard. Next/prev send the Page keys
+    // on most remotes; the arrows are the fallback for the ones that don't.
+    const PRESENTER_DELTA = Object.freeze({
+        PageDown: 1,
+        ArrowRight: 1,
+        PageUp: -1,
+        ArrowLeft: -1,
+    });
+
     function screenForState(state) {
         return SCREEN_BY_STATE[state] ?? null;
     }
@@ -45,6 +54,10 @@
             .replace(/^\/+|\/+$/g, "")
             .replace(/[\s_]+/g, "-");
         return PREVIEW_ROUTES[route] ?? null;
+    }
+
+    function presenterDelta(code) {
+        return PRESENTER_DELTA[code] ?? 0;
     }
 
     function shuffledCopy(items, random = Math.random) {
@@ -210,6 +223,7 @@
         nextBasketCopies,
         pointCentroid,
         pointSpread,
+        presenterDelta,
         previewRoute,
         printItemKey,
         qrPresentation,

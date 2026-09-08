@@ -692,6 +692,9 @@ function send(msg) {
 let audioCtx = null;
 function beep(freq, duration) {
     if (!audioCtx) audioCtx = new AudioContext();
+    // Until someone touches the screen the context stays suspended. A presenter
+    // keypress counts as user activation, so its first beep is audible too.
+    if (audioCtx.state === "suspended") audioCtx.resume();
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.frequency.value = freq;
@@ -2641,4 +2644,37 @@ window.addEventListener("keydown", e => {
     } else {
         closeServiceModal();
     }
+});
+
+// --- Presenter remote ---
+// Guests pay whenever they walk up, so the operator credits them from a 2.4 GHz
+// presenter on any screen, mid-session included. The sound is the point: a rising
+// pair means credited, a falling pair means written off, one low tone means the
+// booth refused — the operator hears the result without walking over to look.
+let presenterQueue = Promise.resolve();
+
+function presenterBeeps(delta, ok) {
+    if (!ok) {
+        beep(200, 400);
+        return;
+    }
+    // Clear of the countdown ticks (440-770) and the flash (880), so a credit
+    // mid-session never reads as one of them.
+    const [first, second] = delta > 0 ? [1046, 1568] : [660, 330];
+    beep(first, 90);
+    setTimeout(() => beep(second, 120), 110);
+}
+
+window.addEventListener("keydown", e => {
+    const delta = core.presenterDelta(e.code);
+    // e.repeat: a held button must credit once. Inputs keep their own arrows, so
+    // editing the config in the service menu never moves the allowance.
+    if (!delta || e.repeat || previewMode) return;
+    if (e.target.closest?.("input, textarea")) return;
+    e.preventDefault();
+    // Presses queue instead of racing: a quick +1 +1 +1 credits all three.
+    presenterQueue = presenterQueue.then(async () => {
+        const ok = await runLocalServiceAction("unblock", { sessions: delta });
+        presenterBeeps(delta, ok);
+    });
 });
