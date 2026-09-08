@@ -28,8 +28,8 @@ def _xml(**fields):
 
 
 def _b64_sha256(text):
-    digest = hashlib.sha256(text.encode()).hexdigest().encode()
-    return base64.b64encode(digest).decode()
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest().encode("ascii")
+    return base64.b64encode(digest).decode("ascii")
 
 
 class Modem:
@@ -133,7 +133,7 @@ class Modem:
             for number, part in enumerate(parts, 1):
                 # Stable IDs let the VPS recognize retries, including after a restart.
                 notice_id = hashlib.sha256(
-                    f"{identity}:{number}".encode()).hexdigest()[:32]
+                    f"{identity}:{number}".encode("utf-8")).hexdigest()[:32]
                 title = "СМС на модем фотобудки"
                 if len(parts) > 1:
                     title += f" ({number}/{len(parts)})"
