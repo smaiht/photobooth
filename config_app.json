@@ -26,7 +26,8 @@
         "live_view_warmup",
         "show_qr",
         "print_enabled",
-        "keep_custom_print_files"
+        "keep_custom_print_files",
+        "sms_enabled"
     ],
     "_admin_editable_fields_comment": "Only these config_app fields may be changed by direct Telegram/VK admin commands. Value type follows the current field; _<field>_options is enforced when present.",
     "default_template": "grid",
@@ -70,6 +71,8 @@
     "_printer_name_strips_comment": "Optional second queue with DNP 2inch cut enabled for strips.",
     "print_dpi": 600,
     "_print_dpi_comment": "DPI metadata written into composed JPEGs. Paper, quality, borderless mode and copies come from the saved Windows queue defaults.",
+    "sms_enabled": true,
+    "_sms_comment": "Enable background BROVI SMS forwarding via Disk and VPS to Telegram/VK admins. Modem constants are at the top of backend/sms.py.",
     "yadisk_folder": "Кафе",
     "_yadisk_folder_comment": "Event folder where media files are uploaded. Session notifications use yadisk_control_folder/to_vps.",
     "yadisk_updates_folder": "photobooth_system/updates",

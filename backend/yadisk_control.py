@@ -399,15 +399,21 @@ async def publish_booth_notice(
     *,
     document: str | None = None,
     document_caption: str | None = None,
+    notice_id: str | None = None,
 ) -> str:
     """Publish an unsolicited administrator notice into ``control/to_vps``.
 
     The booth holds no Telegram/VK credentials, so the VPS delivers this to the
     administrator. There is no ``reply_target``: the message is not an answer to
     any command, so the VPS uses its own configured administrator address.
+
+    An explicit notice_id gives a retry a stable filename. These one-off
+    messages are exempt from pruning of automatically dated status reports.
     """
     if not isinstance(kind, str) or not BOOTH_NOTICE_KIND_RE.fullmatch(kind):
         raise ValueError("invalid notice kind")
+    if notice_id is not None and not COMMAND_ID_RE.fullmatch(notice_id):
+        raise ValueError("invalid notice_id")
     body = str(text or "")
     if len(body) > MAX_BOOTH_NOTICE_TEXT:
         body = body[:MAX_BOOTH_NOTICE_TEXT - 3] + "..."
@@ -429,7 +435,7 @@ async def publish_booth_notice(
     notice = {
         "schema_version": SCHEMA_VERSION,
         "message_type": "booth_notice",
-        "notice_id": uuid.uuid4().hex,
+        "notice_id": notice_id or uuid.uuid4().hex,
         "kind": kind,
         "title": str(title or ""),
         "text": body,
@@ -440,14 +446,17 @@ async def publish_booth_notice(
         notice["document_caption"] = document_caption
     payload = json.dumps(
         notice, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    remote_path = (
-        f"{_root}/to_vps/notice_"
-        f"{created_at.strftime('%Y%m%dT%H%M%SZ')}_{notice['notice_id']}.json"
-    )
-    try:
-        await _prune_booth_notices()
-    except Exception as exc:
-        log.warning("Control: notice pruning failed: %s", exc)
+    if notice_id is not None:
+        remote_path = f"{_root}/to_vps/notice_{notice_id}.json"
+    else:
+        remote_path = (
+            f"{_root}/to_vps/notice_"
+            f"{created_at.strftime('%Y%m%dT%H%M%SZ')}_{notice['notice_id']}.json"
+        )
+        try:
+            await _prune_booth_notices()
+        except Exception as exc:
+            log.warning("Control: notice pruning failed: %s", exc)
     await _upload_bytes(payload, remote_path)
     return remote_path
 

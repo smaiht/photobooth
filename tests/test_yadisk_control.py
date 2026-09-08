@@ -1741,6 +1741,7 @@ class BoothNoticeTests(unittest.IsolatedAsyncioTestCase):
         # Session manifests and command responses must never be touched.
         items.append({"name": "session_x.json", "type": "file"})
         items.append({"name": f"response_{'b' * 32}.json", "type": "file"})
+        items.append({"name": f"notice_{'c' * 32}.json", "type": "file"})
         deleted = []
 
         class Response:

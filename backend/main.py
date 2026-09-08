@@ -56,7 +56,7 @@ from .composer import (
 from .text_layer import date_values
 from .log import read_log_snapshot
 from .video import VideoRecorder
-from . import system_service, yadisk_cloud, yadisk_control, yookassa
+from . import sms, system_service, yadisk_cloud, yadisk_control, yookassa
 
 log = logging.getLogger(__name__)
 
@@ -2493,6 +2493,7 @@ async def _status_report_text() -> str:
     pending_sessions = yadisk_cloud.pending_count()
     system_lines = [
         f"☁️ СИСТЕМА: {STATE}",
+        f"• СМС: {sms.status}",
         (
             f"⚠️ Яндекс.Диск: незавершённых сессий — {pending_sessions}"
             if pending_sessions
@@ -3328,6 +3329,7 @@ async def startup():
     _service_tasks.add(asyncio.create_task(_control_service()))
     _service_tasks.add(asyncio.create_task(_yadisk_service()))
     _service_tasks.add(asyncio.create_task(_periodic_status_service()))
+    _service_tasks.add(asyncio.create_task(sms.watch(CONFIG)))
 
 
 @app.on_event("shutdown")
