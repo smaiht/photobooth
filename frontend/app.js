@@ -2018,8 +2018,8 @@ function updateServiceLabels() {
         ? `Шаблон: ${currentTemplate}`
         : "Шаблон";
     btnBoothUnblock.textContent = serviceConfig
-        ? `Добавить сессии (${serviceConfig.unlock_sessions_remaining})`
-        : "Добавить сессии";
+        ? `Сессии (${serviceConfig.unlock_sessions_remaining})`
+        : "Сессии";
 }
 
 function showServiceHome() {
@@ -2046,12 +2046,14 @@ function showConfigPage() {
     serviceModal.querySelector(".service-dialog").scrollTop = 0;
 }
 
-function setUnlockSessions(value) {
+function setUnlockSessions(value, direction = 1) {
     const number = Number(value);
-    serviceUnlockInput.value = Math.min(
-        1000,
-        Math.max(1, Number.isFinite(number) ? Math.round(number) : 1),
-    );
+    const rounded = Number.isFinite(number) ? Math.round(number) : direction;
+    // Zero belongs to the separate «Обнулить сессии» button, so stepping
+    // through it keeps the direction instead of wiping the whole allowance.
+    const sessions = Math.min(1000, Math.max(-1000, rounded || direction));
+    serviceUnlockInput.value = sessions;
+    serviceUnlockSave.textContent = sessions < 0 ? "Списать" : "Добавить";
 }
 
 function showUnlockPage() {
@@ -2064,7 +2066,7 @@ function showUnlockPage() {
     serviceEditorPage.hidden = true;
     serviceUnlockPage.hidden = false;
     serviceBack.hidden = false;
-    serviceTitle.textContent = "ДОБАВИТЬ СЕССИИ";
+    serviceTitle.textContent = "СЕССИИ";
     serviceModal.querySelector(".service-dialog").scrollTop = 0;
 }
 
@@ -2558,10 +2560,10 @@ serviceEditorInput?.addEventListener("keydown", e => {
 });
 
 serviceUnlockMinus?.addEventListener("click", () => {
-    setUnlockSessions(Number(serviceUnlockInput.value) - 1);
+    setUnlockSessions(Number(serviceUnlockInput.value) - 1, -1);
 });
 serviceUnlockPlus?.addEventListener("click", () => {
-    setUnlockSessions(Number(serviceUnlockInput.value) + 1);
+    setUnlockSessions(Number(serviceUnlockInput.value) + 1, 1);
 });
 serviceUnlockInput?.addEventListener("change", () => {
     setUnlockSessions(serviceUnlockInput.value);
@@ -2573,8 +2575,9 @@ serviceUnlockPresets?.addEventListener("click", e => {
 serviceUnlockCancel?.addEventListener("click", showServiceHome);
 serviceUnlockSave?.addEventListener("click", async () => {
     const sessions = Number(serviceUnlockInput.value);
-    if (!Number.isInteger(sessions) || sessions < 1 || sessions > 1000) {
-        showServiceToast("Нужно целое число от 1 до 1000");
+    if (!Number.isInteger(sessions) || !sessions
+            || sessions < -1000 || sessions > 1000) {
+        showServiceToast("Нужно целое число от -1000 до 1000, кроме нуля");
         return;
     }
     if (await runLocalServiceAction("unblock", { sessions })) {

@@ -83,7 +83,7 @@ TEMPLATE_OPTIONS: list[dict] = []
 CONFIG = load_event_config()
 
 TEST_COUNTDOWN_SECONDS = 5 # 2
-TEST_COUNTDOWN_SOUND_SECONDS = 3 # 1
+TEST_COUNTDOWN_SOUND_SECONDS = 0  # the test countdown stays silent
 
 CAFE_UNLOCK_STATE_FILENAME = "cafe_unlock_state.json"
 EVENT_HISTORY_FILENAME = "event_history.json"
@@ -1416,8 +1416,7 @@ async def _run_session(test_session: bool = False):
     pre_countdown_delay, countdown_seconds, countdown_sound_seconds = _countdown_timing()
     if test_session:
         countdown_seconds = TEST_COUNTDOWN_SECONDS
-        countdown_sound_seconds = TEST_COUNTDOWN_SOUND_SECONDS
-        countdown_sound_seconds = min(countdown_sound_seconds, countdown_seconds)
+        countdown_sound_seconds = min(TEST_COUNTDOWN_SOUND_SECONDS, countdown_seconds)
 
     # Drop the previous session frame before the frontend reconnects to /live.
     _clear_live_view()
@@ -3019,13 +3018,18 @@ async def handle_disk_command(command: dict) -> dict:
     if cmd == "unblock":
         sessions = data.get("sessions") if isinstance(data, dict) else None
         if (type(sessions) is not int
-                or not 0 <= sessions <= MAX_UNLOCK_SESSIONS):
+                or not -MAX_UNLOCK_SESSIONS <= sessions <= MAX_UNLOCK_SESSIONS):
             return {
                 "status": "error",
-                "message": "sessions должно быть целым числом от 0 до 1000",
+                "message": (
+                    f"sessions должно быть целым числом от -{MAX_UNLOCK_SESSIONS} "
+                    f"до {MAX_UNLOCK_SESSIONS}"
+                ),
             }
         previous_sessions = _cafe_unlock_sessions_remaining
-        remaining = previous_sessions + sessions if sessions else 0
+        # A negative amount writes sessions off; more than the current remainder
+        # simply relocks the booth instead of storing a negative allowance.
+        remaining = max(0, previous_sessions + sessions) if sessions else 0
         if remaining > MAX_UNLOCK_SESSIONS:
             return {
                 "status": "error",
@@ -3055,12 +3059,16 @@ async def handle_disk_command(command: dict) -> dict:
             })
         if STATE == "idle":
             await broadcast(_state_message(STATE))
+        if sessions > 0:
+            message = f"Добавлено фотосессий: {sessions}. Остаток: {remaining}"
+        elif sessions:
+            message = (f"Списано фотосессий: {previous_sessions - remaining}. "
+                       f"Остаток: {remaining}")
+        else:
+            message = "Остаток разрешённых фотосессий: 0"
         return {
             "status": "ok",
-            "message": (
-                f"Добавлено фотосессий: {sessions}. Остаток: {remaining}"
-                if sessions else "Остаток разрешённых фотосессий: 0"
-            ),
+            "message": message,
             "start_locked": _start_locked(),
             "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
         }

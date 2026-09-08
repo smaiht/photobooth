@@ -1205,8 +1205,39 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(main._cafe_unlock_sessions_remaining, remaining)
             self.assertEqual(main._load_cafe_unlock_sessions(), remaining)
 
+    async def test_unblock_writes_off_sessions_and_never_goes_below_zero(self):
+        config = {
+            "technical_event_name": "Кафе",
+            "yadisk_folder": "Кафе",
+        }
+        for sessions, expected in ((-2, 3), (-5, 0), (-50, 0)):
+            with self.subTest(sessions=sessions), \
+                 tempfile.TemporaryDirectory() as tmpdir, \
+                 patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+                 patch.object(main, "CONFIG", config), \
+                 patch.object(main, "STATE", "idle"), \
+                 patch.object(main, "_cafe_unlock_sessions_remaining", 5), \
+                 patch("backend.main.yadisk_cloud.current_event_folder",
+                       return_value="Кафе"), \
+                 patch("backend.main.broadcast", new_callable=AsyncMock):
+                result = await main.handle_disk_command({
+                    "command_id": "a" * 32,
+                    "command": "unblock",
+                    "data": {"sessions": sessions},
+                })
+                persisted = json.loads(
+                    (Path(tmpdir) / "cafe_unlock_state.json").read_text(
+                        encoding="utf-8"))
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["unlock_sessions_remaining"], expected)
+            self.assertEqual(result["start_locked"], expected == 0)
+            self.assertEqual(persisted, {"remaining_sessions": expected})
+            self.assertIn(f"Списано фотосессий: {5 - expected}",
+                          result["message"])
+
     async def test_unblock_rejects_non_integer_or_out_of_range_sessions(self):
-        invalid_values = (None, True, 1.5, "2", -1, 1001)
+        invalid_values = (None, True, 1.5, "2", -1001, 1001)
         with patch("backend.main._write_cafe_unlock_sessions") as save:
             for sessions in invalid_values:
                 with self.subTest(sessions=sessions):

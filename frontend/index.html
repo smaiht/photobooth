@@ -282,8 +282,8 @@
                             <button id="btn-config-camera" class="service-btn" type="button">Конфиг камеры</button>
                             <button id="btn-template-pack" class="service-btn" type="button">Шаблон</button>
                             <button id="btn-idle-explainer" class="service-btn" type="button">Объяснялка: ВКЛ</button>
-                            <button id="btn-booth-unblock" class="service-btn service-btn-half" type="button">Добавить сессии</button>
-                            <button id="btn-booth-block" class="service-btn service-btn-danger service-btn-half" type="button">Блокировать сессии</button>
+                            <button id="btn-booth-unblock" class="service-btn service-btn-half" type="button">Сессии</button>
+                            <button id="btn-booth-block" class="service-btn service-btn-danger service-btn-half" type="button">Обнулить сессии</button>
                         </div>
                     </section>
 
@@ -326,10 +326,11 @@
                     <div id="service-unlock-current" class="service-unlock-current"></div>
                     <div class="service-number-control">
                         <button id="service-unlock-minus" class="service-btn service-number-button" type="button" aria-label="Уменьшить">−</button>
-                        <input id="service-unlock-input" type="number" inputmode="numeric" min="1" max="1000" step="1" value="1">
+                        <input id="service-unlock-input" type="number" inputmode="numeric" min="-1000" max="1000" step="1" value="1">
                         <button id="service-unlock-plus" class="service-btn service-number-button" type="button" aria-label="Увеличить">+</button>
                     </div>
                     <div id="service-unlock-presets" class="service-unlock-presets">
+                        <button class="service-btn" type="button" data-sessions="-1">−1</button>
                         <button class="service-btn" type="button" data-sessions="1">1</button>
                         <button class="service-btn" type="button" data-sessions="10">10</button>
                         <button class="service-btn" type="button" data-sessions="100">100</button>
