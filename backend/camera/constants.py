@@ -236,6 +236,11 @@ kEdsPropertyEvent_All = 0x00000100
 kEdsPropertyEvent_PropertyChanged = 0x00000101
 kEdsPropertyEvent_PropertyDescChanged = 0x00000102
 
+# --- Lens Barrel Status ---
+kEdsPropID_LensBarrelStatus = 0x00000605
+kDcLensBarrelStateInner = 0
+kDcLensBarrelStateOuter = 1
+
 CAPTURE_ERROR_NAMES = {
     1: "shooting_failure",
     2: "lens_closed",
@@ -245,6 +250,9 @@ CAPTURE_ERROR_NAMES = {
     6: "no_card",
     7: "card_error_or_full",
     8: "card_write_protected",
+    0x8D0F: "retracted_lens",
+    36111: "retracted_lens",
+    0x8D0B: "no_lens",
 }
 
 

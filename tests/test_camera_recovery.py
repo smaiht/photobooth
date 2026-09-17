@@ -919,6 +919,115 @@ class SessionDisconnectTests(unittest.IsolatedAsyncioTestCase):
         upload.assert_not_awaited()
         print_job.assert_not_awaited()
 
+    def test_capture_error_set_on_retracted_lens_during_capture(self):
+        camera = edsdk.Camera("fake-edsdk.dll")
+        camera._connected = True
+        camera._camera = ctypes.c_void_p(123)
+        camera._photo_tag = "P1"
+        camera._cfg = {"focus_before_capture": False}
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSendCommand.side_effect = [
+            edsdk.EDS_ERR_TAKE_PICTURE_RETRACTED_LENS_NG,
+            edsdk.EDS_ERR_OK,  # for ShutterButton_OFF
+        ]
+        camera._do_capture()
+        self.assertIsNotNone(camera.capture_error)
+        self.assertIn("Объектив сложен", camera.capture_error)
+
+        camera.clear_capture_error()
+        self.assertIsNone(camera.capture_error)
+
+    def test_capture_error_set_on_retracted_lens_numeric_code(self):
+        camera = edsdk.Camera("fake-edsdk.dll")
+        camera._connected = True
+        camera._camera = ctypes.c_void_p(123)
+        camera._photo_tag = "P1"
+        camera._cfg = {"focus_before_capture": False}
+        camera._sdk = MagicMock()
+        camera._sdk.EdsSendCommand.side_effect = [
+            36111,
+            edsdk.EDS_ERR_OK,
+        ]
+        camera._do_capture()
+        self.assertIsNotNone(camera.capture_error)
+        self.assertIn("Объектив сложен", camera.capture_error)
+
+    async def test_run_session_aborts_on_capture_error_during_shooting(self):
+        class CaptureFailingCamera:
+            def __init__(self):
+                self.connected = True
+                self.generation = 0
+                self._capture_error = None
+
+            @property
+            def is_connected(self):
+                return self.connected
+
+            @property
+            def connection_generation(self):
+                return self.generation
+
+            @property
+            def capture_error(self):
+                return self._capture_error
+
+            def clear_capture_error(self):
+                self._capture_error = None
+
+            def set_download_dir(self, _path):
+                pass
+
+            def start_live_view(self):
+                pass
+
+            def stop_live_view(self):
+                pass
+
+            def storage_ready(self):
+                return True, ""
+
+            def take_picture(self, _tag=""):
+                self._capture_error = "Объектив сложен! Поверните кольцо зума в рабочее положение (24–50 мм)"
+
+        camera = CaptureFailingCamera()
+        recorder = MagicMock()
+        config = dict(main.CONFIG)
+        config.update({
+            "num_photos": 4,
+            "pre_countdown_delay": 0,
+            "countdown_seconds": 0,
+            "countdown_sound_seconds": 0,
+            "print_enabled": True,
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "camera", camera), \
+             patch.object(main, "video_recorder", recorder), \
+             patch.object(main, "CONFIG", config), \
+             patch.object(main, "PHOTOS_DIR", Path(tmpdir)), \
+             patch.object(main, "CLIENTS", []), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "SESSION_COUNT", 0), \
+             patch.object(main, "_session_running", False), \
+             patch.object(main, "_camera_disconnected_event", asyncio.Event()), \
+             patch("backend.main._start_locked", return_value=False), \
+             patch("backend.main.yadisk_cloud.enqueue_session", new_callable=AsyncMock) as upload, \
+             patch("backend.printer.enqueue_print", new_callable=AsyncMock) as print_job, \
+             patch("backend.main.broadcast", new_callable=AsyncMock) as broadcast:
+            await main.run_session()
+
+            self.assertEqual(main.STATE, "idle")
+            self.assertFalse(main._session_running)
+            self.assertEqual(main.SESSION_PHOTOS, [])
+            self.assertIn(
+                call({"type": "error", "message": "Объектив сложен! Поверните кольцо зума в рабочее положение (24–50 мм)"}),
+                broadcast.call_args_list,
+            )
+
+        recorder.abort.assert_called_once()
+        upload.assert_not_awaited()
+        print_job.assert_not_awaited()
+
 
 class VideoAbortTests(unittest.TestCase):
     def test_first_live_frame_logs_canon_evf_resolution(self):

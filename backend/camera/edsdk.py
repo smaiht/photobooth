@@ -170,6 +170,8 @@ class Camera:
         self._connected_cb = None  # callback()
         self._download_dir = Path("photos")
         self._health_lock = threading.Lock()
+        self._capture_error_lock = threading.Lock()
+        self._capture_error: str | None = None
         self._health = {
             "connected": False,
             "last_disconnect_reason": None,
@@ -262,6 +264,15 @@ class Camera:
                 f"minimum {self._format_gib(minimum)}"
             )
         return True, ""
+
+    @property
+    def capture_error(self) -> str | None:
+        with self._capture_error_lock:
+            return self._capture_error
+
+    def clear_capture_error(self) -> None:
+        with self._capture_error_lock:
+            self._capture_error = None
 
     def take_picture(self, tag: str = ""):
         """Queue a capture command."""
@@ -1329,6 +1340,19 @@ class Camera:
                 log.info("Camera shutdown timer extension accepted")
             elif event == kEdsStateEvent_CaptureError:
                 log.warning("CaptureError: %d %s", data, capture_error_name(data))
+                if data in (
+                    EDS_ERR_TAKE_PICTURE_RETRACTED_LENS_NG,
+                    EDS_ERR_TAKE_PICTURE_RETRUCTED_LENS_NG,
+                    36111,
+                ):
+                    with self._capture_error_lock:
+                        self._capture_error = "Объектив сложен! Поверните кольцо зума в рабочее положение (24–50 мм)"
+                elif data == EDS_ERR_TAKE_PICTURE_NO_LENS_NG:
+                    with self._capture_error_lock:
+                        self._capture_error = "Объектив не обнаружен! Проверьте крепление объектива"
+                else:
+                    with self._capture_error_lock:
+                        self._capture_error = f"Ошибка съемки: {capture_error_name(data)} ({data})"
             elif event == kEdsStateEvent_JobStatusChanged:
                 log.info(
                     "Camera transfer jobs: %s",
@@ -1503,6 +1527,7 @@ class Camera:
             log.info(f"{t} Capture: sending ShutterButton_Completely_NonAF")
 
         capture_succeeded = False
+        last_err = None
         for attempt in range(1, 4):
             if not self._connected:
                 return
@@ -1513,6 +1538,7 @@ class Camera:
                 log.info(f"{t} Capture: shutter OK")
                 capture_succeeded = True
                 break
+            last_err = err
             log.warning(
                 f"{t} Capture: attempt {attempt}/3 "
                 f"err=0x{err:08X} {edsdk_error_name(err)}")
@@ -1544,6 +1570,21 @@ class Camera:
                 time.sleep(0.1)
         if not capture_succeeded:
             log.error(f"{t} Capture: FAILED")
+            if last_err in (
+                EDS_ERR_TAKE_PICTURE_RETRACTED_LENS_NG,
+                EDS_ERR_TAKE_PICTURE_RETRUCTED_LENS_NG,
+                36111,
+            ):
+                fail_msg = "Объектив сложен! Поверните кольцо зума в рабочее положение (24–50 мм)"
+            elif last_err == EDS_ERR_TAKE_PICTURE_NO_LENS_NG:
+                fail_msg = "Объектив не обнаружен! Проверьте крепление объектива"
+            else:
+                fail_msg = (
+                    f"Ошибка спуска затвора: {edsdk_error_name(last_err)} (0x{last_err:08X})"
+                    if last_err else "Ошибка спуска затвора"
+                )
+            with self._capture_error_lock:
+                self._capture_error = fail_msg
         if not self._connected:
             return
         log.info(f"{t} Capture: sending ShutterButton_OFF")

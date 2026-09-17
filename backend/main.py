@@ -950,6 +950,9 @@ def _require_session_camera(generation: int) -> None:
             or camera.connection_generation != generation
             or _camera_disconnected_event.is_set()):
         raise CameraSessionAborted("camera disconnected during session")
+    capture_err = getattr(camera, "capture_error", None)
+    if capture_err:
+        raise CameraSessionAborted(capture_err)
 
 
 def _clear_live_view():
@@ -1330,6 +1333,9 @@ async def run_session(test_session: bool = False):
         _clear_live_view()
         SESSION_PHOTOS.clear()
         video_recorder.abort()
+        if camera and camera.is_connected:
+            camera.stop_live_view()
+        await broadcast({"type": "error", "message": str(exc)})
         await set_state(
             "idle" if camera and camera.is_connected else "camera_searching")
     except Exception as exc:
@@ -1377,6 +1383,9 @@ async def _run_session(test_session: bool = False):
         storage_ok, storage_error = storage_check()
         if not storage_ok:
             raise RuntimeError(storage_error)
+    clear_err = getattr(camera, "clear_capture_error", None)
+    if callable(clear_err):
+        clear_err()
     camera_generation = camera.connection_generation
     _camera_disconnected_event.clear()
     _require_session_camera(camera_generation)
@@ -1465,6 +1474,11 @@ async def _run_session(test_session: bool = False):
         camera.take_picture(tag)
         video_recorder.mark_photo()
         await broadcast({"type": "flash"})
+
+        # Brief pause to verify shutter release and catch immediate errors (e.g. retracted lens)
+        for _ in range(6):
+            await asyncio.sleep(0.05)
+            _require_session_camera(camera_generation)
 
     # Wait for all photos to download
     log.info(f"Waiting for {num_photos} photos to download...")
