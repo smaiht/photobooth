@@ -83,23 +83,32 @@ jobs:
             --output dist
 
       - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Latest Build
-          body: "Auto-built from main branch"
-          prerelease: true
-          preserve_order: true
-          fail_on_unmatched_files: true
-          files: |
-            dist/photobooth-win.zip
-            dist/photobooth-app.zip
-            dist/photobooth-assets.zip
-            dist/photobooth-python.zip
-            dist/photobooth-bin.zip
-            dist/photobooth-templates.zip
-            dist/photobooth-edsdk.zip
-            dist/photobooth-drivers.zip
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $releaseFiles = @(
+            "dist/photobooth-win.zip",
+            "dist/photobooth-app.zip",
+            "dist/photobooth-assets.zip",
+            "dist/photobooth-python.zip",
+            "dist/photobooth-bin.zip",
+            "dist/photobooth-templates.zip",
+            "dist/photobooth-edsdk.zip",
+            "dist/photobooth-drivers.zip"
+          )
+          gh release view latest 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Creating release 'latest'..."
+            gh release create latest --title "Latest Build" --notes "Auto-built from main branch" --prerelease
+          }
+          foreach ($file in $releaseFiles) {
+            Write-Host "Uploading $file..."
+            gh release upload latest $file --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to upload $file to GitHub release"
+            }
+          }
 
       - name: Let GitHub release assets settle
         shell: pwsh
