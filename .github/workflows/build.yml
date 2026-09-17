@@ -83,23 +83,42 @@ jobs:
             --output dist
 
       - name: Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: latest
-          name: Latest Build
-          body: "Auto-built from main branch"
-          prerelease: true
-          preserve_order: true
-          fail_on_unmatched_files: true
-          files: |
-            dist/photobooth-win.zip
-            dist/photobooth-app.zip
-            dist/photobooth-assets.zip
-            dist/photobooth-python.zip
-            dist/photobooth-bin.zip
-            dist/photobooth-templates.zip
-            dist/photobooth-edsdk.zip
-            dist/photobooth-drivers.zip
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # preserve_order: true (enforced by sequential foreach upload)
+          $releaseFiles = @(
+            "dist/photobooth-win.zip",
+            "dist/photobooth-app.zip",
+            "dist/photobooth-assets.zip",
+            "dist/photobooth-python.zip",
+            "dist/photobooth-bin.zip",
+            "dist/photobooth-templates.zip",
+            "dist/photobooth-edsdk.zip",
+            "dist/photobooth-drivers.zip"
+          )
+          gh release view latest 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Creating release 'latest'..."
+            gh release create latest --title "Latest Build" --notes "Auto-built from main branch" --prerelease
+          }
+          foreach ($file in $releaseFiles) {
+            $uploaded = $false
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+              Write-Host "Uploading $file (attempt $attempt/5)..."
+              gh release upload latest $file --clobber
+              if ($LASTEXITCODE -eq 0) {
+                $uploaded = $true
+                break
+              }
+              Write-Warning "Upload of $file failed on attempt $attempt, retrying in 5s..."
+              Start-Sleep -Seconds 5
+            }
+            if (-not $uploaded) {
+              throw "Failed to upload $file after 5 attempts"
+            }
+          }
 
       - name: Let GitHub release assets settle
         shell: pwsh

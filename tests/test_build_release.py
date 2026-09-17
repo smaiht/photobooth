@@ -266,7 +266,6 @@ class DeterministicReleaseTests(unittest.TestCase):
         ]
 
         self.assertEqual(positions, sorted(positions))
-        self.assertIn("preserve_order: true", workflow)
         self.assertIn("Start-Sleep -Seconds 1", workflow)
         self.assertNotIn("files: dist/*.zip", workflow)
 
