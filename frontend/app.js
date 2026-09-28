@@ -41,9 +41,9 @@ const idlePayment = document.getElementById("idle-payment");
 const paymentTitle = document.getElementById("payment-title");
 const paymentHint = document.getElementById("payment-hint");
 const paymentQr = document.getElementById("payment-qr");
-const paymentLoader = document.getElementById("payment-loader");
 const paymentSuccessIcon = document.getElementById("payment-success-icon");
 const paymentStartButton = document.getElementById("payment-start-button");
+const paymentCancelButton = document.getElementById("payment-cancel-button");
 const btnIdleExplainer = document.getElementById("btn-idle-explainer");
 
 /*
@@ -865,11 +865,13 @@ function renderIdlePayment() {
         ? "Оплата временно недоступна" : "(ЗАБЛОКИРОВАНО)";
     idlePayment.hidden = !visible;
     hero.classList.toggle("payment-active", visible);
-    paymentLoader.hidden = !["creating", "waiting_for_capture"].includes(status);
     paymentSuccessIcon.hidden = !success;
     paymentStartButton.hidden = !success;
     paymentStartButton.disabled = idleStartButton.disabled;
-    paymentQr.hidden = status !== "pending";
+    paymentQr.hidden = !busy;
+    // waiting_for_capture means the bank app has already paid: nothing to cancel.
+    paymentCancelButton.hidden = !["creating", "pending"].includes(status);
+    paymentCancelButton.disabled = !online;
 
     const titles = {
         creating: "Готовим QR-код…",
@@ -891,18 +893,23 @@ function renderIdlePayment() {
            busy ? "Ждёте слишком долго? Позовите администратора" : ""]
             .filter(Boolean).join("\n");
 
-    if (status === "pending" && paymentState.qr && paymentState.qr !== renderedPaymentQr) {
-        try {
-            const qr = qrcode(0, "M");
-            qr.addData(paymentState.qr);
-            qr.make();
-            paymentQr.innerHTML = qr.createSvgTag(8);
-            renderedPaymentQr = paymentState.qr;
-        } catch (error) {
-            console.error("Could not render payment QR", error);
-            paymentQr.replaceChildren();
-            renderedPaymentQr = "";
-            paymentHint.textContent = "Не удалось показать QR-код. Обратитесь к администратору";
+    // An empty box is the loader, so the next payment never shows an old code.
+    const qrUrl = status === "pending" ? paymentState.qr || "" : "";
+    if (qrUrl !== renderedPaymentQr) {
+        paymentQr.replaceChildren();
+        renderedPaymentQr = "";
+        if (qrUrl) {
+            try {
+                const qr = qrcode(0, "M");
+                qr.addData(qrUrl);
+                qr.make();
+                // No margin of its own: the white box around it is the quiet zone.
+                paymentQr.innerHTML = qr.createSvgTag(8, 0);
+                renderedPaymentQr = qrUrl;
+            } catch (error) {
+                console.error("Could not render payment QR", error);
+                paymentHint.textContent = "Не удалось показать QR-код. Обратитесь к администратору";
+            }
         }
     }
     refreshIdleExplainer();
@@ -1693,8 +1700,17 @@ function buyPackage(sessions) {
         renderIdlePayment();
     }
 }
+
+function cancelPayment() {
+    if (currentState !== "idle" || previewMode) return;
+    if (send({ type: "cancel_payment" })) {
+        paymentState = { ...paymentState, status: "idle" };
+        renderIdlePayment();
+    }
+}
 idleStartButton.addEventListener("click", handleIdleAction);
 paymentStartButton.addEventListener("click", handleIdleAction);
+paymentCancelButton.addEventListener("click", cancelPayment);
 
 // --- Config ---
 let config = {};

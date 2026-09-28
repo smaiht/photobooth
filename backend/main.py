@@ -533,6 +533,11 @@ def _payment_in_flight() -> bool:
         "creating", "pending", "waiting_for_capture"))
 
 
+def _payment_abandoned() -> bool:
+    """The guest canceled this QR: it is hidden, but watched until replaced."""
+    return _payment_in_flight() and _cafe_payment.get("abandoned") is True
+
+
 def _payment_packages() -> list[dict]:
     """One validated list drives the idle tiles and the allowed amounts."""
     raw = CONFIG.get("technical_event_packages")
@@ -568,7 +573,7 @@ def _payment_state() -> dict:
     if _cafe_payment and _cafe_payment.get("credited"):
         if not _start_locked():
             state["status"] = "succeeded"
-    elif _payment_in_flight():
+    elif _payment_in_flight() and not _payment_abandoned():
         state.update({
             "status": _cafe_payment["status"],
             "qr": _cafe_payment.get("qr", "") if _cafe_payment["status"] == "pending" else "",
@@ -603,6 +608,8 @@ def _payment_status_line() -> str:
         return f"🟢 готова: {offer}"
     status = _cafe_payment["status"]
     line = _PAYMENT_STATUS_LABELS.get(status, status)
+    if _payment_abandoned():
+        line += " · гость отменил"
     line += f" · сессий: {_payment_sessions(_cafe_payment)}"
     if _cafe_payment.get("id"):
         line += f" · {_cafe_payment['id']}"
@@ -661,7 +668,7 @@ async def _start_cafe_payment(sessions) -> None:
         return
     package = next((option for option in _payment_packages()
                     if option["sessions"] == sessions), None)
-    if _payment_active():
+    if _payment_active() and not _payment_abandoned():
         if _payment_in_flight():
             log.info("Cafe payment tap ignored: %s is already in progress",
                      _cafe_payment["status"])
@@ -678,6 +685,9 @@ async def _start_cafe_payment(sessions) -> None:
         log.warning("Cafe payment for %d sessions refused: remaining=%d is already at the limit",
                     sessions, _cafe_unlock_sessions_remaining)
     else:
+        if _payment_abandoned():
+            log.warning("Cafe payment %s canceled by the guest is replaced and no longer watched",
+                        _cafe_payment.get("id") or _cafe_payment["request_id"])
         request_id = str(uuid.uuid4())
         payment = {
             "request_id": request_id,
@@ -711,6 +721,32 @@ async def _start_cafe_payment(sessions) -> None:
         log.info("Cafe payment requested: %d sessions for %d ₽, request_id=%s",
                  sessions, package["price"], request_id)
     _ensure_payment_task()
+    await broadcast(_state_message(STATE))
+
+
+async def _cancel_cafe_payment() -> None:
+    """Take the QR off the screen; YooKassa itself cannot cancel a pending payment.
+
+    The code stays payable until YooKassa closes it, so the booth keeps polling:
+    a late payment is still credited, and the next purchase replaces this one.
+    """
+    if (_cafe_payment and _cafe_payment["status"] in ("creating", "pending")
+            and not _payment_abandoned()):
+        try:
+            _save_cafe_payment({**_cafe_payment, "abandoned": True})
+        except OSError:
+            log.exception("Could not save the canceled Cafe payment")
+        else:
+            _record_event_history({
+                "type": "payment", "status": "abandoned",
+                "request_id": _cafe_payment["request_id"],
+                "payment_id": _cafe_payment.get("id", ""),
+            })
+            log.info("Cafe payment %s canceled by the guest; still watched until replaced",
+                     _cafe_payment.get("id") or _cafe_payment["request_id"])
+    else:
+        log.info("Cafe payment cancel ignored: %s",
+                 _cafe_payment["status"] if _cafe_payment else "no payment")
     await broadcast(_state_message(STATE))
 
 
@@ -3281,6 +3317,9 @@ async def websocket_endpoint(ws: WebSocket):
 
             elif msg["type"] == "start_payment":
                 await _start_cafe_payment(msg.get("sessions"))
+
+            elif msg["type"] == "cancel_payment":
+                await _cancel_cafe_payment()
 
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)
