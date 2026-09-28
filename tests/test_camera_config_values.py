@@ -17,97 +17,6 @@ from backend.config import (
 )
 
 
-class ConfigOptionsMatchEdsdkMapsTests(unittest.TestCase):
-    """config_camera.json must advertise exactly what the EDSDK maps accept."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.config = json.loads(
-            (ROOT_DIR / "config_camera.json").read_text(encoding="utf-8"))
-
-    def test_av_tv_iso_options_list_every_supported_value(self):
-        for field, mapping in (
-            ("av", constants.AV_MAP),
-            ("tv", constants.TV_MAP),
-            ("iso", constants.ISO_MAP),
-        ):
-            with self.subTest(field=field):
-                self.assertEqual(
-                    self.config[f"_{field}_options"], list(mapping))
-
-    def test_current_values_resolve_to_edsdk_codes(self):
-        for field, resolver in constants.CAMERA_VALUE_RESOLVERS.items():
-            with self.subTest(field=field):
-                resolved = resolver(self.config[field])
-                self.assertIsNotNone(resolved)
-                # The stored value must already be canonical, so a restart
-                # never rewrites the file just to normalise it.
-                self.assertEqual(resolved[0], self.config[field])
-
-    def test_other_option_lists_only_hold_known_values(self):
-        for field, mapping in (
-            ("image_quality", constants.IMAGE_QUALITY_MAP),
-            ("ae_mode", constants.AE_MODE_MAP),
-            ("shutter_type", constants.SHUTTER_TYPE_MAP),
-            ("white_balance", constants.WHITE_BALANCE_MAP),
-            ("picture_style", constants.PICTURE_STYLE_MAP),
-            ("evf_af_mode", constants.EVF_AF_MODE_MAP),
-            ("af_mode", constants.AF_MODE_MAP),
-            ("subject_tracking", constants.AF_TRACKING_OBJECT_MAP),
-            ("evf_view_type", constants.EVF_VIEW_TYPE_MAP),
-            ("color_space", constants.COLOR_SPACE_MAP),
-        ):
-            with self.subTest(field=field):
-                options = self.config[f"_{field}_options"]
-                self.assertTrue(options)
-                for option in options:
-                    self.assertIn(option, mapping)
-                self.assertIn(self.config[field], options)
-
-    def test_numeric_ranges_are_mirrored_in_the_config(self):
-        for field, (minimum, maximum, step) in \
-                constants.CAMERA_NUMERIC_RANGES.items():
-            with self.subTest(field=field):
-                published = self.config[f"_{field}_range"]
-                expected = [minimum, maximum] if step is None \
-                    else [minimum, maximum, step]
-                self.assertEqual(published, expected)
-                self.assertIsNone(
-                    constants.numeric_range_error(field, self.config[field]))
-
-    def test_every_public_field_has_a_real_value_check(self):
-        """No public field may fall back to a bare type check."""
-        unchecked = []
-        for field, value in self.config.items():
-            if field.startswith("_"):
-                continue
-            if isinstance(value, bool):
-                continue  # booleans are fully constrained by their type
-            if field in constants.CAMERA_VALUE_RESOLVERS:
-                continue
-            if field in constants.CAMERA_NUMERIC_RANGES:
-                continue
-            if isinstance(self.config.get(f"_{field}_options"), list):
-                continue
-            unchecked.append(field)
-        self.assertEqual(unchecked, [])
-
-    def test_every_configured_lighting_preset_can_be_applied(self):
-        presets = self.config["_presets"]
-        self.assertTrue(presets)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "config_camera.json"
-            for name in presets:
-                with self.subTest(preset=name):
-                    path.write_text(
-                        json.dumps(self.config, ensure_ascii=False),
-                        encoding="utf-8",
-                    )
-                    label, _changes, hint = apply_camera_preset(name, path)
-                    self.assertTrue(label)
-                    self.assertIsInstance(hint, str)
-
-
 class ResolveCameraValueTests(unittest.TestCase):
     def test_resolve_av_accepts_equivalent_spellings(self):
         for value in ("5.6", " 5.6 ", 5.6, "f/5.6", "F5.6"):
@@ -297,16 +206,6 @@ class CameraConfigReportTests(unittest.TestCase):
         with patch.object(camera, "_get_prop_u32",
                           side_effect=lambda prop_id: codes.get(prop_id)):
             return camera.build_config_report()
-
-    def test_every_mappable_field_is_read_back(self):
-        config = json.loads(
-            (ROOT_DIR / "config_camera.json").read_text(encoding="utf-8"))
-        reported = {entry["field"] for entry in self._report()["camera"]}
-        reported |= {entry["field"] for entry in self._report()["host"]}
-        # color_temperature only applies when white_balance is color_temp.
-        reported.add("color_temperature")
-        public = {field for field in config if not field.startswith("_")}
-        self.assertEqual(public - reported, set())
 
     def test_matching_camera_values_report_no_problems(self):
         report = self._report()

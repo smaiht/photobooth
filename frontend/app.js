@@ -1480,14 +1480,27 @@ function openPhotoViewer(index = 0) {
     showViewerFrame(index);
 }
 
+// A tap on the photo closes the viewer, so the second tap of a double tap
+// would land on the tile underneath and print it. Taps within the system
+// double-tap time after closing are dropped.
+const VIEWER_CLOSE_GUARD_MS = 500;
+let viewerClosedAt = -Infinity;
+
 function closePhotoViewer() {
     if (photoViewer.hidden) return;
     photoViewer.hidden = true;
+    viewerClosedAt = performance.now();
     resetViewerTransform();
     // Drop the full-size bitmap instead of keeping it alive behind the screen.
     photoViewerImage.removeAttribute("src");
     photoViewerThumbs.replaceChildren();
 }
+
+screens.template.addEventListener("click", (event) => {
+    if (performance.now() - viewerClosedAt < VIEWER_CLOSE_GUARD_MS) {
+        event.stopPropagation();
+    }
+}, true);
 
 function configurePhotoViewer(options) {
     viewerFrames = core.buildViewerFrames(options);
