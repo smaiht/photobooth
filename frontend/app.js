@@ -2694,3 +2694,12 @@ window.addEventListener("keydown", e => {
         presenterBeeps(delta, ok);
     });
 });
+
+// The hyperlink button sends Tab, and Enter on a double press: Tab walks focus
+// onto a package or the print button, Enter presses it. Guests only touch the
+// screen, so outside the service menu both keys do nothing.
+window.addEventListener("keydown", e => {
+    if (e.key !== "Tab" && e.key !== "Enter") return;
+    if (serviceModal && !serviceModal.hidden) return;
+    e.preventDefault();
+});
