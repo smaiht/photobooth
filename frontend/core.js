@@ -32,13 +32,15 @@
         done: "done",
     });
 
-    // A 2.4 GHz presenter is a plain HID keyboard. Next/prev send the Page keys
-    // on most remotes; the arrows are the fallback for the ones that don't.
+    // A 2.4 GHz presenter is a plain HID keyboard. The booth's remote has only
+    // ▲ and ▼, and ▲ adds as on a counter. ▲ is "previous slide", which remotes
+    // send as PageUp or ArrowLeft, so both of those add and both "next" keys
+    // write a session off.
     const PRESENTER_DELTA = Object.freeze({
-        PageDown: 1,
-        ArrowRight: 1,
-        PageUp: -1,
-        ArrowLeft: -1,
+        PageUp: 1,
+        ArrowLeft: 1,
+        PageDown: -1,
+        ArrowRight: -1,
     });
 
     function screenForState(state) {
