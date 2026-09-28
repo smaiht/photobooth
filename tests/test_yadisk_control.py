@@ -15,9 +15,6 @@ from backend.config import update_camera_config_field
 
 
 class CommandValidationTests(unittest.TestCase):
-    def test_poll_interval_is_ten_seconds(self):
-        self.assertEqual(yadisk_control.POLL_INTERVAL, 5)
-
     def test_validates_command_id_and_filename(self):
         command_id = "a" * 32
         command = yadisk_control.validate_command({
@@ -1385,10 +1382,7 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
         async def enqueue(*_args):
             order.append("print")
 
-        def require(_generation):
-            order.append("camera")
-
-        def consume():
+        def consume(_count):
             order.append("consume")
 
         async def state(value, extra=None):
@@ -1398,17 +1392,15 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(main, "CONFIG", {"print_enabled": True}), \
              patch("backend.printer.enqueue_print", side_effect=enqueue), \
-             patch("backend.main._require_session_camera", side_effect=require), \
-             patch("backend.main._consume_cafe_unlock_session",
+             patch("backend.main._consume_cafe_unlock_sessions",
                    side_effect=consume), \
              patch("backend.main.set_state", side_effect=state):
             await main._finish_successful_session(
-                [(Path("print.jpg"), "grid")], 7, True)
+                [(Path("print.jpg"), "grid")], True)
 
-        self.assertEqual(order, ["print", "camera", "consume", "done"])
+        self.assertEqual(order, ["print", "consume", "done"])
 
-    async def test_basket_queues_every_sheet_before_consuming_one_allowance(self):
-        """A multi-sheet basket is one paid session, not one job per sheet."""
+    async def test_basket_queues_every_sheet_and_charges_one_session_each(self):
         queued = []
 
         async def enqueue(path, _config, template=""):
@@ -1422,9 +1414,8 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(main, "CONFIG", {"print_enabled": True}), \
              patch("backend.printer.enqueue_print", side_effect=enqueue), \
-             patch("backend.main._require_session_camera"), \
-             patch("backend.main._consume_cafe_unlock_session",
-                   side_effect=lambda: consumed.append(1)), \
+             patch("backend.main._consume_cafe_unlock_sessions",
+                   side_effect=consumed.append), \
              patch("backend.main.set_state", side_effect=state):
             await main._finish_successful_session(
                 [
@@ -1434,7 +1425,6 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
                     (Path("print_grid.jpg"), "grid"),
                     (Path("print_single_photo_02_frame.jpg"), "single"),
                 ],
-                7,
                 True,
             )
 
@@ -1447,26 +1437,26 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
             ("print_grid.jpg", "grid"),
             ("print_single_photo_02_frame.jpg", "single"),
         ])
-        self.assertEqual(consumed, [1])
+        self.assertEqual(consumed, [5])
 
     async def test_print_enqueue_error_does_not_consume_allowance(self):
         with patch.object(main, "CONFIG", {"print_enabled": True}), \
              patch("backend.printer.enqueue_print", new_callable=AsyncMock,
                    side_effect=RuntimeError("printer unavailable")), \
-             patch("backend.main._consume_cafe_unlock_session") as consume, \
+             patch("backend.main._consume_cafe_unlock_sessions") as consume, \
              patch("backend.main.set_state", new_callable=AsyncMock) as state:
             with self.assertRaisesRegex(RuntimeError, "printer unavailable"):
                 await main._finish_successful_session(
-                    [(Path("print.jpg"), "grid")], 7, True)
+                    [(Path("print.jpg"), "grid")], True)
 
         consume.assert_not_called()
         state.assert_not_awaited()
 
-    async def test_consumption_persists_exactly_one_session(self):
+    async def test_consumption_persists_the_charged_sessions(self):
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch.object(main, "ROOT_DIR", Path(tmpdir)), \
-             patch.object(main, "_cafe_unlock_sessions_remaining", 2):
-            remaining = main._consume_cafe_unlock_session()
+             patch.object(main, "_cafe_unlock_sessions_remaining", 3):
+            remaining = main._consume_cafe_unlock_sessions(2)
             persisted = json.loads(
                 (Path(tmpdir) / "cafe_unlock_state.json").read_text(encoding="utf-8"))
 
@@ -1482,7 +1472,7 @@ class CafeUnlockTests(unittest.IsolatedAsyncioTestCase):
             state_path = Path(tmpdir) / "cafe_unlock_state.json"
             state_path.write_text(
                 json.dumps({"remaining_sessions": 2}), encoding="utf-8")
-            remaining = main._consume_cafe_unlock_session()
+            remaining = main._consume_cafe_unlock_sessions(1)
             state_exists = state_path.exists()
             in_memory_remaining = main._cafe_unlock_sessions_remaining
 

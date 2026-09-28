@@ -1488,7 +1488,7 @@ class SessionDeliveryTests(unittest.IsolatedAsyncioTestCase):
              patch("backend.main.compose") as compose_print, \
              patch("backend.printer.enqueue_print",
                    new_callable=AsyncMock) as print_job, \
-             patch("backend.main._consume_cafe_unlock_session") as consume, \
+             patch("backend.main._consume_cafe_unlock_sessions") as consume, \
              patch("backend.main.broadcast", new_callable=AsyncMock), \
              patch("backend.main.set_state", side_effect=set_state):
             await main.run_session()
@@ -2322,7 +2322,7 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
                    side_effect=compose_plain), \
              patch("backend.printer.enqueue_print",
                    new_callable=AsyncMock) as print_job, \
-             patch("backend.main._consume_cafe_unlock_session") as consume, \
+             patch("backend.main._consume_cafe_unlock_sessions") as consume, \
              patch("backend.main.broadcast", new_callable=AsyncMock), \
              patch("backend.main.set_state", side_effect=set_state):
             await main.run_session()
@@ -2339,7 +2339,7 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
             "composed": composed,
             "unframed": unframed,
             "states": states,
-            "consumed": consume.call_count,
+            "consumed": sum(call.args[0] for call in consume.call_args_list),
         }
 
     async def test_mixed_basket_prints_every_sheet_from_one_composition_each(self):
@@ -2364,8 +2364,8 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
         # Each distinct layout is composed exactly once, copies reuse the JPEG.
         self.assertEqual(result["composed"], [("strips", 4), ("grid", 4)])
         self.assertEqual(result["unframed"], ["photo_2.jpg"])
-        # One session, one allowance, regardless of the sheet count.
-        self.assertEqual(result["consumed"], 1)
+        # Every sheet costs one paid session.
+        self.assertEqual(result["consumed"], 5)
         done = [extra for state, extra in result["states"] if state == "done"]
         self.assertEqual(done, [{"print_sheets": 5}])
 
@@ -2442,6 +2442,23 @@ class MultiPrintSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["consumed"], 1)
         done = [extra for state, extra in result["states"] if state == "done"]
         self.assertEqual(done, [{"print_sheets": 1}])
+
+    async def test_camera_lost_after_the_photos_still_prints_the_choice(self):
+        def choose(select):
+            # Every photo is already on disk when the camera drops.
+            main.camera.is_connected = False
+            main.on_camera_error("USB lost")
+            select("grid")
+
+        self.addCleanup(main._camera_disconnected_event.clear)
+        with patch.object(main, "_event_loop", asyncio.get_running_loop()):
+            result = await self._run(choose)
+
+        self.assertEqual(result["queued"], [("print_grid.jpg", "grid")])
+        # The search screen waits until the guest has seen the done screen.
+        states = [state for state, _extra in result["states"]]
+        self.assertEqual(states[-2:], ["done", "camera_searching"])
+        self.assertEqual(states.count("camera_searching"), 1)
 
     async def test_duplicate_taps_in_a_basket_merge_into_copies(self):
         def choose(select):

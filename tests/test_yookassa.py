@@ -253,6 +253,21 @@ class CafePaymentTests(unittest.IsolatedAsyncioTestCase):
             (self.root / "cafe_unlock_state.json").read_text(encoding="utf-8"))
         self.assertEqual(persisted, {"remaining_sessions": 0})
 
+    async def test_guest_cancel_forgets_only_an_unpaid_payment(self):
+        from backend import main
+        with ExitStack() as stack:
+            for context in self._booth():
+                stack.enter_context(context)
+            await main._cancel_cafe_payment()
+            self.assertEqual(main._load_cafe_unlock_state(), (0, None))
+            self.assertEqual(main._payment_state()["status"], "idle")
+
+            # A cancel racing the credit must not drop the paid receipt.
+            paid = {**self.payment, "status": "succeeded", "credited": True}
+            main._save_cafe_payment(paid, 1)
+            await main._cancel_cafe_payment()
+            self.assertEqual(main._load_cafe_unlock_state(), (1, paid))
+
     async def test_bad_creation_response_keeps_the_request_for_review(self):
         # Even without an ID, a bad response does not prove the POST was refused.
         remaining, payment, state = await self._poll(

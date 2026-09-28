@@ -487,8 +487,8 @@ def _set_cafe_unlock_sessions(remaining: int) -> None:
     _cafe_unlock_sessions_remaining = remaining
 
 
-def _consume_cafe_unlock_session() -> int:
-    """Consume one completed Café session; persistence errors fail closed."""
+def _consume_cafe_unlock_sessions(count: int) -> int:
+    """Consume one Café session per printed sheet; persistence errors fail closed."""
     global _cafe_unlock_sessions_remaining
     if _cafe_unlock_sessions_remaining <= 0:
         log.info(
@@ -497,7 +497,8 @@ def _consume_cafe_unlock_session() -> int:
         )
         _cafe_unlock_sessions_remaining = 0
         return 0
-    remaining = _cafe_unlock_sessions_remaining - 1
+    # The operator may write sessions off mid-session: never go below zero.
+    remaining = max(0, _cafe_unlock_sessions_remaining - count)
     try:
         _set_cafe_unlock_sessions(remaining)
     except (OSError, ValueError) as exc:
@@ -514,7 +515,7 @@ def _consume_cafe_unlock_session() -> int:
                 cleanup_exc,
             )
         return 0
-    log.info("Cafe unlock consumed; remaining sessions=%d", remaining)
+    log.info("Cafe unlock consumed %d; remaining sessions=%d", count, remaining)
     return remaining
 
 
@@ -714,6 +715,29 @@ async def _start_cafe_payment(sessions) -> None:
     await broadcast(_state_message(STATE))
 
 
+async def _cancel_cafe_payment() -> None:
+    """The guest closes the QR, and the booth forgets the payment.
+
+    YooKassa cannot cancel a pending payment, so a code paid after this is left
+    to support: its id stays in the log and the event journal.
+    """
+    payment = _cafe_payment
+    if payment and payment["status"] in ("creating", "pending"):
+        try:
+            _save_cafe_payment(None)
+        except OSError:
+            log.exception("Could not forget the canceled Cafe payment")
+        else:
+            _record_event_history({
+                "type": "payment", "status": "canceled_by_guest",
+                "request_id": payment["request_id"],
+                "payment_id": payment.get("id", ""),
+            })
+            log.info("Cafe payment %s canceled by the guest",
+                     payment.get("id") or payment["request_id"])
+    await broadcast(_state_message(STATE))
+
+
 async def _poll_cafe_payment() -> None:
     global _payment_notice
     credentials = app.state.yookassa_credentials
@@ -808,7 +832,7 @@ def _multi_print_available() -> bool:
 
 
 def _session_sheet_limit() -> int:
-    """In the technical event one paid session buys one sheet, never more."""
+    """In the technical event every sheet costs one paid session."""
     limit = _multi_print_max_sheets()
     if not _is_technical_event():
         return limit
@@ -949,7 +973,7 @@ def _require_session_camera(generation: int) -> None:
     if (not camera or not camera.is_connected
             or camera.connection_generation != generation
             or _camera_disconnected_event.is_set()):
-        raise CameraSessionAborted("camera disconnected during session")
+        raise CameraSessionAborted("Камера отключилась. Попробуйте снова")
     capture_err = getattr(camera, "capture_error", None)
     if capture_err:
         raise CameraSessionAborted(capture_err)
@@ -1130,7 +1154,10 @@ def on_camera_error(error: str):
     if _event_loop and _event_loop.is_running():
         async def show_disconnected():
             _camera_disconnected_event.set()
-            await set_state("camera_searching")
+            # A running session handles it: capture aborts within a second, and
+            # once the photos are on disk the session finishes without a camera.
+            if not _session_running:
+                await set_state("camera_searching")
 
         asyncio.run_coroutine_threadsafe(show_disconnected(), _event_loop)
 
@@ -1263,12 +1290,11 @@ def _countdown_timing() -> tuple[float, int, int]:
 
 async def _finish_successful_session(
     sheets: list[tuple[Path, str]],
-    camera_generation: int,
     session_uses_cafe_unlock: bool,
     history_entry: dict | None = None,
     test_session: bool = False,
 ) -> None:
-    """Queue every composed sheet, charge the allowance, then expose done.
+    """Queue every composed sheet, charge one session per sheet, expose done.
 
     ``sheets`` is already expanded: one entry per physical 4x6 sheet, so two
     copies of the same layout appear twice and reuse one composed JPEG.
@@ -1278,7 +1304,6 @@ async def _finish_successful_session(
         from .printer import enqueue_print
         for sheet_path, sheet_template in sheets:
             await enqueue_print(str(sheet_path), CONFIG, sheet_template)
-        _require_session_camera(camera_generation)
 
     if history_entry is not None:
         _record_event_history({
@@ -1291,7 +1316,7 @@ async def _finish_successful_session(
         })
 
     if session_uses_cafe_unlock:
-        _consume_cafe_unlock_session()
+        _consume_cafe_unlock_sessions(len(sheets))
 
     await set_state("done", {"print_sheets": len(sheets)})
 
@@ -1480,14 +1505,13 @@ async def _run_session(test_session: bool = False):
             await asyncio.sleep(0.05)
             _require_session_camera(camera_generation)
 
-    # Wait for all photos to download
+    # Wait for all photos to download. The camera is not needed after that.
     log.info(f"Waiting for {num_photos} photos to download...")
     for _ in range(300):
-        _require_session_camera(camera_generation)
         if len(SESSION_PHOTOS) >= num_photos:
             break
+        _require_session_camera(camera_generation)
         await asyncio.sleep(0.1)
-    _require_session_camera(camera_generation)
     _clear_live_view()
     camera.stop_live_view()
     log.info("Live view stopped")
@@ -1501,7 +1525,7 @@ async def _run_session(test_session: bool = False):
                 "result": "failed",
                 "reason": "photo_download_timeout",
             })
-        await broadcast({"type": "error", "message": "Photo download error. Try again."})
+        await broadcast({"type": "error", "message": "Не удалось сохранить фото. Попробуйте снова"})
         await asyncio.sleep(3)
         await set_state("idle")
         return
@@ -1550,7 +1574,6 @@ async def _run_session(test_session: bool = False):
             text_values=text_values,
         ),
     )
-    _require_session_camera(camera_generation)
     preview_paths = dict(preview_batch)
     photo_choice_previews = getattr(preview_batch, "photo_choices", {})
     for template_name, preview_path in preview_paths.items():
@@ -1700,7 +1723,6 @@ async def _run_session(test_session: bool = False):
     await set_state("template_select")
     log.info("Waiting for template choice...")
     choice_task = asyncio.create_task(template_event.wait())
-    disconnect_task = asyncio.create_task(_camera_disconnected_event.wait())
     extend_task = asyncio.create_task(extend_event.wait())
     try:
         while True:
@@ -1709,12 +1731,11 @@ async def _run_session(test_session: bool = False):
                 log.info(f"Template timeout, using default: {selected_template}")
                 break
             done, _ = await asyncio.wait(
-                (choice_task, disconnect_task, extend_task),
+                (choice_task, extend_task),
                 timeout=remaining,
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            _require_session_camera(camera_generation)
-            if choice_task in done or disconnect_task in done:
+            if choice_task in done:
                 break
             if extend_task in done:
                 extend_event.clear()
@@ -1725,11 +1746,10 @@ async def _run_session(test_session: bool = False):
             break
     finally:
         app.state.on_template_activity = None
-        for task in (choice_task, disconnect_task, extend_task):
+        for task in (choice_task, extend_task):
             if not task.done():
                 task.cancel()
-        await asyncio.gather(
-            choice_task, disconnect_task, extend_task, return_exceptions=True)
+        await asyncio.gather(choice_task, extend_task, return_exceptions=True)
     template_event.set()
     if chosen["skip_print"]:
         if not test_session:
@@ -1739,7 +1759,8 @@ async def _run_session(test_session: bool = False):
                 "result": "retake",
             })
         TEMPLATE_OPTIONS = []
-        await set_state("idle")
+        await set_state(
+            "idle" if camera and camera.is_connected else "camera_searching")
         return
 
     selected_items = chosen["items"]
@@ -1796,14 +1817,12 @@ async def _run_session(test_session: bool = False):
             # Identical entries were merged, so each layout is composed once
             # and its single JPEG is queued as many times as requested.
             item_path = await loop.run_in_executor(None, _compose_item, item)
-            _require_session_camera(camera_generation)
             log.info(f"Composed: {item_path}")
             composed.extend(
                 [(item_path, item["template"])] * item["copies"])
     else:
         log.warning("No photos to compose!")
 
-    _require_session_camera(camera_generation)
     if not composed:
         raise RuntimeError("Session composition produced no print file")
 
@@ -1818,7 +1837,6 @@ async def _run_session(test_session: bool = False):
         history_entry["selection"] = "timeout"
     await _finish_successful_session(
         composed,
-        camera_generation,
         session_uses_cafe_unlock,
         None if test_session else history_entry,
         test_session=test_session,
@@ -1826,10 +1844,8 @@ async def _run_session(test_session: bool = False):
 
     # Show done/QR screen before allowing the next session
     await asyncio.sleep(max(0, float(CONFIG.get("done_screen_seconds", 8))))
-    if (camera and camera.is_connected
-            and camera.connection_generation == camera_generation
-            and not _camera_disconnected_event.is_set()):
-        await set_state("idle")
+    await set_state(
+        "idle" if camera and camera.is_connected else "camera_searching")
 
 
 # --- MJPEG live view stream ---
@@ -3255,15 +3271,6 @@ async def websocket_endpoint(ws: WebSocket):
     initial_state = _state_message(STATE)
     await ws.send_text(json.dumps(initial_state))
 
-    # Show update log on first client connect
-    update_log = getattr(app.state, "update_log_path", None)
-    if update_log and os.path.exists(update_log):
-        content = Path(update_log).read_text(
-            encoding="utf-8", errors="replace")
-        for line in content.strip().splitlines():
-            log.info(f"[update] {line}")
-        app.state.update_log_path = None
-
     try:
         while True:
             data = await ws.receive_text()
@@ -3281,6 +3288,9 @@ async def websocket_endpoint(ws: WebSocket):
 
             elif msg["type"] == "start_payment":
                 await _start_cafe_payment(msg.get("sessions"))
+
+            elif msg["type"] == "cancel_payment":
+                await _cancel_cafe_payment()
 
             elif msg["type"] == "select_template" and STATE == "template_select":
                 cb = getattr(app.state, "on_template_choice", None)
@@ -3320,10 +3330,6 @@ async def startup():
     _start_event_history()
     yadisk_cloud.set_session_link_handler(_on_session_link)
     await asyncio.to_thread(_cleanup_stale_preview_dirs)
-
-    # Log auto-update results (deferred - will show after WS connects)
-    update_log = os.path.join(ROOT_DIR, ".update_log")
-    app.state.update_log_path = update_log
 
     if camera:
         camera.set_callbacks(

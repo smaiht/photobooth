@@ -41,9 +41,9 @@ const idlePayment = document.getElementById("idle-payment");
 const paymentTitle = document.getElementById("payment-title");
 const paymentHint = document.getElementById("payment-hint");
 const paymentQr = document.getElementById("payment-qr");
-const paymentLoader = document.getElementById("payment-loader");
 const paymentSuccessIcon = document.getElementById("payment-success-icon");
 const paymentStartButton = document.getElementById("payment-start-button");
+const paymentCancelButton = document.getElementById("payment-cancel-button");
 const btnIdleExplainer = document.getElementById("btn-idle-explainer");
 
 /*
@@ -865,11 +865,13 @@ function renderIdlePayment() {
         ? "Оплата временно недоступна" : "(ЗАБЛОКИРОВАНО)";
     idlePayment.hidden = !visible;
     hero.classList.toggle("payment-active", visible);
-    paymentLoader.hidden = !["creating", "waiting_for_capture"].includes(status);
     paymentSuccessIcon.hidden = !success;
     paymentStartButton.hidden = !success;
     paymentStartButton.disabled = idleStartButton.disabled;
-    paymentQr.hidden = status !== "pending";
+    paymentQr.hidden = !busy;
+    // waiting_for_capture means the bank app has already paid: nothing to cancel.
+    paymentCancelButton.hidden = !["creating", "pending"].includes(status);
+    paymentCancelButton.disabled = !online;
 
     const titles = {
         creating: "Готовим QR-код…",
@@ -891,18 +893,23 @@ function renderIdlePayment() {
            busy ? "Ждёте слишком долго? Позовите администратора" : ""]
             .filter(Boolean).join("\n");
 
-    if (status === "pending" && paymentState.qr && paymentState.qr !== renderedPaymentQr) {
-        try {
-            const qr = qrcode(0, "M");
-            qr.addData(paymentState.qr);
-            qr.make();
-            paymentQr.innerHTML = qr.createSvgTag(8);
-            renderedPaymentQr = paymentState.qr;
-        } catch (error) {
-            console.error("Could not render payment QR", error);
-            paymentQr.replaceChildren();
-            renderedPaymentQr = "";
-            paymentHint.textContent = "Не удалось показать QR-код. Обратитесь к администратору";
+    // An empty box is the loader, so the next payment never shows an old code.
+    const qrUrl = status === "pending" ? paymentState.qr || "" : "";
+    if (qrUrl !== renderedPaymentQr) {
+        paymentQr.replaceChildren();
+        renderedPaymentQr = "";
+        if (qrUrl) {
+            try {
+                const qr = qrcode(0, "M");
+                qr.addData(qrUrl);
+                qr.make();
+                // No margin of its own: the white box around it is the quiet zone.
+                paymentQr.innerHTML = qr.createSvgTag(8, 0);
+                renderedPaymentQr = qrUrl;
+            } catch (error) {
+                console.error("Could not render payment QR", error);
+                paymentHint.textContent = "Не удалось показать QR-код. Обратитесь к администратору";
+            }
         }
     }
     refreshIdleExplainer();
@@ -1254,7 +1261,11 @@ function renderTemplateOptions(options) {
         const captionLabel = document.createElement("span");
         captionLabel.className = "template-caption-label";
         captionLabel.textContent = label;
-        caption.appendChild(captionLabel);
+        // Every sheet is 10×15; the strips sheet is cut into two 5×15 strips.
+        const size = document.createElement("span");
+        size.className = "print-size";
+        size.textContent = option.name === "strips" ? "5×15\u00a0см" : "10×15\u00a0см";
+        caption.append(captionLabel, size);
         button.append(preview, caption);
         // A badge holds its own buttons, so it must be a sibling of the tile
         // button rather than a child: nested buttons are invalid HTML.
@@ -1469,14 +1480,27 @@ function openPhotoViewer(index = 0) {
     showViewerFrame(index);
 }
 
+// A tap on the photo closes the viewer, so the second tap of a double tap
+// would land on the tile underneath and print it. Taps within the system
+// double-tap time after closing are dropped.
+const VIEWER_CLOSE_GUARD_MS = 500;
+let viewerClosedAt = -Infinity;
+
 function closePhotoViewer() {
     if (photoViewer.hidden) return;
     photoViewer.hidden = true;
+    viewerClosedAt = performance.now();
     resetViewerTransform();
     // Drop the full-size bitmap instead of keeping it alive behind the screen.
     photoViewerImage.removeAttribute("src");
     photoViewerThumbs.replaceChildren();
 }
+
+screens.template.addEventListener("click", (event) => {
+    if (performance.now() - viewerClosedAt < VIEWER_CLOSE_GUARD_MS) {
+        event.stopPropagation();
+    }
+}, true);
 
 function configurePhotoViewer(options) {
     viewerFrames = core.buildViewerFrames(options);
@@ -1693,8 +1717,17 @@ function buyPackage(sessions) {
         renderIdlePayment();
     }
 }
+
+function cancelPayment() {
+    if (currentState !== "idle" || previewMode) return;
+    if (send({ type: "cancel_payment" })) {
+        paymentState = { ...paymentState, status: "idle" };
+        renderIdlePayment();
+    }
+}
 idleStartButton.addEventListener("click", handleIdleAction);
 paymentStartButton.addEventListener("click", handleIdleAction);
+paymentCancelButton.addEventListener("click", cancelPayment);
 
 // --- Config ---
 let config = {};
@@ -2677,4 +2710,13 @@ window.addEventListener("keydown", e => {
         const ok = await runLocalServiceAction("unblock", { sessions: delta });
         presenterBeeps(delta, ok);
     });
+});
+
+// The hyperlink button sends Tab, and Enter on a double press: Tab walks focus
+// onto a package or the print button, Enter presses it. Guests only touch the
+// screen, so outside the service menu both keys do nothing.
+window.addEventListener("keydown", e => {
+    if (e.key !== "Tab" && e.key !== "Enter") return;
+    if (serviceModal && !serviceModal.hidden) return;
+    e.preventDefault();
 });
