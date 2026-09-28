@@ -1261,7 +1261,11 @@ function renderTemplateOptions(options) {
         const captionLabel = document.createElement("span");
         captionLabel.className = "template-caption-label";
         captionLabel.textContent = label;
-        caption.appendChild(captionLabel);
+        // Every sheet is 10×15; the strips sheet is cut into two 5×15 strips.
+        const size = document.createElement("span");
+        size.className = "print-size";
+        size.textContent = option.name === "strips" ? "5×15\u00a0см" : "10×15\u00a0см";
+        caption.append(captionLabel, size);
         button.append(preview, caption);
         // A badge holds its own buttons, so it must be a sibling of the tile
         // button rather than a child: nested buttons are invalid HTML.

@@ -1398,6 +1398,16 @@ html, body {
     color: #1a1a1a;
 }
 
+/* Paper size after a print option's name. */
+.print-size {
+    margin-left: 0.6em;
+    color: #8a8378;
+    font-size: 1.3vw;
+    font-weight: 600;
+    letter-spacing: 0;
+    white-space: nowrap;
+}
+
 #template-timer {
     /* Stays readable above the viewer overlay: the countdown keeps running
        while the guest looks at the frames. */
@@ -1681,12 +1691,14 @@ html, body {
 }
 
 .photo-choice-expand {
+    /* One knob for the box, its icon and the photo number. */
+    --expand-size: 5.6vw;
     position: absolute;
     z-index: 4;
     top: 0;
     right: 0;
-    width: 4.2vw;
-    height: 4.2vw;
+    width: var(--expand-size);
+    height: var(--expand-size);
     padding: 0;
     border: 0;
     border-radius: 0 0.72vw 0 0.6vw;
@@ -1699,17 +1711,28 @@ html, body {
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
 }
+/* A tap on the photo prints at once, so a near miss left of or below the
+   button opens the viewer instead. */
+.photo-choice-expand::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 -1.5vw -1.5vw;
+}
+/* In the copies mode the counter sits in the middle of the photo and a tap
+   only adds a copy: the button keeps its old size and needs no margin. */
+#screen-template.multi-select .photo-choice-expand { --expand-size: 4.2vw; }
+#screen-template.multi-select .photo-choice-expand::before { content: none; }
 .photo-choice-expand:disabled { opacity: 0.5; }
 .photo-choice-expand svg {
-    width: 3.2vw;
-    height: 3.2vw;
+    width: calc(var(--expand-size) * 0.76);
+    height: calc(var(--expand-size) * 0.76);
 }
 .photo-choice-expand-number {
     position: absolute;
     inset: 0;
     display: grid;
     place-items: center;
-    font-size: 1.3vw;
+    font-size: calc(var(--expand-size) * 0.31);
     font-weight: 700;
     line-height: 1;
 }
