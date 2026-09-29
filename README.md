@@ -4,6 +4,8 @@
 Фотобудка: Canon EDSDK + сублимационный принтер + сенсорный экран.
 FastAPI backend + pywebview fullscreen window.
 
+https://github.com/user-attachments/assets/da5b818f-a5cd-4db3-b42f-8b84747c5a4b
+
 ## Структура
 
 ```
