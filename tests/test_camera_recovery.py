@@ -166,40 +166,17 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
             camera._thread.join(timeout=2)
         self.assertFalse(camera._thread.is_alive())
 
-    def test_every_failed_search_is_reported_with_its_count(self):
+    def test_every_failed_search_is_reported(self):
         camera = edsdk.Camera("fake-edSDK.dll")
         failures = []
-        camera.set_callbacks(on_search_failed=lambda count, error: failures.append((count, error)))
+        camera.set_callbacks(on_search_failed=failures.append)
 
         def stop():
             camera._running = False
 
         self.run_search_loop(camera, [RuntimeError("No camera")] * 3 + [None], stop)
 
-        self.assertEqual(failures, [(1, "No camera"), (2, "No camera"), (3, "No camera")])
-
-    def test_the_failed_search_count_starts_again_after_a_connection(self):
-        camera = edsdk.Camera("fake-edSDK.dll")
-        failures = []
-        camera.set_callbacks(on_search_failed=lambda count, error: failures.append((count, error)))
-
-        connections = []
-
-        def drop_then_stop():
-            connections.append(1)
-            if len(connections) == 1:
-                camera._mark_disconnected("USB disconnected")
-            else:
-                camera._running = False
-
-        # Two failed searches, a connection that drops, then one failed search.
-        self.run_search_loop(
-            camera,
-            [RuntimeError("No camera"), RuntimeError("No camera"), None,
-             RuntimeError("No camera"), None],
-            drop_then_stop)
-
-        self.assertEqual([count for count, _error in failures], [1, 2, 1])
+        self.assertEqual(failures, ["No camera"] * 3)
 
     def test_disconnect_reconnects_automatically_on_same_thread(self):
         camera = edsdk.Camera("fake-edSDK.dll")

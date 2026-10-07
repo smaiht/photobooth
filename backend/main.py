@@ -1164,17 +1164,17 @@ def on_camera_error(error: str):
         asyncio.run_coroutine_threadsafe(show_disconnected(), _event_loop)
 
 
-def on_camera_search_failed(count: int, error: str):
+def on_camera_search_failed(error: str):
     # Runs on the camera thread; the relay watcher lives on the event loop.
-    if (count == camera_power.SEARCHES_BEFORE_CUT
-            and _event_loop and _event_loop.is_running()):
-        _event_loop.call_soon_threadsafe(camera_power.camera_lost, error)
+    if _event_loop and _event_loop.is_running():
+        _event_loop.call_soon_threadsafe(camera_power.search_failed, error)
 
 
 def on_camera_connected():
     log.info("Camera connected")
     if _event_loop and _event_loop.is_running():
         async def show_ready():
+            camera_power.camera_found()
             if not _session_running:
                 await set_state("idle")
             await _report_status_to_admin()

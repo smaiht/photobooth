@@ -167,7 +167,7 @@ class Camera:
         self._photo_cb = None  # callback(file_path)
         self._error_cb = None  # callback(error_str)
         self._connected_cb = None  # callback()
-        self._search_failed_cb = None  # callback(count, error_str)
+        self._search_failed_cb = None  # callback(error_str)
         self._failed_searches = 0
         self._download_dir = Path("photos")
         self._health_lock = threading.Lock()
@@ -361,7 +361,6 @@ class Camera:
                     self._failed_searches += 1
                     if self._search_failed_cb:
                         self._search_failed_cb(
-                            self._failed_searches,
                             self.status_snapshot()["last_disconnect_reason"])
                     retry_delay = SEARCH_RETRY_SECONDS
         except Exception as exc:
