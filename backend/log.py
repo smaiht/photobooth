@@ -1,53 +1,30 @@
-"""Logging setup — file only."""
+"""Logging setup — one file only."""
 
 import logging
 import os
 from pathlib import Path
-from logging.handlers import RotatingFileHandler
 
 _log_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_PATH = Path(_log_dir) / "photobooth.log"
-LOG_MAX_BYTES = 200_000
-LOG_BACKUP_COUNT = 1
+# /logs sends the log as one response document, which has a size limit
+# (yadisk_control.MAX_RESPONSE_DOCUMENT_SIZE), so only the tail is sent.
+LOG_SNAPSHOT_BYTES = 400_000
 
 
 def setup():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        handlers=[
-            RotatingFileHandler(
-                LOG_PATH,
-                encoding="utf-8",
-                maxBytes=LOG_MAX_BYTES,
-                backupCount=LOG_BACKUP_COUNT,
-            ),
-        ],
+        handlers=[logging.FileHandler(LOG_PATH, encoding="utf-8")],
     )
 
 
-def read_log_snapshot(log_path: Path = LOG_PATH) -> bytes:
-    """Return the previous and active log segments in chronological order."""
-    log_path = Path(log_path)
-    handler = next((
-        candidate
-        for candidate in logging.getLogger().handlers
-        if (isinstance(candidate, RotatingFileHandler)
-            and Path(candidate.baseFilename).resolve() == log_path.resolve())
-    ), None)
-
-    if handler:
-        handler.acquire()
-    try:
-        snapshot = bytearray()
-        for path in (log_path.with_name(log_path.name + ".1"), log_path):
-            if not path.is_file():
-                continue
-            segment = path.read_bytes()
-            if snapshot and segment and not snapshot.endswith(b"\n"):
-                snapshot.extend(b"\n")
-            snapshot.extend(segment)
-        return bytes(snapshot)
-    finally:
-        if handler:
-            handler.release()
+def read_log_snapshot(log_path: Path = LOG_PATH, limit: int = LOG_SNAPSHOT_BYTES) -> bytes:
+    """Return the last `limit` bytes of the log, starting at a whole line."""
+    with open(log_path, "rb") as log_file:
+        size = log_file.seek(0, os.SEEK_END)
+        log_file.seek(max(0, size - limit))
+        snapshot = log_file.read()
+    if size > limit:
+        snapshot = snapshot.partition(b"\n")[2]
+    return snapshot

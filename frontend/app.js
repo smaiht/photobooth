@@ -972,10 +972,9 @@ function _doSwitch(state, data) {
         cameraStatusTitle.textContent = searching
             ? "ИЩЕМ КАМЕРУ…"
             : "КАМЕРА НЕДОСТУПНА";
-        cameraStatusSubtitle.textContent = (
-            "Отключите фотобудку от розетки и включите снова — "
-            + "так она полностью перезапустится"
-        );
+        cameraStatusSubtitle.textContent = searching
+            ? "Пытаемся восстановить связь с камерой, подождите…"
+            : "";
     }
 
     if (state === "countdown" || state === "shooting") {

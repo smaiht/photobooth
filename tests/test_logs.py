@@ -1,94 +1,76 @@
+import logging
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from backend import main
-from backend.log import LOG_BACKUP_COUNT, LOG_MAX_BYTES, read_log_snapshot
+from backend.log import read_log_snapshot
 
 
 class LogSnapshotTests(unittest.TestCase):
-    def test_log_rotation_keeps_two_200kb_segments(self):
-        self.assertEqual(LOG_MAX_BYTES, 200_000)
-        self.assertEqual(LOG_BACKUP_COUNT, 1)
-
-    def test_snapshot_combines_backup_then_active(self):
+    def test_snapshot_of_a_small_log_is_the_whole_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            active = Path(tmpdir) / "photobooth.log"
-            backup = Path(tmpdir) / "photobooth.log.1"
-            backup.write_bytes(b"oldest line\nolder line")
-            active.write_bytes(b"current line\n")
+            log = Path(tmpdir) / "photobooth.log"
+            log.write_bytes(b"first line\nsecond line\n")
 
-            snapshot = read_log_snapshot(active)
+            self.assertEqual(read_log_snapshot(log), b"first line\nsecond line\n")
 
-        self.assertEqual(
-            snapshot,
-            b"oldest line\nolder line\ncurrent line\n",
-        )
+    def test_snapshot_of_a_big_log_is_its_tail_from_a_whole_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log = Path(tmpdir) / "photobooth.log"
+            log.write_bytes(b"old line\nmiddle line\nnewest line\n")
 
-    def test_clear_removes_active_history_and_all_backups(self):
+            snapshot = read_log_snapshot(log, limit=len(b"ddle line\nnewest line\n"))
+
+        self.assertEqual(snapshot, b"newest line\n")
+
+    def test_clear_empties_the_log_when_no_handler_has_it_open(self):
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch.object(main, "ROOT_DIR", Path(tmpdir)):
             active = Path(tmpdir) / "photobooth.log"
-            backup = Path(tmpdir) / "photobooth.log.1"
-            legacy_backup = Path(tmpdir) / "photobooth.log.2"
-            backup.write_bytes(b"old backup\n")
-            legacy_backup.write_bytes(b"even older backup\n")
             active.write_bytes(b"current history\n")
 
             main._clear_local_logs()
 
             self.assertEqual(active.read_bytes(), b"")
-            self.assertFalse(backup.exists())
-            self.assertFalse(legacy_backup.exists())
 
-    def test_clear_truncates_the_open_rotating_log_stream(self):
-        import logging
-        from logging.handlers import RotatingFileHandler
-
+    def test_clear_truncates_the_open_log_stream(self):
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch.object(main, "ROOT_DIR", Path(tmpdir)):
             active = Path(tmpdir) / "photobooth.log"
-            backup = Path(tmpdir) / "photobooth.log.1"
-            handler = RotatingFileHandler(
-                active, encoding="utf-8", maxBytes=200_000, backupCount=1)
+            handler = logging.FileHandler(active, encoding="utf-8")
             root = logging.getLogger()
             root.addHandler(handler)
             try:
                 handler.stream.write("current history\n")
                 handler.flush()
-                backup.write_text("old backup\n", encoding="utf-8")
 
                 main._clear_local_logs()
                 handler.stream.write("after clear\n")
                 handler.flush()
 
                 self.assertEqual(active.read_text(encoding="utf-8"), "after clear\n")
-                self.assertFalse(backup.exists())
             finally:
                 root.removeHandler(handler)
                 handler.close()
 
 
 class LogCommandTests(unittest.IsolatedAsyncioTestCase):
-    async def test_send_logs_embeds_one_chronological_document_in_response(self):
-        command_id = "a" * 32
+    async def test_send_logs_embeds_the_log_in_the_response(self):
         command = {
-            "command_id": command_id,
+            "command_id": "a" * 32,
             "command": "send_logs",
             "data": None,
         }
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch.object(main, "ROOT_DIR", Path(tmpdir)):
-            active = Path(tmpdir) / "photobooth.log"
-            backup = Path(tmpdir) / "photobooth.log.1"
-            backup.write_bytes(b"old\n")
-            active.write_bytes(b"new\n")
+            (Path(tmpdir) / "photobooth.log").write_bytes(b"first\nsecond\n")
 
             result = await main.handle_disk_command(command)
 
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(result["document"], "old\nnew\n")
+        self.assertEqual(result["document"], "first\nsecond\n")
         self.assertNotIn("artifact_path", result)
 
 

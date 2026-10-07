@@ -56,7 +56,9 @@ from .composer import (
 from .text_layer import date_values
 from .log import read_log_snapshot
 from .video import VideoRecorder
-from . import sms, system_service, yadisk_cloud, yadisk_control, yookassa
+from . import (
+    camera_power, flash, sms, system_service, yadisk_cloud, yadisk_control, yookassa,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1162,10 +1164,17 @@ def on_camera_error(error: str):
         asyncio.run_coroutine_threadsafe(show_disconnected(), _event_loop)
 
 
+def on_camera_search_failed(error: str):
+    # Runs on the camera thread; the relay watcher lives on the event loop.
+    if _event_loop and _event_loop.is_running():
+        _event_loop.call_soon_threadsafe(camera_power.search_failed, error)
+
+
 def on_camera_connected():
     log.info("Camera connected")
     if _event_loop and _event_loop.is_running():
         async def show_ready():
+            camera_power.camera_found()
             if not _session_running:
                 await set_state("idle")
             await _report_status_to_admin()
@@ -1336,6 +1345,7 @@ async def run_session(test_session: bool = False):
         return
     previous_session_id = SESSION_ID
     _session_running = True
+    flash.session(True)
     try:
         if (not test_session and _is_technical_event()
                 and _cafe_payment and _cafe_payment.get("credited")):
@@ -1381,6 +1391,7 @@ async def run_session(test_session: bool = False):
             "idle" if camera and camera.is_connected else "camera_searching")
     finally:
         _session_running = False
+        flash.session(False)
         app.state.on_template_choice = None
         app.state.on_skip_print = None
         app.state.on_template_activity = None
@@ -2268,19 +2279,17 @@ def _save_event_folder(name: str) -> None:
 
 
 def _clear_local_logs() -> None:
-    from logging.handlers import RotatingFileHandler
-
     log_path = ROOT_DIR / "photobooth.log"
     handler = next((
         candidate
         for candidate in logging.getLogger().handlers
-        if (isinstance(candidate, RotatingFileHandler)
+        if (isinstance(candidate, logging.FileHandler)
             and Path(candidate.baseFilename).resolve() == log_path.resolve())
     ), None)
 
     # On Windows the active log cannot be replaced while its handler keeps the
     # file open.  Truncate that same stream under the handler lock so concurrent
-    # log records cannot slip across the clear boundary or trigger a rollover.
+    # log records cannot slip across the clear boundary.
     if handler:
         handler.acquire()
     try:
@@ -2291,10 +2300,6 @@ def _clear_local_logs() -> None:
             handler.stream.flush()
         else:
             log_path.write_text("", encoding="utf-8")
-
-        for rotated in ROOT_DIR.glob("photobooth.log.*"):
-            if rotated.is_file():
-                rotated.unlink(missing_ok=True)
     finally:
         if handler:
             handler.release()
@@ -2524,6 +2529,7 @@ async def _status_report_text() -> str:
     system_lines = [
         f"☁️ СИСТЕМА: {STATE}",
         f"• СМС: {sms.status}",
+        f"• Вспышка: {flash.status}",
         (
             f"⚠️ Яндекс.Диск: незавершённых сессий — {pending_sessions}"
             if pending_sessions
@@ -3337,6 +3343,7 @@ async def startup():
             on_photo=on_photo_downloaded,
             on_error=on_camera_error,
             on_connected=on_camera_connected,
+            on_search_failed=on_camera_search_failed,
         )
         await set_state("camera_searching")
         camera.start()
@@ -3350,6 +3357,8 @@ async def startup():
     _service_tasks.add(asyncio.create_task(_yadisk_service()))
     _service_tasks.add(asyncio.create_task(_periodic_status_service()))
     _service_tasks.add(asyncio.create_task(sms.watch(CONFIG)))
+    _service_tasks.add(asyncio.create_task(flash.watch(CONFIG)))
+    _service_tasks.add(asyncio.create_task(camera_power.watch()))
 
 
 @app.on_event("shutdown")
