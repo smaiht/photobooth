@@ -8,6 +8,7 @@ which carries the battery level, and the charger is switched by a USB relay
 import asyncio
 import contextlib
 import logging
+import os
 
 import serial
 from bleak import BleakClient, BleakScanner
@@ -85,12 +86,16 @@ async def read_flash():
 
 
 def set_relay(on):
-    ports = [p.device for p in list_ports.comports() if (p.vid, p.pid) == RELAY_USB_ID]
-    if not ports:
-        raise RuntimeError("LCUS-1 не найден (CH340)")
-    if len(ports) > 1:  # identical boards cannot be told apart, so do not guess
-        raise RuntimeError("найдено несколько LCUS-1 (CH340), оставь одно")
-    with serial.Serial(ports[0], 9600, write_timeout=1) as relay:
+    port = os.environ.get("FLASH_RELAY_PORT", "").strip()  # set in .env when there are several relays
+    if not port:
+        ports = [p.device for p in list_ports.comports() if (p.vid, p.pid) == RELAY_USB_ID]
+        if not ports:
+            raise RuntimeError("LCUS-1 не найден (CH340)")
+        if len(ports) > 1:  # identical boards cannot be told apart, so do not guess
+            raise RuntimeError(f"найдено несколько LCUS-1 (CH340): {', '.join(ports)}; "
+                               "задай FLASH_RELAY_PORT в .env")
+        port = ports[0]
+    with serial.Serial(port, 9600, write_timeout=1) as relay:
         relay.write(RELAY_ON if on else RELAY_OFF)
         relay.flush()
 
