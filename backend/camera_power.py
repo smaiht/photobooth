@@ -1,4 +1,4 @@
-"""Power-cycle the camera through a USB relay when it is lost.
+"""Power-cycle the camera through a USB relay when searching for it keeps failing.
 
 The camera adapter goes through the NC contact of an LCUS-1 relay, so the
 camera is powered by default and switching the relay on cuts its power. The
@@ -12,6 +12,7 @@ import uuid
 
 from . import relay, yadisk_control
 
+SEARCHES_BEFORE_CUT = 3  # failed searches in a row before the power is cut
 CUT_SECONDS = 10
 
 log = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ _reason = ""
 
 
 def camera_lost(reason):
-    """The camera dropped off: the watcher cuts its power at once."""
+    """The camera is still missing after SEARCHES_BEFORE_CUT searches: cut its power."""
     global _reason
     _reason = str(reason)[:300]
     _lost.set()
@@ -43,10 +44,11 @@ async def _cycle(port, reason):
     notice = None
     try:
         await _power(port, True)
-        log.warning("Camera power: camera lost (%s), power off for %ss", reason, CUT_SECONDS)
+        log.warning("Camera power: camera not found after %d searches (%s), power off for %ss",
+                    SEARCHES_BEFORE_CUT, reason, CUT_SECONDS)
         notice = asyncio.create_task(_notify(
-            f"Камера пропала ({reason}). Питание камеры выключено на {CUT_SECONDS} с, "
-            "потом включится само."))
+            f"Камера не найдена после {SEARCHES_BEFORE_CUT} попыток поиска ({reason}). "
+            f"Питание камеры выключено на {CUT_SECONDS} с, потом включится само."))
         await asyncio.sleep(CUT_SECONDS)
     finally:
         # Always give the power back, also when the cut failed or the app stops.
@@ -76,4 +78,5 @@ async def watch():
             await _cycle(port, _reason)
         except Exception as exc:  # the cut itself failed
             log.error("Camera power: relay did not cut the power: %s", exc)
-            await _notify(f"Камера пропала ({_reason}), но реле не сработало: {exc}")
+            await _notify(f"Камера не найдена после {SEARCHES_BEFORE_CUT} попыток поиска "
+                          f"({_reason}), но реле не сработало: {exc}")

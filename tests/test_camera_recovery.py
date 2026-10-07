@@ -115,7 +115,7 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         self.assertEqual(
             edsdk.Camera._format_temperature_status(4), "capture_disabled")
 
-    def test_initially_missing_camera_is_found_by_automatic_backoff(self):
+    def test_initially_missing_camera_is_found_by_automatic_search(self):
         camera = edsdk.Camera("fake-edSDK.dll")
         ready = threading.Event()
         errors = []
@@ -127,8 +127,7 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
             on_error=errors.append,
             on_connected=ready.set,
         )
-        with patch.object(edsdk, "RECONNECT_MIN_SECONDS", 0.01), \
-             patch.object(edsdk, "RECONNECT_MAX_SECONDS", 0.02), \
+        with patch.object(edsdk, "SEARCH_RETRY_SECONDS", 0.01), \
              patch.object(edsdk.ctypes, "WinDLL", return_value=object(), create=True), \
              patch.object(camera, "_initialize_com"), \
              patch.object(camera, "_uninitialize_com"), \
@@ -141,7 +140,7 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
              patch.object(camera, "_run_connected", side_effect=stop_after_connect), \
              patch.object(camera, "_cleanup_camera"):
             camera.start()
-            self.assertTrue(ready.wait(2), "automatic backoff did not find the camera")
+            self.assertTrue(ready.wait(2), "automatic search did not find the camera")
             camera._thread.join(timeout=2)
 
         self.assertFalse(camera._thread.is_alive())
@@ -149,6 +148,58 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
         init_sdk.assert_called_once_with()
         terminate_sdk.assert_called_once_with()
         self.assertEqual(errors, ["No camera"])
+
+    def run_search_loop(self, camera, connect_effects, run_connected):
+        with patch.object(edsdk, "SEARCH_RETRY_SECONDS", 0.01), \
+             patch.object(edsdk.ctypes, "WinDLL", return_value=object(), create=True), \
+             patch.object(camera, "_initialize_com"), \
+             patch.object(camera, "_uninitialize_com"), \
+             patch.object(camera, "_setup_sdk_functions"), \
+             patch.object(camera, "_init_sdk"), \
+             patch.object(camera, "_terminate_sdk"), \
+             patch.object(camera, "_connect_camera", side_effect=connect_effects), \
+             patch.object(camera, "_configure_for_photobooth"), \
+             patch.object(camera, "_register_handlers"), \
+             patch.object(camera, "_run_connected", side_effect=run_connected), \
+             patch.object(camera, "_cleanup_camera"):
+            camera.start()
+            camera._thread.join(timeout=2)
+        self.assertFalse(camera._thread.is_alive())
+
+    def test_every_failed_search_is_reported_with_its_count(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        failures = []
+        camera.set_callbacks(on_search_failed=lambda count, error: failures.append((count, error)))
+
+        def stop():
+            camera._running = False
+
+        self.run_search_loop(camera, [RuntimeError("No camera")] * 3 + [None], stop)
+
+        self.assertEqual(failures, [(1, "No camera"), (2, "No camera"), (3, "No camera")])
+
+    def test_the_failed_search_count_starts_again_after_a_connection(self):
+        camera = edsdk.Camera("fake-edSDK.dll")
+        failures = []
+        camera.set_callbacks(on_search_failed=lambda count, error: failures.append((count, error)))
+
+        connections = []
+
+        def drop_then_stop():
+            connections.append(1)
+            if len(connections) == 1:
+                camera._mark_disconnected("USB disconnected")
+            else:
+                camera._running = False
+
+        # Two failed searches, a connection that drops, then one failed search.
+        self.run_search_loop(
+            camera,
+            [RuntimeError("No camera"), RuntimeError("No camera"), None,
+             RuntimeError("No camera"), None],
+            drop_then_stop)
+
+        self.assertEqual([count for count, _error in failures], [1, 2, 1])
 
     def test_disconnect_reconnects_automatically_on_same_thread(self):
         camera = edsdk.Camera("fake-edSDK.dll")

@@ -1156,13 +1156,19 @@ def on_camera_error(error: str):
     if _event_loop and _event_loop.is_running():
         async def show_disconnected():
             _camera_disconnected_event.set()
-            camera_power.camera_lost(error)
             # A running session handles it: capture aborts within a second, and
             # once the photos are on disk the session finishes without a camera.
             if not _session_running:
                 await set_state("camera_searching")
 
         asyncio.run_coroutine_threadsafe(show_disconnected(), _event_loop)
+
+
+def on_camera_search_failed(count: int, error: str):
+    # Runs on the camera thread; the relay watcher lives on the event loop.
+    if (count == camera_power.SEARCHES_BEFORE_CUT
+            and _event_loop and _event_loop.is_running()):
+        _event_loop.call_soon_threadsafe(camera_power.camera_lost, error)
 
 
 def on_camera_connected():
@@ -3337,6 +3343,7 @@ async def startup():
             on_photo=on_photo_downloaded,
             on_error=on_camera_error,
             on_connected=on_camera_connected,
+            on_search_failed=on_camera_search_failed,
         )
         await set_state("camera_searching")
         camera.start()

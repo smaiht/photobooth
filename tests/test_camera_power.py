@@ -84,18 +84,15 @@ class CameraPowerTests(unittest.IsolatedAsyncioTestCase):
         self.publish.assert_not_awaited()
 
 
-class CameraLostWiringTests(unittest.IsolatedAsyncioTestCase):
-    async def test_a_lost_camera_reaches_the_power_watcher(self):
+class SearchFailureWiringTests(unittest.IsolatedAsyncioTestCase):
+    async def test_only_the_configured_failed_search_reaches_the_power_watcher(self):
         with patch.object(main, "_event_loop", asyncio.get_running_loop()), \
-             patch.object(main, "STATE", "idle"), \
-             patch.object(main, "_session_running", False), \
-             patch.object(main, "CLIENTS", []), \
-             patch.object(main, "_camera_disconnected_event", asyncio.Event()), \
              patch.object(camera_power, "camera_lost") as lost:
-            main.on_camera_error("USB lost")
-            await asyncio.sleep(0.05)
+            for count in range(1, camera_power.SEARCHES_BEFORE_CUT + 3):
+                main.on_camera_search_failed(count, f"search {count}")
+            await asyncio.sleep(0.01)
 
-        lost.assert_called_once_with("USB lost")
+        lost.assert_called_once_with(f"search {camera_power.SEARCHES_BEFORE_CUT}")
 
 
 if __name__ == "__main__":

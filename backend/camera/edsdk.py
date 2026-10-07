@@ -86,8 +86,7 @@ OBJECT_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, EdsBaseRef, ctypes.c
 STATE_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
 PROPERTY_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
 
-RECONNECT_MIN_SECONDS = 2
-RECONNECT_MAX_SECONDS = 10
+SEARCH_RETRY_SECONDS = 2
 CAMERA_HEALTH_LOG_SECONDS = 10 * 60.0
 MIN_FREE_DISK_GIB = 2.0
 
@@ -168,6 +167,8 @@ class Camera:
         self._photo_cb = None  # callback(file_path)
         self._error_cb = None  # callback(error_str)
         self._connected_cb = None  # callback()
+        self._search_failed_cb = None  # callback(count, error_str)
+        self._failed_searches = 0
         self._download_dir = Path("photos")
         self._health_lock = threading.Lock()
         self._capture_error_lock = threading.Lock()
@@ -188,11 +189,13 @@ class Camera:
         self._state_handler_ref = None
         self._prop_handler_ref = None
 
-    def set_callbacks(self, on_evf_frame=None, on_photo=None, on_error=None, on_connected=None):
+    def set_callbacks(self, on_evf_frame=None, on_photo=None, on_error=None, on_connected=None,
+                      on_search_failed=None):
         self._evf_frame_cb = on_evf_frame
         self._photo_cb = on_photo
         self._error_cb = on_error
         self._connected_cb = on_connected
+        self._search_failed_cb = on_search_failed
 
     def set_download_dir(self, path: Path):
         self._download_dir = path
@@ -300,14 +303,16 @@ class Camera:
 
             while self._running:
                 if retry_delay:
-                    log.info("Camera: next automatic search in %ds", retry_delay)
                     self._retry_event.wait(timeout=retry_delay)
                 self._retry_event.clear()
                 if not self._running:
                     break
 
                 self._discard_commands()
-                log.info("Camera: search started")
+                # Only the first search of an outage is logged loudly: one every
+                # few seconds for hours would bury the rest of the log.
+                repeat = self._failed_searches > 0
+                (log.debug if repeat else log.info)("Camera: search started")
                 reached_ready = False
                 try:
                     self._connect_camera()
@@ -315,6 +320,7 @@ class Camera:
                     self._register_handlers()
                     self._connected = True
                     self._failure_notified = False
+                    self._failed_searches = 0
                     self._update_health(connected=True)
                     reached_ready = True
                     log.info("Camera ready")
@@ -323,18 +329,21 @@ class Camera:
                     self._run_connected()
                 except EDSDKError as exc:
                     if self._running:
-                        log.warning("Camera EDSDK operation failed: %s", exc)
+                        (log.debug if repeat else log.warning)(
+                            "Camera EDSDK operation failed: %s", exc)
                         self._mark_disconnected(
                             str(exc),
                             transport_lost=exc.code in FATAL_TRANSPORT_ERRORS,
                         )
                 except RuntimeError as exc:
                     if self._running:
-                        log.warning("Camera search failed: %s", exc)
+                        (log.debug if repeat else log.warning)(
+                            "Camera search failed: %s", exc)
                         self._mark_disconnected(str(exc))
                 except Exception as exc:
                     if self._running:
-                        log.exception("Camera connection failed")
+                        log.log(logging.DEBUG if repeat else logging.ERROR,
+                                "Camera connection failed", exc_info=True)
                         # ctypes access violations and other unexpected errors
                         # while a session is active make further remote cleanup
                         # unsafe. EdsRelease is still required for our ref.
@@ -348,10 +357,13 @@ class Camera:
                 if reached_ready:
                     # A runtime USB disconnect gets one immediate retry.
                     retry_delay = 0
-                elif retry_delay:
-                    retry_delay = min(retry_delay * 2, RECONNECT_MAX_SECONDS)
-                else:
-                    retry_delay = RECONNECT_MIN_SECONDS
+                elif self._running:
+                    self._failed_searches += 1
+                    if self._search_failed_cb:
+                        self._search_failed_cb(
+                            self._failed_searches,
+                            self.status_snapshot()["last_disconnect_reason"])
+                    retry_delay = SEARCH_RETRY_SECONDS
         except Exception as exc:
             if self._running:
                 log.exception("EDSDK worker initialization failed")
@@ -584,7 +596,7 @@ class Camera:
                     log.info("Session opened")
                     return
                 last_error = err
-                log.warning(
+                (log.debug if self._failed_searches else log.warning)(
                     "OpenSession attempt %d/5 failed: 0x%08X %s",
                     attempt, err, edsdk_error_name(err),
                 )
