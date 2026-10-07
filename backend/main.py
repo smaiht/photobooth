@@ -2270,19 +2270,17 @@ def _save_event_folder(name: str) -> None:
 
 
 def _clear_local_logs() -> None:
-    from logging.handlers import RotatingFileHandler
-
     log_path = ROOT_DIR / "photobooth.log"
     handler = next((
         candidate
         for candidate in logging.getLogger().handlers
-        if (isinstance(candidate, RotatingFileHandler)
+        if (isinstance(candidate, logging.FileHandler)
             and Path(candidate.baseFilename).resolve() == log_path.resolve())
     ), None)
 
     # On Windows the active log cannot be replaced while its handler keeps the
     # file open.  Truncate that same stream under the handler lock so concurrent
-    # log records cannot slip across the clear boundary or trigger a rollover.
+    # log records cannot slip across the clear boundary.
     if handler:
         handler.acquire()
     try:
@@ -2293,10 +2291,6 @@ def _clear_local_logs() -> None:
             handler.stream.flush()
         else:
             log_path.write_text("", encoding="utf-8")
-
-        for rotated in ROOT_DIR.glob("photobooth.log.*"):
-            if rotated.is_file():
-                rotated.unlink(missing_ok=True)
     finally:
         if handler:
             handler.release()

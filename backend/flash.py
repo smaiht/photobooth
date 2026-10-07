@@ -44,11 +44,14 @@ def next_cycle(cycle, battery):
 
 
 def session(active):
-    """A photo session started or ended. A start puts the charger off at once."""
+    """A photo session started or ended; the watcher reacts at once.
+
+    A start puts the charger off, an end checks the battery right away so the
+    charge cycle resumes without waiting for the next poll.
+    """
     global session_active
     session_active = active
-    if active:
-        wake.set()
+    wake.set()
 
 
 async def read_flash():
