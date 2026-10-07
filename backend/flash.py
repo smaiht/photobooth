@@ -85,11 +85,12 @@ async def read_flash():
 
 
 def set_relay(on):
-    port = next((p.device for p in list_ports.comports()
-                 if (p.vid, p.pid) == RELAY_USB_ID), None)
-    if port is None:
+    ports = [p.device for p in list_ports.comports() if (p.vid, p.pid) == RELAY_USB_ID]
+    if not ports:
         raise RuntimeError("LCUS-1 не найден (CH340)")
-    with serial.Serial(port, 9600, write_timeout=1) as relay:
+    if len(ports) > 1:  # identical boards cannot be told apart, so do not guess
+        raise RuntimeError("найдено несколько LCUS-1 (CH340), оставь одно")
+    with serial.Serial(ports[0], 9600, write_timeout=1) as relay:
         relay.write(RELAY_ON if on else RELAY_OFF)
         relay.flush()
 
