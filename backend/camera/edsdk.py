@@ -86,7 +86,7 @@ OBJECT_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, EdsBaseRef, ctypes.c
 STATE_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
 PROPERTY_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
 
-SEARCH_RETRY_SECONDS = 2
+SEARCH_RETRY_SECONDS = 2.5
 CAMERA_HEALTH_LOG_SECONDS = 10 * 60.0
 MIN_FREE_DISK_GIB = 2.0
 
