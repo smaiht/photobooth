@@ -26,10 +26,11 @@ class RelayPortTests(unittest.TestCase):
         environ = patch.dict(os.environ)
         environ.start()
         self.addCleanup(environ.stop)
-        os.environ.pop("FLASH_RELAY_PORT", None)
-        serial_class = patch.object(flash.serial, "Serial")
-        self.serial_class = serial_class.start()
-        self.addCleanup(serial_class.stop)
+        for name in ("FLASH_RELAY_PORT", "CAMERA_RELAY_PORT"):
+            os.environ.pop(name, None)
+        switch = patch.object(flash.relay, "switch")
+        self.switch = switch.start()
+        self.addCleanup(switch.stop)
 
     def boards(self, *devices):
         found = [types.SimpleNamespace(device=device, vid=flash.RELAY_USB_ID[0],
@@ -41,7 +42,7 @@ class RelayPortTests(unittest.TestCase):
     def test_the_only_board_is_used(self):
         self.boards("board-a")
         flash.set_relay(True)
-        self.assertEqual(self.serial_class.call_args.args[0], "board-a")
+        self.switch.assert_called_once_with("board-a", True)
 
     def test_several_boards_are_refused_and_listed(self):
         self.boards("board-a", "board-b")
@@ -49,13 +50,32 @@ class RelayPortTests(unittest.TestCase):
             flash.set_relay(True)
         self.assertIn("board-a", str(caught.exception))
         self.assertIn("board-b", str(caught.exception))
-        self.serial_class.assert_not_called()
+        self.switch.assert_not_called()
 
     def test_port_from_env_wins_over_several_boards(self):
         self.boards("board-a", "board-b")
         os.environ["FLASH_RELAY_PORT"] = "board-b"
         flash.set_relay(True)
-        self.assertEqual(self.serial_class.call_args.args[0], "board-b")
+        self.switch.assert_called_once_with("board-b", True)
+
+    def test_the_camera_board_is_never_taken_for_the_charger(self):
+        os.environ["CAMERA_RELAY_PORT"] = "board-a"
+        self.boards("board-a", "board-b")
+        flash.set_relay(True)
+        self.switch.assert_called_once_with("board-b", True)
+
+        self.switch.reset_mock()
+        self.boards("board-a")
+        with self.assertRaises(RuntimeError):
+            flash.set_relay(True)
+        self.switch.assert_not_called()
+
+    def test_charger_and_camera_on_one_board_are_refused(self):
+        os.environ["FLASH_RELAY_PORT"] = "board-a"
+        os.environ["CAMERA_RELAY_PORT"] = "board-a"
+        with self.assertRaises(RuntimeError):
+            flash.set_relay(True)
+        self.switch.assert_not_called()
 
 
 if __name__ == "__main__":

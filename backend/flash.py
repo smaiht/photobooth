@@ -10,9 +10,10 @@ import contextlib
 import logging
 import os
 
-import serial
 from bleak import BleakClient, BleakScanner
 from serial.tools import list_ports
+
+from . import relay
 
 BLE_NAME = "Q4Pro"
 WRITE = "69400002-b5a3-f393-e0a9-e50e24dcca99"
@@ -22,8 +23,6 @@ POLL_SECONDS = 60
 LOW = 25   # a charge cycle starts at or below this percent
 HIGH = 85  # and ends at or above this one
 RELAY_USB_ID = (0x1A86, 0x7523)  # CH340 chip of the LCUS-1 board
-RELAY_ON = bytes.fromhex("a0 01 01 a2")
-RELAY_OFF = bytes.fromhex("a0 01 00 a1")
 # Reply tag -> name of its first payload byte in the log line.
 EXTRA = {0x22: "awake", 0x25: "capacitor", 0x24: "error", 0x26: "overheat"}
 
@@ -86,18 +85,20 @@ async def read_flash():
 
 
 def set_relay(on):
-    port = os.environ.get("FLASH_RELAY_PORT", "").strip()  # set in .env when there are several relays
+    camera_port = os.environ.get("CAMERA_RELAY_PORT", "").strip()
+    port = os.environ.get("FLASH_RELAY_PORT", "").strip()  # set in .env when the board is not alone
     if not port:
-        ports = [p.device for p in list_ports.comports() if (p.vid, p.pid) == RELAY_USB_ID]
+        ports = [p.device for p in list_ports.comports()
+                 if (p.vid, p.pid) == RELAY_USB_ID and p.device != camera_port]
         if not ports:
             raise RuntimeError("LCUS-1 не найден (CH340)")
         if len(ports) > 1:  # identical boards cannot be told apart, so do not guess
             raise RuntimeError(f"найдено несколько LCUS-1 (CH340): {', '.join(ports)}; "
                                "задай FLASH_RELAY_PORT в .env")
         port = ports[0]
-    with serial.Serial(port, 9600, write_timeout=1) as relay:
-        relay.write(RELAY_ON if on else RELAY_OFF)
-        relay.flush()
+    if port == camera_port:  # the camera power must never follow the charge cycle
+        raise RuntimeError("зарядка и камера указаны на одном реле")
+    relay.switch(port, on)
 
 
 async def watch(config):

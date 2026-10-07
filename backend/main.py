@@ -56,7 +56,9 @@ from .composer import (
 from .text_layer import date_values
 from .log import read_log_snapshot
 from .video import VideoRecorder
-from . import flash, sms, system_service, yadisk_cloud, yadisk_control, yookassa
+from . import (
+    camera_power, flash, sms, system_service, yadisk_cloud, yadisk_control, yookassa,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1154,6 +1156,7 @@ def on_camera_error(error: str):
     if _event_loop and _event_loop.is_running():
         async def show_disconnected():
             _camera_disconnected_event.set()
+            camera_power.camera_lost(error)
             # A running session handles it: capture aborts within a second, and
             # once the photos are on disk the session finishes without a camera.
             if not _session_running:
@@ -3348,6 +3351,7 @@ async def startup():
     _service_tasks.add(asyncio.create_task(_periodic_status_service()))
     _service_tasks.add(asyncio.create_task(sms.watch(CONFIG)))
     _service_tasks.add(asyncio.create_task(flash.watch(CONFIG)))
+    _service_tasks.add(asyncio.create_task(camera_power.watch()))
 
 
 @app.on_event("shutdown")
