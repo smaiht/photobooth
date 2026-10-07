@@ -56,7 +56,7 @@ from .composer import (
 from .text_layer import date_values
 from .log import read_log_snapshot
 from .video import VideoRecorder
-from . import sms, system_service, yadisk_cloud, yadisk_control, yookassa
+from . import flash, sms, system_service, yadisk_cloud, yadisk_control, yookassa
 
 log = logging.getLogger(__name__)
 
@@ -1336,6 +1336,7 @@ async def run_session(test_session: bool = False):
         return
     previous_session_id = SESSION_ID
     _session_running = True
+    flash.session(True)
     try:
         if (not test_session and _is_technical_event()
                 and _cafe_payment and _cafe_payment.get("credited")):
@@ -1381,6 +1382,7 @@ async def run_session(test_session: bool = False):
             "idle" if camera and camera.is_connected else "camera_searching")
     finally:
         _session_running = False
+        flash.session(False)
         app.state.on_template_choice = None
         app.state.on_skip_print = None
         app.state.on_template_activity = None
@@ -2524,6 +2526,7 @@ async def _status_report_text() -> str:
     system_lines = [
         f"☁️ СИСТЕМА: {STATE}",
         f"• СМС: {sms.status}",
+        f"• Вспышка: {flash.status}",
         (
             f"⚠️ Яндекс.Диск: незавершённых сессий — {pending_sessions}"
             if pending_sessions
@@ -3350,6 +3353,7 @@ async def startup():
     _service_tasks.add(asyncio.create_task(_yadisk_service()))
     _service_tasks.add(asyncio.create_task(_periodic_status_service()))
     _service_tasks.add(asyncio.create_task(sms.watch(CONFIG)))
+    _service_tasks.add(asyncio.create_task(flash.watch(CONFIG)))
 
 
 @app.on_event("shutdown")

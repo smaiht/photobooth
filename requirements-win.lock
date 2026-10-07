@@ -9,6 +9,7 @@ anyio==4.14.2
 attrs==26.1.0
 autocommand==2.2.2
 backports.tarfile==1.2.0
+bleak==3.0.2
 bottle==0.13.4
 certifi==2026.2.25
 cffi==2.1.1
@@ -35,6 +36,7 @@ proxy-tools==0.1.0
 pycparser==3.0
 pydantic==2.13.4
 pydantic-core==2.46.4
+pyserial==3.5
 python-dotenv==1.2.2
 pythonnet==3.1.0
 pywebview==6.1
@@ -47,5 +49,14 @@ typing-inspection==0.4.2
 uvicorn==0.44.0
 watchfiles==1.2.0
 websockets==16.0
+winrt-runtime==3.2.1
+winrt-windows-devices-bluetooth==3.2.1
+winrt-windows-devices-bluetooth-advertisement==3.2.1
+winrt-windows-devices-bluetooth-genericattributeprofile==3.2.1
+winrt-windows-devices-enumeration==3.2.1
+winrt-windows-devices-radios==3.2.1
+winrt-windows-foundation==3.2.1
+winrt-windows-foundation-collections==3.2.1
+winrt-windows-storage-streams==3.2.1
 yarl==1.24.5
 zipp==3.23.0
