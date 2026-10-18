@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -115,21 +116,32 @@ def _parse_credentials(payload: bytes) -> dict[str, str]:
     return credentials
 
 
-def _download_credentials(token: str) -> bytes:
+def _download(path: str, token: str, max_size: int) -> bytes:
     link = yadisk_updates._download_link(
-        REMOTE_FOLDER, token, timeout=REQUEST_TIMEOUT)
+        path, token, timeout=REQUEST_TIMEOUT)
     if not link.startswith("https://"):
         raise ValueError("credentials download requires HTTPS")
-    # The whole configs folder travels as one ZIP, like the other system data,
-    # so later configs need no extra request. The temporary storage request
-    # must not carry the Disk OAuth token.
+    # The temporary storage request must not carry the Disk OAuth token.
     request = urllib.request.Request(
         link, headers={"User-Agent": "photobooth-yookassa/1"})
     with urllib.request.urlopen(
             request, timeout=REQUEST_TIMEOUT, context=ca_context()) as response:
-        archive = response.read(MAX_ARCHIVE_SIZE + 1)
-    if len(archive) > MAX_ARCHIVE_SIZE:
-        raise ValueError("credentials archive is too large")
+        payload = response.read(max_size + 1)
+    if len(payload) > max_size:
+        raise ValueError("credentials download is too large")
+    return payload
+
+
+def _download_credentials(token: str) -> bytes:
+    # The whole configs folder travels as one ZIP, like the other system data,
+    # so later configs need no extra request.
+    try:
+        archive = _download(REMOTE_FOLDER, token, MAX_ARCHIVE_SIZE)
+    except urllib.error.HTTPError as exc:
+        # Disk answered the folder ZIP with an error status; read the file.
+        log.warning("YooKassa: configs folder failed with HTTP %s", exc.code)
+        return _download(
+            f"{REMOTE_FOLDER}/{REMOTE_FILENAME}", token, MAX_CREDENTIALS_SIZE)
     return yadisk_updates._extract_folder_member_bytes(
         archive,
         folder_name=REMOTE_FOLDER.rsplit("/", 1)[-1],

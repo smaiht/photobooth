@@ -52,7 +52,7 @@ class StatusNotFound(FileNotFoundError):
 
 
 class StatusStorageLinkError(ConnectionError):
-    """A temporary folder download could not serve status.json."""
+    """A temporary download link could not serve status.json."""
 
 
 def _raise_if_cancelled(cancel_event) -> None:
@@ -83,13 +83,13 @@ def _request(method: str, url: str, token: str, *, params: dict | None = None,
     return urllib.request.urlopen(request, timeout=timeout, context=ca_context())
 
 
-def _read_status_once(root: str, token: str, cancel_event=None) -> dict:
+def _fetch_status(path: str, token: str, cancel_event=None) -> bytes:
     # Ask for a new storage URL on every attempt. Yandex download links are
     # temporary, and retrying a link issued while the network was unhealthy is
     # less reliable than resolving the path again through the API.
     try:
         link = _download_link(
-            f"{root}/status_bundle",
+            path,
             token,
             timeout=STATUS_REQUEST_TIMEOUT,
         )
@@ -118,17 +118,33 @@ def _read_status_once(root: str, token: str, cancel_event=None) -> dict:
             ) from exc
         raise
     if len(payload) > MAX_STATUS_ARCHIVE_SIZE:
-        raise StatusStorageLinkError("status folder archive is too large")
+        raise StatusStorageLinkError("status download is too large")
+    return payload
+
+
+def _read_status_once(root: str, token: str, cancel_event=None) -> dict:
     try:
-        status_bytes = _extract_folder_member_bytes(
-            payload,
-            folder_name="status_bundle",
-            filename="status.json",
-            max_size=MAX_STATUS_SIZE,
+        payload = _fetch_status(f"{root}/status_bundle", token, cancel_event)
+    except urllib.error.HTTPError as exc:
+        # Disk answered the folder ZIP with an error status. Read the file
+        # itself; network errors still retry the folder as before.
+        log.warning(
+            "Disk update: status folder failed with HTTP %s; reading the file",
+            exc.code,
         )
-    except (ValueError, zipfile.BadZipFile, RuntimeError) as exc:
-        raise StatusStorageLinkError(
-            f"invalid status folder archive: {exc}") from exc
+        status_bytes = _fetch_status(
+            f"{root}/status_bundle/status.json", token, cancel_event)
+    else:
+        try:
+            status_bytes = _extract_folder_member_bytes(
+                payload,
+                folder_name="status_bundle",
+                filename="status.json",
+                max_size=MAX_STATUS_SIZE,
+            )
+        except (ValueError, zipfile.BadZipFile, RuntimeError) as exc:
+            raise StatusStorageLinkError(
+                f"invalid status folder archive: {exc}") from exc
     status = json.loads(status_bytes)
     if not isinstance(status, dict):
         raise ValueError("status.json root must be an object")
@@ -275,7 +291,103 @@ def _retryable_status_error(exc: Exception) -> bool:
     )
 
 
+def _copy_artifact(
+    source,
+    destination: Path,
+    artifact: dict,
+    *,
+    verify_sha256: bool,
+    cancel_event=None,
+    on_chunk: Callable[[int], None] | None = None,
+) -> tuple[int, str]:
+    """Write one artifact stream to disk and verify its size and SHA-256."""
+    size = artifact["size"]
+    digest = hashlib.sha256()
+    total = 0
+    with destination.open("wb") as output:
+        while True:
+            _raise_if_cancelled(cancel_event)
+            chunk = source.read(DOWNLOAD_CHUNK_SIZE)
+            _raise_if_cancelled(cancel_event)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > size:
+                raise ArtifactIntegrityError(
+                    "update artifact exceeds declared size")
+            digest.update(chunk)
+            output.write(chunk)
+            if on_chunk:
+                on_chunk(total)
+    actual_sha = digest.hexdigest()
+    if total != size or (verify_sha256 and actual_sha != artifact["sha256"]):
+        raise ArtifactIntegrityError(
+            f"update checksum mismatch: size {total}/{size}, "
+            f"sha {actual_sha}/{artifact['sha256']}")
+    return total, actual_sha
+
+
 def _download_artifact_once(
+    artifact: dict,
+    destination: Path,
+    token: str,
+    **options,
+) -> tuple[int, str]:
+    try:
+        return _download_artifact_folder(artifact, destination, token, **options)
+    except urllib.error.HTTPError as exc:
+        # Disk answered the folder ZIP with an error status. Download the
+        # archive file itself; network errors still retry the folder.
+        log.warning(
+            "Disk update: folder %s failed with HTTP %s; downloading the file",
+            artifact["bundle_path"],
+            exc.code,
+        )
+        return _download_artifact_file(artifact, destination, token, **options)
+
+
+def _download_artifact_file(
+    artifact: dict,
+    destination: Path,
+    token: str,
+    *,
+    progress: ProgressCallback | None,
+    attempt: int,
+    attempts: int,
+    verify_sha256: bool,
+    cancel_event=None,
+) -> tuple[int, str]:
+    link = _download_link(artifact["path"], token)
+    _raise_if_cancelled(cancel_event)
+    log.info(
+        "Disk update: file storage host %s (attempt %d/%d)",
+        urllib.parse.urlsplit(link).hostname or "unknown",
+        attempt,
+        attempts,
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    request = urllib.request.Request(
+        link, headers={"User-Agent": "photobooth-update/1"})
+    started = time.monotonic()
+
+    def report(total: int) -> None:
+        if progress:
+            elapsed = max(time.monotonic() - started, 0.001)
+            progress(total, artifact["size"], total / elapsed, attempt, attempts)
+
+    with urllib.request.urlopen(
+        request, timeout=DOWNLOAD_TIMEOUT, context=ca_context()) as response:
+        return _copy_artifact(
+            response,
+            destination,
+            artifact,
+            verify_sha256=verify_sha256,
+            cancel_event=cancel_event,
+            on_chunk=report,
+        )
+
+
+def _download_artifact_folder(
     artifact: dict,
     destination: Path,
     token: str,
@@ -289,7 +401,6 @@ def _download_artifact_once(
     path = artifact["path"]
     bundle_path = artifact["bundle_path"]
     size = artifact["size"]
-    expected_sha = artifact["sha256"]
     _raise_if_cancelled(cancel_event)
     if progress:
         progress(0, size, 0.0, attempt, attempts)
@@ -342,8 +453,6 @@ def _download_artifact_once(
         bundle_name = bundle_path.rsplit("/", 1)[-1]
         artifact_name = path.rsplit("/", 1)[-1]
         expected_member = f"{bundle_name}/{artifact_name}"
-        digest = hashlib.sha256()
-        total = 0
         try:
             with zipfile.ZipFile(folder_archive) as archive:
                 files = _safe_folder_archive_members(archive)
@@ -354,30 +463,20 @@ def _download_artifact_once(
                 if member.file_size != size:
                     raise ArtifactIntegrityError(
                         "update artifact has the wrong declared size")
-                with archive.open(member) as source, destination.open("wb") as output:
-                    while True:
-                        _raise_if_cancelled(cancel_event)
-                        chunk = source.read(DOWNLOAD_CHUNK_SIZE)
-                        _raise_if_cancelled(cancel_event)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if total > size:
-                            raise ArtifactIntegrityError(
-                                "update artifact exceeds declared size")
-                        digest.update(chunk)
-                        output.write(chunk)
+                with archive.open(member) as source:
+                    total, actual_sha = _copy_artifact(
+                        source,
+                        destination,
+                        artifact,
+                        verify_sha256=verify_sha256,
+                        cancel_event=cancel_event,
+                    )
         except (zipfile.BadZipFile, RuntimeError, ValueError) as exc:
             if isinstance(exc, ArtifactIntegrityError):
                 raise
             raise ArtifactIntegrityError(
                 f"invalid update folder archive: {exc}") from exc
 
-        actual_sha = digest.hexdigest()
-        if total != size or (verify_sha256 and actual_sha != expected_sha):
-            raise ArtifactIntegrityError(
-                f"update checksum mismatch: size {total}/{size}, "
-                f"sha {actual_sha}/{expected_sha}")
         if progress:
             elapsed = max(time.monotonic() - started, 0.001)
             progress(total, size, total / elapsed, attempt, attempts)

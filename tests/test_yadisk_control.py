@@ -465,6 +465,27 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
             yadisk_control.MAX_COMMAND_ARCHIVE_SIZE,
         )
 
+    async def test_command_batch_reads_files_when_folder_zip_fails(self):
+        filename = f"{'a' * 32}.json"
+        download = AsyncMock(side_effect=[
+            RuntimeError("get download URL: 500 Internal Server Error"),
+            b"command",
+        ])
+        with patch.object(
+            yadisk_control, "_root", "/control",
+        ), patch(
+            "backend.yadisk_control._download_bytes", download,
+        ):
+            bodies, invalid = await yadisk_control._download_command_batch(
+                [{"name": filename}])
+
+        self.assertEqual(bodies, {filename: b"command"})
+        self.assertEqual(invalid, set())
+        download.assert_awaited_with(
+            f"/control/to_booth/{filename}",
+            yadisk_control.MAX_COMMAND_FILE_SIZE,
+        )
+
     async def test_oversized_listed_command_is_deleted_before_folder_download(self):
         item = {
             "name": f"{'a' * 32}.json",
@@ -538,6 +559,28 @@ class PrintArtifactDownloadTests(unittest.IsolatedAsyncioTestCase):
         download.assert_awaited_once_with(
             folder_path,
             yadisk_control.MAX_PRINT_FOLDER_ARCHIVE_SIZE,
+        )
+
+    async def test_reads_image_when_folder_zip_fails(self):
+        basename = f"123_20260812T120000Z_{'b' * 32}"
+        image_path = (
+            f"/event_by_sessions/0000_print_jobs/{basename}/{basename}.jpg")
+        download = AsyncMock(side_effect=[
+            RuntimeError("get download URL: 500 Internal Server Error"),
+            b"image",
+        ])
+        with patch(
+            "backend.yadisk_control._connect", AsyncMock(return_value=True),
+        ), patch(
+            "backend.yadisk_control._download_bytes", download,
+        ):
+            payload = await yadisk_control.download_print_artifact(
+                image_path, "event")
+
+        self.assertEqual(payload, b"image")
+        download.assert_awaited_with(
+            image_path,
+            yadisk_control.MAX_PRINT_ARTIFACT_SIZE,
         )
 
     async def test_rejects_legacy_flat_print_artifact_path(self):

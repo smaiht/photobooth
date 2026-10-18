@@ -178,8 +178,35 @@ class DiskUpdateStatusTests(unittest.TestCase):
         self.assertEqual(status["active"], "full")
         sleep.assert_called_once_with(0.0)
 
+    def test_reads_status_file_when_disk_cannot_build_folder_zip(self):
+        server_error = urllib.error.HTTPError(
+            "https://cloud-api.yandex.net", 500, "error", {}, None)
+        with patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch(
+                 "backend.yadisk_updates._request",
+                 side_effect=[
+                     server_error,
+                     self._api_response("https://storage.test/status"),
+                 ],
+             ) as request_link, \
+             patch.object(
+                 urllib.request,
+                 "urlopen",
+                 return_value=io.BytesIO(b'{"active": "full"}'),
+             ):
+            status = yadisk_updates.read_status("updates", retry_delays=())
+
+        self.assertEqual(status, {"active": "full"})
+        self.assertEqual(
+            request_link.call_args.kwargs["params"]["path"],
+            "/updates/status_bundle/status.json",
+        )
+        server_error.close()
+
     def test_missing_status_and_permanent_errors_are_not_retried(self):
-        for code, expected in ((404, None), (401, "raise")):
+        # A missing folder stops at once; any other error status also tries
+        # the file itself, but neither case is retried.
+        for code, expected, calls in ((404, None, 1), (401, "raise", 2)):
             error = urllib.error.HTTPError(
                 "https://cloud-api.yandex.net",
                 code,
@@ -206,7 +233,7 @@ class DiskUpdateStatusTests(unittest.TestCase):
                         retry_delays=(0, 0),
                     ))
 
-            request_link.assert_called_once()
+            self.assertEqual(request_link.call_count, calls)
             sleep.assert_not_called()
             error.close()
 
@@ -477,6 +504,37 @@ class DiskUpdateDownloadTests(unittest.TestCase):
             self.assertFalse(destination.with_name(
                 destination.name + ".folder.zip").exists())
 
+    def test_downloads_archive_file_when_disk_cannot_build_folder_zip(self):
+        payload = b"update zip bytes"
+        status = {
+            "path": "/photobooth_system/updates/artifacts/test-full_bundle/test-full.zip",
+            "bundle_path": "/photobooth_system/updates/artifacts/test-full_bundle",
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        server_error = urllib.error.HTTPError(
+            "https://cloud-api.yandex.net", 500, "error", {}, None)
+        links = [
+            server_error,
+            io.BytesIO(json.dumps({"href": "https://download.test/file"}).encode()),
+        ]
+
+        with TemporaryDirectory() as tmpdir, \
+             patch.dict("os.environ", {"YADISK_TOKEN": "test-token"}), \
+             patch("backend.yadisk_updates._request", side_effect=links) as request_link, \
+             patch.object(urllib.request, "urlopen", return_value=io.BytesIO(payload)):
+            destination = Path(tmpdir) / "update.zip"
+            size, digest = yadisk_updates.download_artifact(
+                status, destination, retry_delays=())
+
+            self.assertEqual(destination.read_bytes(), payload)
+        self.assertEqual((size, digest), (len(payload), status["sha256"]))
+        self.assertEqual(
+            request_link.call_args.kwargs["params"]["path"],
+            status["path"],
+        )
+        server_error.close()
+
     def test_does_not_retry_permanent_http_error(self):
         status = {
             "path": "/photobooth_system/updates/artifacts/test-full_bundle/test-full.zip",
@@ -498,7 +556,8 @@ class DiskUpdateDownloadTests(unittest.TestCase):
                     status, destination, retry_delays=(0,))
             self.assertFalse(destination.exists())
 
-        request_link.assert_called_once()
+        # The folder, then the archive file itself; no retry.
+        self.assertEqual(request_link.call_count, 2)
         sleep.assert_not_called()
         error.close()
 

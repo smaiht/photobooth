@@ -5,6 +5,7 @@ import json
 import tempfile
 import time
 import unittest
+import urllib.error
 import urllib.request
 import zipfile
 from contextlib import ExitStack
@@ -49,6 +50,22 @@ class CredentialsTests(unittest.TestCase):
                 patch.object(urllib.request, "urlopen",
                              return_value=io.BytesIO(archive.getvalue())):
             self.assertEqual(yookassa.load_credentials(self.root), self.new)
+
+    def test_credentials_file_is_read_when_folder_zip_fails(self):
+        server_error = urllib.error.HTTPError(
+            "https://cloud-api.yandex.net", 500, "error", {}, None)
+        self.addCleanup(server_error.close)
+        with patch.object(yookassa.yadisk_updates, "_download_link",
+                          side_effect=[server_error,
+                                       "https://storage.test/credentials"]) as link, \
+                patch.object(urllib.request, "urlopen",
+                             return_value=io.BytesIO(json.dumps(self.new).encode())), \
+                self.assertLogs(yookassa.log, level="WARNING"):
+            self.assertEqual(yookassa.load_credentials(self.root), self.new)
+        self.assertEqual(
+            link.call_args.args[0],
+            f"{yookassa.REMOTE_FOLDER}/{yookassa.REMOTE_FILENAME}",
+        )
 
     def test_invalid_remote_file_does_not_replace_valid_cache(self):
         original = self.cache.read_bytes()

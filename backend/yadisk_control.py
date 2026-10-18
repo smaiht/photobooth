@@ -305,10 +305,20 @@ def _extract_command_archive(
 async def _download_command_batch(
     items: list[dict],
 ) -> tuple[dict[str, bytes], set[str]]:
-    archive = await _download_bytes(
-        f"{_root}/to_booth",
-        MAX_COMMAND_ARCHIVE_SIZE,
-    )
+    try:
+        archive = await _download_bytes(
+            f"{_root}/to_booth",
+            MAX_COMMAND_ARCHIVE_SIZE,
+        )
+    except RuntimeError as exc:
+        # Disk answered the folder ZIP with an error status. The listed
+        # command files are still served one by one.
+        log.warning("Control: command folder failed (%s); reading files", exc)
+        bodies = {}
+        for item in items:
+            bodies[item["name"]] = await _download_bytes(
+                f"{_root}/to_booth/{item['name']}", MAX_COMMAND_FILE_SIZE)
+        return bodies, set()
     return _extract_command_archive(archive, items)
 
 
@@ -532,10 +542,15 @@ async def download_print_artifact(
     _, folder_path, filename = _validate_print_artifact_path(
         remote_path, event_folder)
     folder_name = folder_path.rsplit("/", 1)[-1]
-    archive = await _download_bytes(
-        folder_path,
-        MAX_PRINT_FOLDER_ARCHIVE_SIZE,
-    )
+    try:
+        archive = await _download_bytes(
+            folder_path,
+            MAX_PRINT_FOLDER_ARCHIVE_SIZE,
+        )
+    except RuntimeError as exc:
+        # Disk answered the folder ZIP with an error status; read the image.
+        log.warning("Control: print folder failed (%s); reading the image", exc)
+        return await _download_bytes(remote_path, MAX_PRINT_ARTIFACT_SIZE)
     return _extract_print_artifact_archive(archive, folder_name, filename)
 
 
