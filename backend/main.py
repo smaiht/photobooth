@@ -57,7 +57,7 @@ from .text_layer import date_values
 from .log import read_log_snapshot
 from .video import VideoRecorder
 from . import (
-    camera_power, flash, sms, system_service, yadisk_cloud, yadisk_control, yookassa,
+    camera_power, flash, relay, sms, system_service, yadisk_cloud, yadisk_control, yookassa,
 )
 
 log = logging.getLogger(__name__)
@@ -1172,6 +1172,12 @@ def on_camera_search_failed(error: str):
         _event_loop.call_soon_threadsafe(camera_power.search_failed, error)
 
 
+def on_camera_hung(reason: str):
+    # Runs on a timer thread while the camera thread is stuck inside EDSDK.
+    if _event_loop and _event_loop.is_running():
+        _event_loop.call_soon_threadsafe(camera_power.camera_hung, reason)
+
+
 def on_camera_connected():
     log.info("Camera connected")
     if _event_loop and _event_loop.is_running():
@@ -2137,6 +2143,7 @@ def set_service_template(payload: dict):
         )
         old_name, new_name, changed = update_template_pack(name)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
+        log.warning("Service menu: template %r failed: %s", name, exc)
         return {"status": "error", "message": f"Template pack не изменён: {exc}"}
 
     CONFIG["template_pack"] = new_name
@@ -2152,6 +2159,7 @@ def set_service_template(payload: dict):
         message = f"Template pack: {old_name} → {new_name}"
     else:
         message = f"Template pack уже выбран: {new_name}"
+    log.info("Service menu: %s", message)
     return {
         "status": "ok",
         "message": message,
@@ -2164,12 +2172,14 @@ def set_service_template(payload: dict):
 async def service_action(payload: dict):
     command_name = str(payload.get("command") or "").strip()
     if command_name not in LOCAL_SERVICE_ACTIONS:
+        log.warning("Service menu: unknown action %r", command_name)
         return {
             "status": "error",
             "message": f"Неизвестное сервисное действие: {command_name}",
         }
     if command_name in ("camera_power", "flash_power"):
         on = bool(payload.get("data"))
+        state_str = "ВКЛ" if on else "ВЫКЛ"
         label, fn = (
             ("Питание камеры", camera_power.set_relay)
             if command_name == "camera_power"
@@ -2178,8 +2188,10 @@ async def service_action(payload: dict):
         try:
             await asyncio.to_thread(fn, on)
         except Exception as exc:
+            log.warning("Service menu: %s (%s: %s) failed: %s", command_name, label, state_str, exc)
             return {"status": "error", "message": f"{label}: {exc}"}
-        return {"status": "ok", "message": f"{label}: {'ВКЛ' if on else 'ВЫКЛ'}"}
+        log.info("Service menu: %s (%s: %s)", command_name, label, state_str)
+        return {"status": "ok", "message": f"{label}: {state_str}"}
     # Call the booth handler directly; no control channel or VPS is involved.
     if command_name == "clear_all":
         errors = []
@@ -2191,19 +2203,26 @@ async def service_action(payload: dict):
             })
             if result.get("status") != "ok":
                 errors.append(result.get("message", clear_command))
-        return {
+        res = {
             "status": "error" if errors else "ok",
             "message": (
                 "Не всё очищено: " + " | ".join(errors)
                 if errors else "Полная очистка завершена"
             ),
         }
+        (log.warning if errors else log.info)(
+            "Service menu: clear_all -> %s (%s)", res["status"], res["message"])
+        return res
     command = {
         "command_id": uuid.uuid4().hex,
         "command": command_name,
         "data": payload.get("data"),
     }
-    return await handle_disk_command(command)
+    res = await handle_disk_command(command)
+    (log.info if res.get("status") == "ok" else log.warning)(
+        "Service menu: %s data=%s -> %s (%s)",
+        command_name, payload.get("data"), res.get("status"), res.get("message"))
+    return res
 
 
 @app.post("/api/service/config/apply")
@@ -2241,6 +2260,9 @@ async def apply_service_config(
             })
             result.pop("_post_action", None)
             if result.get("status") != "ok":
+                log.warning(
+                    "Service menu: config %s=%r failed: %s",
+                    field, value, result.get("message"))
                 return {
                     "status": "error",
                     "message": (
@@ -2250,6 +2272,7 @@ async def apply_service_config(
                     ),
                     "restart": False,
                 }
+            log.info("Service menu: %s", result.get("message", f"{field}={value}"))
             processed_count += 1
     background_tasks.add_task(_do_restart)
     return {
@@ -2544,6 +2567,7 @@ async def _status_report_text() -> str:
         f"☁️ СИСТЕМА: {STATE}",
         f"• СМС: {sms.status}",
         f"• Вспышка: {flash.status}",
+        *await asyncio.to_thread(relay.usb_status_lines),
         (
             f"⚠️ Яндекс.Диск: незавершённых сессий — {pending_sessions}"
             if pending_sessions
@@ -3358,6 +3382,7 @@ async def startup():
             on_error=on_camera_error,
             on_connected=on_camera_connected,
             on_search_failed=on_camera_search_failed,
+            on_hung=on_camera_hung,
         )
         await set_state("camera_searching")
         camera.start()

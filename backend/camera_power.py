@@ -7,6 +7,9 @@ board is picked by CAMERA_RELAY_PORT in .env; without it nothing is done.
 Every SEARCHES_BEFORE_CUT failed searches in a row the power is cut for
 CUT_SECONDS. After it comes back the searches are counted from zero again, so
 a camera that is still missing gets the next cut, until it is found.
+
+A camera that keeps EDSDK stuck inside a call is cut at once: while the call
+hangs no search can fail, and only the power cut makes it return.
 """
 
 import asyncio
@@ -16,7 +19,7 @@ import uuid
 
 from . import relay, yadisk_control
 
-SEARCHES_BEFORE_CUT = 3
+SEARCHES_BEFORE_CUT = 5
 CUT_SECONDS = 10
 
 log = logging.getLogger(__name__)
@@ -28,11 +31,20 @@ _told = False  # the admin already knows about this outage
 
 def search_failed(reason):
     """One more search for the camera came back empty."""
-    global _failed, _reason
+    global _failed
     _failed += 1
     if _failed >= SEARCHES_BEFORE_CUT:
-        _reason = str(reason)[:300]
-        _lost.set()
+        _cut(f"Камера не найдена после {SEARCHES_BEFORE_CUT} попыток поиска ({reason})")
+
+
+def camera_hung(reason):
+    _cut(f"Камера не отвечает ({reason})")
+
+
+def _cut(reason):
+    global _reason
+    _reason = reason[:300]
+    _lost.set()
 
 
 def camera_found():
@@ -71,11 +83,9 @@ async def _cycle(port, reason):
     notice = None
     try:
         await _power(port, True)
-        log.warning("Camera power: camera not found after %d searches (%s), power off for %ss",
-                    SEARCHES_BEFORE_CUT, reason, CUT_SECONDS)
+        log.warning("Camera power: %s, power off for %ss", reason, CUT_SECONDS)
         notice = asyncio.create_task(_tell_admin(
-            f"Камера не найдена после {SEARCHES_BEFORE_CUT} попыток поиска ({reason}). "
-            f"Питание камеры выключено на {CUT_SECONDS} с, потом включится само. "
+            f"{reason}. Питание камеры выключено на {CUT_SECONDS} с, потом включится само. "
             "Если камера не найдётся и после этого, отключение повторится."))
         await asyncio.sleep(CUT_SECONDS)
     finally:
@@ -108,5 +118,4 @@ async def watch():
             await _cycle(port, _reason)
         except Exception as exc:  # the cut itself failed
             log.error("Camera power: relay did not cut the power: %s", exc)
-            await _tell_admin(f"Камера не найдена после {SEARCHES_BEFORE_CUT} попыток поиска "
-                              f"({_reason}), но реле не сработало: {exc}")
+            await _tell_admin(f"{_reason}, но реле не сработало: {exc}")

@@ -58,6 +58,14 @@ class CameraPowerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.states(), [False, True, False])
         self.assertEqual(self.switch.call_args.args[0], "camera-board")
 
+    async def test_a_hung_camera_is_cut_at_once(self):
+        self.start_watcher()
+        camera_power.camera_hung("EdsOpenSession has not answered")
+        await self.until(lambda: len(self.states()) == 3)
+
+        self.assertEqual(self.states(), [False, True, False])
+        self.assertIn("EdsOpenSession has not answered", self.publish.await_args.args[2])
+
     async def test_fewer_failed_searches_leave_the_camera_alone(self):
         self.start_watcher()
         self.searches_fail(SEARCHES - 1)

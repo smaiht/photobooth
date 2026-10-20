@@ -120,6 +120,10 @@ class Modem:
                 continue
             if not sms["index"].isdigit():
                 raise RuntimeError("sms-list: модем не вернул индекс СМС")
+            log.info(
+                "SMS: index=%s from=%s date=%s text=%s",
+                sms["index"], sms["phone"], sms["date"], sms["text"].replace("\n", " "),
+            )
             identity = json.dumps([
                 self.url, *(sms[field] for field in ("index", "phone", "date", "text")),
             ], ensure_ascii=False)
@@ -142,8 +146,6 @@ class Modem:
                 )
             # The unread modem inbox is the retry buffer until Disk accepts the text.
             await self.mark_as_read(sms["index"])
-            log.info(
-                "SMS: index %s uploaded for VPS delivery and marked read", sms["index"])
 
 
 async def watch(config):

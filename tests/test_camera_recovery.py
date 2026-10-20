@@ -296,25 +296,21 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, edsdk.EDS_ERR_COMM_DISCONNECTED)
 
-    def test_open_session_retry_uses_fresh_refs_without_restarting_sdk(self):
+    def test_failed_open_session_releases_ref_without_restarting_sdk(self):
         camera = edsdk.Camera("fake-edSDK.dll")
         camera._running = True
         camera._sdk = MagicMock()
-        camera._sdk.EdsOpenSession.side_effect = [
-            edsdk.EDS_ERR_INTERNAL_ERROR,
-            edsdk.EDS_ERR_OK,
-        ]
+        camera._sdk.EdsOpenSession.return_value = edsdk.EDS_ERR_INTERNAL_ERROR
         camera._sdk.EdsRelease.return_value = 0
-        first = ctypes.c_void_p(101)
-        second = ctypes.c_void_p(102)
-        with patch.object(camera, "_acquire_camera", side_effect=[first, second]), \
+        ref = ctypes.c_void_p(101)
+        with patch.object(camera, "_acquire_camera", return_value=ref), \
              patch.object(camera, "_enable_limited_properties"), \
-             patch.object(camera._retry_event, "wait"):
+             self.assertRaises(RuntimeError):
             camera._connect_camera()
 
-        self.assertTrue(camera._session_open)
-        self.assertEqual(camera._camera.value, second.value)
-        camera._sdk.EdsRelease.assert_called_once_with(first)
+        self.assertFalse(camera._session_open)
+        camera._sdk.EdsOpenSession.assert_called_once_with(ref)
+        camera._sdk.EdsRelease.assert_called_once_with(ref)
         camera._sdk.EdsCloseSession.assert_not_called()
         camera._sdk.EdsInitializeSDK.assert_not_called()
         camera._sdk.EdsTerminateSDK.assert_not_called()
