@@ -105,6 +105,8 @@ LOCAL_CLEAR_ACTIONS = (
 LOCAL_SERVICE_ACTIONS = frozenset((
     "unblock",
     "clear_all",
+    "camera_power",
+    "flash_power",
     *LOCAL_CLEAR_ACTIONS,
 ))
 
@@ -2166,6 +2168,18 @@ async def service_action(payload: dict):
             "status": "error",
             "message": f"Неизвестное сервисное действие: {command_name}",
         }
+    if command_name in ("camera_power", "flash_power"):
+        on = bool(payload.get("data"))
+        label, fn = (
+            ("Питание камеры", camera_power.set_relay)
+            if command_name == "camera_power"
+            else ("Зарядка вспышки", flash.set_relay)
+        )
+        try:
+            await asyncio.to_thread(fn, on)
+        except Exception as exc:
+            return {"status": "error", "message": f"{label}: {exc}"}
+        return {"status": "ok", "message": f"{label}: {'ВКЛ' if on else 'ВЫКЛ'}"}
     # Call the booth handler directly; no control channel or VPS is involved.
     if command_name == "clear_all":
         errors = []

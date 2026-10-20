@@ -41,6 +41,13 @@ def camera_found():
     _told = False
 
 
+def set_relay(on):
+    port = os.environ.get("CAMERA_RELAY_PORT", "").strip()
+    if not port:
+        raise RuntimeError("CAMERA_RELAY_PORT не задан в .env")
+    relay.switch(port, not on)
+
+
 async def _power(port, cut):
     await asyncio.to_thread(relay.switch, port, cut)
 

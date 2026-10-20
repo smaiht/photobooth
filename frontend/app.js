@@ -185,6 +185,10 @@ const btnClearPrintQueue = document.getElementById("btn-clear-print-queue");
 const btnClearPhotos = document.getElementById("btn-clear-photos");
 const btnClearPrintJobs = document.getElementById("btn-clear-print-jobs");
 const btnClearLogs = document.getElementById("btn-clear-logs");
+const btnCameraPowerOn = document.getElementById("btn-camera-power-on");
+const btnCameraPowerOff = document.getElementById("btn-camera-power-off");
+const btnFlashPowerOn = document.getElementById("btn-flash-power-on");
+const btnFlashPowerOff = document.getElementById("btn-flash-power-off");
 const btnSysLock = document.getElementById("btn-sys-lock");
 const btnSysTaskmgr = document.getElementById("btn-sys-taskmgr");
 const btnSysKeyboard = document.getElementById("btn-sys-keyboard");
@@ -2648,6 +2652,16 @@ const cleanupActions = [
 ];
 cleanupActions.forEach(([button, command]) => {
     button?.addEventListener("click", () => runLocalServiceAction(command));
+});
+
+const relayActions = [
+    [btnCameraPowerOn, "camera_power", true],
+    [btnCameraPowerOff, "camera_power", false],
+    [btnFlashPowerOn, "flash_power", true],
+    [btnFlashPowerOff, "flash_power", false],
+];
+relayActions.forEach(([button, command, on]) => {
+    button?.addEventListener("click", () => runLocalServiceAction(command, on));
 });
 
 btnSysLock?.addEventListener("click", () => triggerSystemAction("lock", "Блокировка экрана"));
