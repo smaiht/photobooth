@@ -2546,7 +2546,11 @@ function finishSecretPointer(e) {
             }
         }, 500);
     }
-    if (e.pointerId === secretHoldPointerId) resetSecretTaps();
+    // A finger drifting a few pixels during the hold makes the browser start
+    // a pan and cancel the pointer. Only a real release breaks the hold.
+    if (e.pointerId === secretHoldPointerId && e.type === "pointerup") {
+        resetSecretTaps();
+    }
 }
 
 window.addEventListener("pointerup", finishSecretPointer, { capture: true });

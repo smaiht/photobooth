@@ -34,7 +34,9 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    touch-action: manipulation;
+    /* manipulation would still allow pinch-zoom of the whole page, and
+       WebView2 ignores the viewport meta, so only panning is left. */
+    touch-action: pan-x pan-y;
     background: #fff;
     font-family: 'Comfortaa', sans-serif;
     color: #000;
