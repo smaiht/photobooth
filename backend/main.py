@@ -2861,36 +2861,35 @@ async def handle_disk_command(command: dict) -> dict:
             })
             return {"status": "error", "message": f"Фото не поставлено на печать: {exc}"}
 
-        async def enqueue_custom_print_after_ack() -> None:
+        try:
             from .printer import enqueue_print
-            try:
-                await enqueue_print(
-                    str(output_path),
-                    CONFIG,
-                    delete_after=not keep_print_files,
-                    delete_paths=(
-                        [str(original_path)]
-                        if not keep_print_files and original_path is not None
-                        else []
-                    ),
-                )
-            except Exception as exc:
-                _record_event_history({
-                    **custom_print_entry,
-                    "result": "failed",
-                    "stage": "enqueue",
-                    "reason": str(exc),
-                })
-                raise
+            await enqueue_print(
+                str(output_path),
+                CONFIG,
+                delete_after=not keep_print_files,
+                delete_paths=(
+                    [str(original_path)]
+                    if not keep_print_files and original_path is not None
+                    else []
+                ),
+            )
+        except Exception as exc:
             _record_event_history({
                 **custom_print_entry,
-                "result": "print_queued",
+                "result": "failed",
+                "stage": "enqueue",
+                "reason": str(exc),
             })
+            return {"status": "error", "message": f"Фото не поставлено на печать: {exc}"}
+
+        _record_event_history({
+            **custom_print_entry,
+            "result": "print_queued",
+        })
 
         return {
             "status": "ok",
-            "message": "Ваше фото добавлено в очередь и скоро будет распечатано.",
-            "_post_action": enqueue_custom_print_after_ack,
+            "message": "Фото добавлено в очередь на печать.",
         }
 
     if cmd == "restart":

@@ -1289,7 +1289,8 @@ class CustomPrintCommandTests(unittest.IsolatedAsyncioTestCase):
              patch(
                  "backend.printer.prepare_custom_print",
                  return_value="горизонтальная",
-             ) as prepare:
+             ) as prepare, \
+             patch("backend.printer.enqueue_print", new_callable=AsyncMock) as enqueue:
             result = await main.handle_disk_command({
                 "command": "print_image",
                 "command_id": "a" * 32,
@@ -1306,8 +1307,32 @@ class CustomPrintCommandTests(unittest.IsolatedAsyncioTestCase):
                 },
             })
 
-        self.assertEqual(result["status"], "ok")
-        self.assertEqual(prepare.call_args.args[-1], "fill")
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(prepare.call_args.args[-1], "fill")
+            enqueue.assert_awaited_once()
+            self.assertNotIn("_post_action", result)
+
+    async def test_queue_failure_is_reported_to_sender(self):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "PRINT_JOBS_DIR", Path(tmpdir)), \
+             patch.dict(main.CONFIG, {"print_enabled": True}), \
+             patch.object(main.yadisk_cloud, "current_event_folder", return_value="event"), \
+             patch.object(main.yadisk_control, "download_print_artifact", AsyncMock(return_value=b"photo")), \
+             patch("backend.printer.prepare_custom_print"), \
+             patch("backend.printer.enqueue_print", AsyncMock(side_effect=RuntimeError("queue failed"))):
+            result = await main.handle_disk_command({
+                "command": "print_image",
+                "command_id": "a" * 32,
+                "data": {
+                    "job_id": "b" * 32,
+                    "event_folder": "event",
+                    "artifact_path": "/event/photo.jpg",
+                    "print_mode": "fit",
+                },
+            })
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("queue failed", result["message"])
 
     async def test_rejects_print_for_stale_event_before_download(self):
         download = AsyncMock()

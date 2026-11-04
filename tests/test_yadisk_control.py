@@ -4,13 +4,14 @@ import json
 import tempfile
 import unittest
 import zipfile
+from collections import deque
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from fastapi import WebSocketDisconnect
 
 from backend import config as backend_config
-from backend import main, yadisk_control
+from backend import main, printer, yadisk_control
 from backend.config import update_camera_config_field
 
 
@@ -345,6 +346,60 @@ class CommandProcessingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(uploaded_payloads[0], uploaded_payloads[1])
         self.assertIn("удалено 3", uploaded_payloads[1]["message"])
         self.assertNotIn(command_id, yadisk_control._pending_command_results)
+
+    async def test_print_is_queued_before_response_and_not_repeated_on_retry(self):
+        command_id = "f" * 32
+        command = {
+            "schema_version": 3,
+            "message_type": "command",
+            "command_id": command_id,
+            "command": "print_image",
+            "data": {
+                "job_id": "b" * 32,
+                "event_folder": "event",
+                "artifact_path": "/event/photo.jpg",
+                "print_mode": "fit",
+            },
+            "reply_target": {"provider": "telegram", "conversation_id": "123"},
+        }
+        item = {"name": f"{command_id}.json"}
+        enqueue = AsyncMock(wraps=printer.enqueue_print)
+        process_queue = AsyncMock()
+        queue = deque()
+        responses = []
+
+        async def upload(payload, _path):
+            enqueue.assert_awaited_once()
+            responses.append(json.loads(payload))
+            if len(responses) == 1:
+                raise TimeoutError("response upload failed")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            template = Path(tmpdir) / "template"
+            template.mkdir()
+            (template / "config.json").write_text("{}")
+            with patch.object(main, "PRINT_JOBS_DIR", Path(tmpdir) / "jobs"), \
+                 patch.dict(main.CONFIG, {"print_enabled": True}), \
+                 patch.object(main, "template_pack_dir", return_value=template), \
+                 patch.object(main.yadisk_cloud, "current_event_folder", return_value="event"), \
+                 patch.object(main.yadisk_control, "download_print_artifact", AsyncMock(return_value=b"photo")), \
+                 patch("backend.printer.prepare_custom_print"), \
+                 patch.object(printer, "_print_queue", queue), \
+                 patch.object(printer, "_process_queue", process_queue), \
+                 patch("backend.printer.enqueue_print", enqueue), \
+                 patch.object(yadisk_control, "_root", "/control"), \
+                 patch.object(yadisk_control, "_upload_bytes", side_effect=upload), \
+                 patch.object(yadisk_control, "_delete_command", AsyncMock(return_value=True)):
+                with self.assertRaises(TimeoutError):
+                    await yadisk_control._process_command(item, main.handle_disk_command, json.dumps(command).encode())
+                await asyncio.sleep(0)
+                process_queue.assert_awaited_once()
+                self.assertTrue(await yadisk_control._process_command(
+                    item, main.handle_disk_command, json.dumps(command).encode()))
+
+        enqueue.assert_awaited_once()
+        self.assertEqual(len(queue), 1)
+        self.assertEqual([response["status"] for response in responses], ["ok", "ok"])
 
     async def test_response_retry_defers_post_action_until_ack(self):
         command_id = "e" * 32
