@@ -107,6 +107,7 @@ LOCAL_SERVICE_ACTIONS = frozenset((
     "clear_all",
     "camera_power",
     "flash_power",
+    "phone_print",
     *LOCAL_CLEAR_ACTIONS,
 ))
 
@@ -128,6 +129,25 @@ def _active_event_name() -> str:
 
 def _is_technical_event() -> bool:
     return _active_event_name() == _technical_event_name()
+
+
+def _phone_print_state() -> dict:
+    event = _active_event_name()
+    links = CONFIG.get("phone_print_links")
+    if (
+        event == _technical_event_name()
+        or not isinstance(links, dict)
+        or links.get("event") != event
+        or not all(isinstance(links.get(key), str) and links[key]
+                   for key in ("telegram", "vk"))
+    ):
+        links = {}
+    return {
+        "enabled": CONFIG.get("phone_print_enabled", True) is True,
+        "event": event,
+        "telegram": links.get("telegram", ""),
+        "vk": links.get("vk", ""),
+    }
 
 
 def _event_history_path() -> Path:
@@ -1031,6 +1051,7 @@ def _state_message(new_state: str) -> dict:
         "technical_event_active": _is_technical_event(),
         "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
         "payment": _payment_state(),
+        "phone_print": _phone_print_state(),
     }
     if SESSION_ID:
         msg["session_id"] = SESSION_ID
@@ -2177,6 +2198,20 @@ async def service_action(payload: dict):
             "status": "error",
             "message": f"Неизвестное сервисное действие: {command_name}",
         }
+    if command_name == "phone_print":
+        enabled = payload.get("data")
+        if type(enabled) is not bool:
+            return {"status": "error", "message": "Нужно указать ВКЛ или ВЫКЛ"}
+        try:
+            _save_app_config_fields({"phone_print_enabled": enabled})
+        except (OSError, ValueError) as exc:
+            log.warning("Service menu: could not save phone print setting: %s", exc)
+            return {"status": "error", "message": "Не удалось сохранить настройку"}
+        await broadcast(_state_message(STATE))
+        return {
+            "status": "ok",
+            "message": f"Печать с телефона: {'ВКЛ' if enabled else 'ВЫКЛ'}",
+        }
     if command_name in ("camera_power", "flash_power"):
         on = bool(payload.get("data"))
         state_str = "ВКЛ" if on else "ВЫКЛ"
@@ -2304,15 +2339,31 @@ async def _do_restart():
     os._exit(0)
 
 
-def _save_event_folder(name: str) -> None:
+def _save_app_config_fields(fields: dict) -> None:
     config_path = ROOT_DIR / "config_app.json"
     data = json.loads(config_path.read_text(encoding="utf-8"))
-    data["yadisk_folder"] = name
+    data.update(fields)
     temporary = config_path.with_suffix(".tmp")
     temporary.write_text(
         json.dumps(data, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
     temporary.replace(config_path)
-    CONFIG["yadisk_folder"] = name
+    CONFIG.update(fields)
+
+
+def _save_event_folder(name: str, guest_links: dict | None = None) -> None:
+    links = {}
+    if (
+        name != _technical_event_name()
+        and isinstance(guest_links, dict)
+        and all(isinstance(guest_links.get(key), str) and guest_links[key]
+                for key in ("telegram", "vk"))
+    ):
+        links = {
+            "event": name,
+            "telegram": guest_links["telegram"],
+            "vk": guest_links["vk"],
+        }
+    _save_app_config_fields({"yadisk_folder": name, "phone_print_links": links})
 
 
 def _clear_local_logs() -> None:
@@ -3166,6 +3217,7 @@ async def handle_disk_command(command: dict) -> dict:
 
     if cmd == "set_event":
         name = data.get("name", "") if isinstance(data, dict) else ""
+        guest_links = data.get("guest_links") if isinstance(data, dict) else None
         if _payment_active():
             return {"status": "error", "message": "Event не изменён: есть незавершённая оплата"}
         if STATE not in ("idle", "no_camera", "camera_searching"):
@@ -3183,7 +3235,7 @@ async def handle_disk_command(command: dict) -> dict:
                 }
         try:
             await yadisk_cloud.set_event_folder(name)
-            _save_event_folder(name)
+            _save_event_folder(name, guest_links)
         except Exception as exc:
             return {"status": "error", "message": f"Event не изменён: {exc}"}
         source = _command_history_source(command)

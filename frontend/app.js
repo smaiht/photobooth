@@ -38,6 +38,12 @@ const idlePoseField = document.getElementById("idle-pose-field");
 const idleExplainer = document.getElementById("idle-explainer");
 const idlePackages = document.getElementById("idle-packages");
 const idlePayment = document.getElementById("idle-payment");
+const phonePrintButton = document.getElementById("phone-print-button");
+const phonePrintScreen = document.getElementById("phone-print-screen");
+const phonePrintClose = document.getElementById("phone-print-close");
+const phonePrintTelegram = document.getElementById("phone-print-telegram");
+const phonePrintVk = document.getElementById("phone-print-vk");
+const btnPhonePrint = document.getElementById("btn-phone-print");
 const paymentTitle = document.getElementById("payment-title");
 const paymentHint = document.getElementById("payment-hint");
 const paymentQr = document.getElementById("payment-qr");
@@ -214,6 +220,8 @@ let multiSelectActive = false;
 const printBasket = new Map();
 let currentShootingPhotoIndex = 0;
 let technicalEventActive = false;
+let phonePrint = { enabled: true, event: "", telegram: "", vk: "" };
+let phonePrintTimer = null;
 let paymentState = { available: false, status: "idle", packages: [] };
 let renderedPackages = "";
 let highlightedPackage = 0;
@@ -573,6 +581,56 @@ function syncTechnicalEvent(data = {}) {
     }
 }
 
+function closePhonePrint() {
+    phonePrintScreen.hidden = true;
+    clearTimeout(phonePrintTimer);
+    phonePrintTimer = null;
+}
+
+function renderPhonePrint() {
+    btnPhonePrint.textContent = `Печать с телефона: ${phonePrint.enabled ? "ВКЛ" : "ВЫКЛ"}`;
+    const available = currentState === "idle" && !technicalEventActive
+        && phonePrint.enabled && phonePrint.telegram && phonePrint.vk
+        && typeof qrcode === "function";
+    phonePrintButton.hidden = !available;
+    if (!available) closePhonePrint();
+}
+
+function syncPhonePrint(data = {}) {
+    if (!data.phone_print) return;
+    const next = data.phone_print;
+    if (next.event !== phonePrint.event || next.telegram !== phonePrint.telegram
+            || next.vk !== phonePrint.vk) {
+        closePhonePrint();
+    }
+    phonePrint = next;
+    renderPhonePrint();
+}
+
+function openPhonePrint() {
+    if (phonePrintButton.hidden) return;
+    try {
+        for (const [element, url] of [
+            [phonePrintTelegram, phonePrint.telegram],
+            [phonePrintVk, phonePrint.vk],
+        ]) {
+            const qr = qrcode(0, "M");
+            qr.addData(url);
+            qr.make();
+            element.innerHTML = qr.createSvgTag(8);
+        }
+    } catch (error) {
+        console.error("Could not render phone print QR codes", error);
+        return;
+    }
+    phonePrintScreen.hidden = false;
+    clearTimeout(phonePrintTimer);
+    phonePrintTimer = setTimeout(closePhonePrint, 30000);
+}
+
+phonePrintButton.addEventListener("click", openPhonePrint);
+phonePrintClose.addEventListener("click", closePhonePrint);
+
 function renderPoseExamples(
     photoIndex = 0,
     introDelayMs = 0,
@@ -674,6 +732,7 @@ if (!previewMode) {
             } else {
                 syncStartLock(s);
                 syncTechnicalEvent(s);
+                syncPhonePrint(s);
                 syncPayment(s);
                 syncSessionContext(s.state, s);
                 if (s.state === "template_select") {
@@ -932,6 +991,8 @@ function setLiveView(active) {
 function switchScreen(state, data = {}) {
     syncStartLock(data);
     syncTechnicalEvent(data);
+    syncPhonePrint(data);
+    if (state !== "idle") closePhonePrint();
     if (data.payment) paymentState = data.payment;
     syncSessionContext(state, data);
 
@@ -958,6 +1019,7 @@ function _doSwitch(state, data) {
     currentState = state;
     idleStartRequested = false;
     renderIdlePayment();
+    renderPhonePrint();
     if (state === "idle" && previousState !== "idle") {
         resetIdlePoseGroups();
         renderIdlePoseBackdrop();
@@ -2583,6 +2645,14 @@ btnConfigApp?.addEventListener("click", () => openConfig("application"));
 btnConfigCamera?.addEventListener("click", () => openConfig("camera"));
 btnTemplatePack?.addEventListener("click", openServiceTemplates);
 btnIdleExplainer?.addEventListener("click", toggleIdleExplainer);
+btnPhonePrint?.addEventListener("click", async () => {
+    btnPhonePrint.disabled = true;
+    try {
+        await runLocalServiceAction("phone_print", !phonePrint.enabled);
+    } finally {
+        btnPhonePrint.disabled = false;
+    }
+});
 serviceTemplateChange?.addEventListener("click", () => showTemplateSelection());
 serviceTemplateApply?.addEventListener("click", applyServiceTemplate);
 serviceConfigApply?.addEventListener("click", applyConfigDraft);

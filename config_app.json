@@ -55,6 +55,10 @@
     "_live_view_warmup_comment": "Seconds to wait after EVF start before showing live view. Camera flushes stale buffered frames during this time.",
     "show_qr": true,
     "_show_qr_comment": "Show a direct Yandex.Disk link to the current <event>_by_sessions folder while media uploads.",
+    "phone_print_enabled": true,
+    "_phone_print_enabled_comment": "Show the phone-print button for guest events with Telegram and VK links. Also controlled from the service menu.",
+    "phone_print_links": {},
+    "_phone_print_links_comment": "Guest event and Telegram/VK links received with /event; updated automatically.",
     "technical_event_name": "Кафе",
     "_technical_event_name_comment": "When this exact event is active, the idle screen stays locked until a payment succeeds or an admin grants sessions with /unblock.",
     "technical_event_packages": [

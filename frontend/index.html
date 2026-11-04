@@ -85,7 +85,33 @@
                     <button class="payment-start-button" id="payment-start-button" type="button" hidden>НАЧАТЬ</button>
                 </section>
             </div>
+
+            <button class="phone-print-button" id="phone-print-button" type="button" hidden>
+                <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+                    <rect x="8" y="2" width="16" height="28" rx="3" />
+                    <path d="M13 6h6M14 26h4" />
+                </svg>
+                <span>РАСПЕЧАТАЙ ФОТО<br>С ТЕЛЕФОНА</span>
+            </button>
         </div>
+
+        <section class="phone-print-screen" id="phone-print-screen" role="dialog"
+                 aria-modal="true" aria-labelledby="phone-print-title" hidden>
+            <button class="phone-print-close" id="phone-print-close" type="button"
+                    aria-label="Закрыть">×</button>
+            <h2 id="phone-print-title">РАСПЕЧАТАЙ ФОТО С ТЕЛЕФОНА</h2>
+            <p>Отсканируй QR-код и отправь фото боту</p>
+            <div class="phone-print-codes">
+                <figure>
+                    <figcaption>Telegram</figcaption>
+                    <div class="phone-print-code" id="phone-print-telegram" aria-label="QR-код Telegram"></div>
+                </figure>
+                <figure>
+                    <figcaption>VK</figcaption>
+                    <div class="phone-print-code" id="phone-print-vk" aria-label="QR-код VK"></div>
+                </figure>
+            </div>
+        </section>
 
         <!-- SHOOTING: live view + countdown + flash -->
         <div class="screen" id="screen-shooting" hidden>
@@ -282,6 +308,7 @@
                             <button id="btn-config-camera" class="service-btn" type="button">Конфиг камеры</button>
                             <button id="btn-template-pack" class="service-btn" type="button">Шаблон</button>
                             <button id="btn-idle-explainer" class="service-btn" type="button">Объяснялка: ВКЛ</button>
+                            <button id="btn-phone-print" class="service-btn" type="button">Печать с телефона: ВКЛ</button>
                             <button id="btn-booth-unblock" class="service-btn service-btn-half" type="button">Сессии</button>
                             <button id="btn-booth-block" class="service-btn service-btn-danger service-btn-half" type="button">Обнулить сессии</button>
                         </div>

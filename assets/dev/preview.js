@@ -125,6 +125,12 @@
                 api.switchScreen("idle", {
                     start_locked: locked,
                     technical_event_active: route !== "idle",
+                    phone_print: {
+                        enabled: appConfig.phone_print_enabled !== false,
+                        event: "preview",
+                        telegram: route === "idle" ? "https://t.me/example_bot?start=preview" : "",
+                        vk: route === "idle" ? "https://vk.me/example?ref=preview" : "",
+                    },
                     payment: {
                         available: true,
                         status: "idle",

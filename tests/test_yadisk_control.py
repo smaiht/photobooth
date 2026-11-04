@@ -17,18 +17,20 @@ from backend.config import update_camera_config_field
 class CommandValidationTests(unittest.TestCase):
     def test_validates_command_id_and_filename(self):
         command_id = "a" * 32
+        guest_links = {"telegram": "telegram-link", "vk": "vk-link"}
         command = yadisk_control.validate_command({
             "schema_version": 3,
             "message_type": "command",
             "command_id": command_id,
             "command": "set_event",
-            "data": {"name": "Свадьба Ивановых 2026"},
+            "data": {"name": "Свадьба Ивановых 2026", "guest_links": guest_links},
             "reply_target": {
                 "provider": " Telegram ",
                 "conversation_id": 123,
             },
         }, f"{command_id}.json")
         self.assertEqual(command["command"], "set_event")
+        self.assertEqual(command["data"]["guest_links"], guest_links)
         self.assertEqual(command["reply_target"], {
             "provider": "telegram",
             "conversation_id": "123",
@@ -902,8 +904,77 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["event_folder"], "Свадьба Ивановых 2026")
         self.assertNotIn("<b>", result["message"])
-        save.assert_called_once_with("Свадьба Ивановых 2026")
+        save.assert_called_once_with("Свадьба Ивановых 2026", None)
         reset.assert_not_called()
+
+    async def test_event_links_and_service_switch_survive_restart(self):
+        first_event = "2026-08-17 Свадьба"
+        second_event = "2026-08-18 День рождения"
+        first_links = {
+            "telegram": "https://t.me/first_bot?start=first",
+            "vk": "https://vk.me/first?ref=first",
+        }
+        second_links = {
+            "telegram": "https://t.me/second_bot?start=second",
+            "vk": "https://vk.me/second?ref=second",
+        }
+        config = {"yadisk_folder": "Кафе", "technical_event_name": "Кафе"}
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(main, "ROOT_DIR", Path(tmpdir)), \
+             patch.object(main, "CONFIG", config), \
+             patch.object(main, "STATE", "idle"), \
+             patch.object(main, "_event_history_ready", False), \
+             patch.object(main, "_background_uploads", set()), \
+             patch("backend.main._payment_active", return_value=False), \
+             patch("backend.main._save_cafe_payment"), \
+             patch("backend.main.yadisk_cloud.set_event_folder", AsyncMock()), \
+             patch("backend.main.yadisk_cloud.current_event_folder", return_value=""), \
+             patch("backend.main.broadcast", AsyncMock()):
+            config_path = Path(tmpdir) / "config_app.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            async def set_event(name, links=None):
+                return await main.handle_disk_command({
+                    "command_id": "a" * 32,
+                    "command": "set_event",
+                    "data": {"name": name, "guest_links": links},
+                })
+
+            self.assertEqual((await set_event(first_event, first_links))["status"], "ok")
+            self.assertEqual(main._phone_print_state()["telegram"], first_links["telegram"])
+            self.assertEqual(main._phone_print_state()["vk"], first_links["vk"])
+
+            # The backend loads its config again after an ordinary restart.
+            config.clear()
+            config.update(json.loads(config_path.read_text(encoding="utf-8")))
+            self.assertEqual(main._phone_print_state()["telegram"], first_links["telegram"])
+            self.assertEqual(main._phone_print_state()["vk"], first_links["vk"])
+
+            result = await main.service_action({"command": "phone_print", "data": False})
+            self.assertEqual(result["status"], "ok")
+            config.clear()
+            config.update(json.loads(config_path.read_text(encoding="utf-8")))
+            self.assertFalse(main._phone_print_state()["enabled"])
+
+            self.assertEqual((await set_event(second_event, second_links))["status"], "ok")
+            state = main._phone_print_state()
+            self.assertFalse(state["enabled"])
+            self.assertEqual(state["telegram"], second_links["telegram"])
+            self.assertEqual(state["vk"], second_links["vk"])
+
+            config["yadisk_folder"] = first_event
+            self.assertEqual(main._phone_print_state()["telegram"], "")
+            config["yadisk_folder"] = second_event
+
+            self.assertEqual((await set_event("Кафе"))["status"], "ok")
+            self.assertEqual(main._phone_print_state()["telegram"], "")
+            self.assertEqual(main._phone_print_state()["vk"], "")
+
+            # Older commands without links must not bring back a previous QR.
+            self.assertEqual((await set_event(first_event))["status"], "ok")
+            self.assertEqual(main._phone_print_state()["telegram"], "")
+            self.assertEqual(main._phone_print_state()["vk"], "")
 
     async def test_set_event_attaches_the_archived_history_and_summary(self):
         command = {

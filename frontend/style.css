@@ -76,6 +76,92 @@ html, body {
     background: linear-gradient(145deg, #faf9f6, #e9e5dc);
 }
 
+.phone-print-button {
+    position: absolute;
+    right: 2.5vw;
+    bottom: 3vh;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 1vw;
+    padding: 1.8vh 1.5vw;
+    border: 0;
+    border-radius: 1.4vh;
+    background: #191919;
+    color: #fff;
+    box-shadow: 0 0.6vh 2vh rgba(0, 0, 0, 0.2);
+    font: 700 clamp(16px, 1.15vw, 25px) 'Comfortaa', sans-serif;
+    line-height: 1.4;
+    text-align: left;
+}
+.phone-print-button[hidden] { display: none; }
+.phone-print-button svg {
+    width: 2.5vw;
+    min-width: 30px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+
+.phone-print-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 400;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2.5vh;
+    padding: 5vh 5vw;
+    background: #f8f5ef;
+    text-align: center;
+}
+.phone-print-screen[hidden] { display: none; }
+.phone-print-screen h2 {
+    font-size: clamp(28px, 2.6vw, 52px);
+    line-height: 1.2;
+}
+.phone-print-screen p {
+    color: #57534d;
+    font-size: clamp(19px, 1.4vw, 30px);
+}
+.phone-print-close {
+    position: absolute;
+    top: 3vh;
+    right: 3vw;
+    width: 7vh;
+    height: 7vh;
+    border: 0;
+    border-radius: 50%;
+    background: #191919;
+    color: #fff;
+    font: 300 5vh/1 Arial, sans-serif;
+}
+.phone-print-codes {
+    display: flex;
+    justify-content: center;
+    gap: 5vw;
+    margin-top: 2vh;
+}
+.phone-print-codes figure {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5vh;
+}
+.phone-print-codes figcaption {
+    font-size: clamp(22px, 1.8vw, 38px);
+    font-weight: 700;
+}
+.phone-print-code {
+    width: min(31vh, 30vw);
+    aspect-ratio: 1;
+    overflow: hidden;
+    background: #fff;
+}
+.phone-print-code svg { display: block; width: 100%; height: 100%; }
+
 .idle-pose-field {
     position: absolute;
     z-index: 0;
