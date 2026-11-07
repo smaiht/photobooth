@@ -16,9 +16,9 @@ class ChargeCycleTests(unittest.TestCase):
         self.assertTrue(flash.next_cycle(True, middle))
         self.assertFalse(flash.next_cycle(False, middle))
 
-    def test_unknown_battery_changes_nothing(self):
+    def test_unknown_battery_starts_charging(self):
+        self.assertTrue(flash.next_cycle(False, None))
         self.assertTrue(flash.next_cycle(True, None))
-        self.assertFalse(flash.next_cycle(False, None))
 
 
 class RelayPortTests(unittest.TestCase):

@@ -476,6 +476,62 @@ class CafePaymentTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(main._cafe_unlock_sessions_remaining, 1)
             self.assertTrue(main._cafe_payment["credited"])
 
+    async def test_payment_admin_notifications_on_start_success_and_cancel(self):
+        from backend import main
+        with ExitStack() as stack:
+            for context in self._booth():
+                stack.enter_context(context)
+            stack.enter_context(patch.object(main, "_cafe_payment", None))
+            stack.enter_context(patch.object(main, "_ensure_payment_task"))
+            publish_mock = stack.enter_context(
+                patch.object(main.yadisk_control, "publish_booth_notice", AsyncMock()))
+
+            # 1. Start payment
+            await main._start_cafe_payment(1)
+            await asyncio.sleep(0)
+
+            publish_mock.assert_awaited()
+            kind, title, text = publish_mock.await_args.args
+            req_id = main._cafe_payment["request_id"]
+            short_id = req_id[:8]
+            self.assertEqual(kind, "payment")
+            self.assertIn(short_id, title)
+            self.assertIn(req_id, text)
+            self.assertIn("Оплата начата", title)
+            publish_mock.reset_mock()
+
+            # 2. Cancel payment
+            await main._cancel_cafe_payment()
+            await asyncio.sleep(0)
+
+            publish_mock.assert_awaited()
+            kind, title, text = publish_mock.await_args.args
+            self.assertEqual(kind, "payment")
+            self.assertIn(short_id, title)
+            self.assertIn("Оплата отменена", title)
+            publish_mock.reset_mock()
+
+            # 3. Successful payment
+            await main._start_cafe_payment(1)
+            await asyncio.sleep(0)
+            req_id_2 = main._cafe_payment["request_id"]
+            short_id_2 = req_id_2[:8]
+            publish_mock.reset_mock()
+
+            stack.enter_context(patch.object(yookassa, "request_payment", AsyncMock(
+                return_value=_response(status="succeeded", paid=True, id="yoo-pay-123",
+                                       metadata=main._cafe_payment["request"]["metadata"]))))
+            await main._poll_cafe_payment()
+            await asyncio.sleep(0)
+
+            publish_mock.assert_awaited()
+            kind, title, text = publish_mock.await_args.args
+            self.assertEqual(kind, "payment")
+            self.assertIn(short_id_2, title)
+            self.assertIn("Оплата прошла", title)
+            self.assertIn("yoo-pay-123", text)
+            self.assertIn(req_id_2, text)
+
 
 if __name__ == "__main__":
     unittest.main()

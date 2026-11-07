@@ -7,6 +7,7 @@ State machine:
 
 import asyncio
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -677,6 +678,82 @@ def _fail_cafe_payment(exc: Exception) -> None:
               type(exc).__name__, exc, payment.get("request_id"), payment.get("id"))
 
 
+async def _send_payment_notice(
+    *,
+    stage: str,
+    request_id: str,
+    sessions: int,
+    amount: str,
+    event: str,
+    payment_id: str,
+) -> None:
+    short_id = request_id[:8]
+    amount_str = f"{amount} ₽" if amount else ""
+    event_str = f"\nСобытие: {event}" if event else ""
+
+    if stage == "start":
+        title = f"Оплата начата [#{short_id}]"
+        text = (
+            f"🟡 Ожидание оплаты по QR\n"
+            f"Сумма: {amount_str} (сессий: {sessions}){event_str}\n"
+            f"ID: {request_id}"
+        )
+    elif stage == "succeeded":
+        title = f"Оплата прошла [#{short_id}]"
+        yoo_str = f"\nЮKassa ID: {payment_id}" if payment_id else ""
+        text = (
+            f"🟢 Успешно оплачено\n"
+            f"Сумма: {amount_str} (начислено сессий: {sessions}){event_str}\n"
+            f"ID: {request_id}{yoo_str}"
+        )
+    elif stage == "canceled_by_guest":
+        title = f"Оплата отменена [#{short_id}]"
+        yoo_str = f"\nЮKassa ID: {payment_id}" if payment_id else ""
+        text = (
+            f"🔴 Гость закрыл экран оплаты\n"
+            f"Сумма: {amount_str} (сессий: {sessions}){event_str}\n"
+            f"ID: {request_id}{yoo_str}"
+        )
+    else:
+        return
+
+    notice_id = hashlib.sha256(f"{request_id}:{stage}".encode("utf-8")).hexdigest()[:32]
+    try:
+        await yadisk_control.publish_booth_notice(
+            "payment", title, text, notice_id=notice_id)
+        log.info("Payment notice published for admin: %s %s", stage, short_id)
+    except Exception as exc:
+        log.warning("Could not publish payment notice (%s): %s", stage, exc)
+
+
+def _notify_payment_admin(stage: str, payment: dict, payment_id: str = "") -> None:
+    request_id = str(payment.get("request_id") or "")
+    if not request_id:
+        return
+    sessions = _payment_sessions(payment)
+    raw_amount = (
+        payment.get("request", {}).get("amount", {}).get("value")
+        or (payment.get("amount") or {}).get("value")
+        or ""
+    )
+    amount = str(raw_amount).removesuffix(".00")
+    event = str(payment.get("event") or _active_event_name())
+    pid = str(payment_id or payment.get("id") or "")
+
+    task = asyncio.create_task(
+        _send_payment_notice(
+            stage=stage,
+            request_id=request_id,
+            sessions=sessions,
+            amount=amount,
+            event=event,
+            payment_id=pid,
+        )
+    )
+    _service_tasks.add(task)
+    task.add_done_callback(_service_tasks.discard)
+
+
 async def _start_cafe_payment(sessions) -> None:
     """Buy one configured package; a paid allowance may be topped up as well."""
     global _payment_notice, _payment_alert_until
@@ -735,6 +812,7 @@ async def _start_cafe_payment(sessions) -> None:
         })
         log.info("Cafe payment requested: %d sessions for %d ₽, request_id=%s",
                  sessions, package["price"], request_id)
+        _notify_payment_admin("start", payment)
     _ensure_payment_task()
     await broadcast(_state_message(STATE))
 
@@ -759,6 +837,7 @@ async def _cancel_cafe_payment() -> None:
             })
             log.info("Cafe payment %s canceled by the guest",
                      payment.get("id") or payment["request_id"])
+            _notify_payment_admin("canceled_by_guest", payment)
     await broadcast(_state_message(STATE))
 
 
@@ -811,6 +890,8 @@ async def _poll_cafe_payment() -> None:
                     _save_cafe_payment(payment, remaining)
                     _record_event_history(record)
                     log.info("Cafe payment %s: %s", result["id"], result["status"])
+                    if result["status"] == "succeeded":
+                        _notify_payment_admin("succeeded", payment, payment_id=result["id"])
                 recovered = bool(_payment_notice)
                 _payment_notice = ""
                 if changed or recovered:

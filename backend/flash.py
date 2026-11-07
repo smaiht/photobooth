@@ -133,9 +133,12 @@ wake = asyncio.Event()
 
 
 def next_cycle(cycle, battery):
-    """A charge cycle starts at LOW and ends at HIGH; in between it goes on as it was."""
+    """A charge cycle starts at LOW and ends at HIGH; in between it goes on as it was.
+
+    If the flash does not respond over Bluetooth (battery is None), turn charging on.
+    """
     if battery is None:
-        return cycle
+        return True
     if battery <= LOW:
         return True
     if battery >= HIGH:
@@ -232,7 +235,8 @@ async def watch(config):
                 )
             except Exception as exc:
                 log.warning("Flash: notice not published: %s", exc)
-        cycle = next_cycle(cycle, battery)
+        if not session_active:
+            cycle = next_cycle(cycle, battery)
         charging = cycle and not session_active
         try:
             await asyncio.to_thread(set_relay, charging)
