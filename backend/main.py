@@ -3626,7 +3626,8 @@ async def startup():
     _service_tasks.add(asyncio.create_task(_periodic_status_service()))
     _service_tasks.add(asyncio.create_task(sms.watch(CONFIG)))
     _service_tasks.add(asyncio.create_task(flash.watch(CONFIG)))
-    _service_tasks.add(asyncio.create_task(camera_power.watch()))
+    _service_tasks.add(asyncio.create_task(camera_power.watch(
+        lambda: bool(camera and camera.is_connected))))
 
 
 @app.on_event("shutdown")

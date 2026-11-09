@@ -4,6 +4,7 @@ import ctypes
 import os
 import re
 import sys
+import threading
 
 import serial
 from serial.tools import list_ports
@@ -11,10 +12,13 @@ from serial.tools import list_ports
 ON = bytes.fromhex("a0 01 01 a2")
 OFF = bytes.fromhex("a0 01 00 a1")
 RELAY_USB_ID = (0x1A86, 0x7523)  # CH340
+# Windows lets one opener at a time into a COM port: a service menu tap that
+# meets the automatic power cut would fail one of them with "Access is denied".
+_lock = threading.Lock()
 
 
 def switch(port, on):
-    with serial.Serial(port, 9600, write_timeout=1) as board:
+    with _lock, serial.Serial(port, 9600, write_timeout=1) as board:
         board.write(ON if on else OFF)
         board.flush()
 
