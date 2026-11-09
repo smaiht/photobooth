@@ -87,7 +87,12 @@ STATE_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctyp
 PROPERTY_EVENT_HANDLER = _CALLBACK(EdsError, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p)
 
 SEARCH_RETRY_SECONDS = 2
-OPEN_SESSION_TIMEOUT_SECONDS = 15
+# A camera search (list + OpenSession) answers within 0.3-3 s. Stuck this long:
+# camera_power cuts the camera power (10 s) and the camera is ready ~5 s later.
+SEARCH_HANG_SECONDS = 8
+# Still stuck after that: the power cut did not free the call either, and only a
+# new process frees a thread stuck inside the EDSDK DLL, so the app restarts.
+SEARCH_STUCK_SECONDS = 30
 CAMERA_HEALTH_LOG_SECONDS = 10 * 60.0
 MIN_FREE_DISK_GIB = 2.0
 
@@ -170,6 +175,7 @@ class Camera:
         self._connected_cb = None  # callback()
         self._search_failed_cb = None  # callback(error_str)
         self._hung_cb = None  # callback(reason): EDSDK is stuck in a camera call
+        self._stuck_cb = None  # callback(reason): still stuck after the power cut
         self._failed_searches = 0
         self._download_dir = Path("photos")
         self._health_lock = threading.Lock()
@@ -192,13 +198,14 @@ class Camera:
         self._prop_handler_ref = None
 
     def set_callbacks(self, on_evf_frame=None, on_photo=None, on_error=None, on_connected=None,
-                      on_search_failed=None, on_hung=None):
+                      on_search_failed=None, on_hung=None, on_stuck=None):
         self._evf_frame_cb = on_evf_frame
         self._photo_cb = on_photo
         self._error_cb = on_error
         self._connected_cb = on_connected
         self._search_failed_cb = on_search_failed
         self._hung_cb = on_hung
+        self._stuck_cb = on_stuck
 
     def set_download_dir(self, path: Path):
         self._download_dir = path
@@ -593,9 +600,11 @@ class Camera:
         # These calls cannot be interrupted; only a camera power cut makes a
         # stuck one return, so a hang is reported to cut the power. After a USB
         # drop EDSDK can hang already in the camera list, before OpenSession.
-        hung = threading.Timer(OPEN_SESSION_TIMEOUT_SECONDS, self._open_session_hung)
-        hung.daemon = True
-        hung.start()
+        hung = threading.Timer(SEARCH_HANG_SECONDS, self._search_hung)
+        stuck = threading.Timer(SEARCH_STUCK_SECONDS, self._search_stuck)
+        for timer in (hung, stuck):
+            timer.daemon = True
+            timer.start()
         try:
             self._camera = self._acquire_camera()
             try:
@@ -617,9 +626,16 @@ class Camera:
                         self._sdk.EdsRelease(camera)
         finally:
             hung.cancel()
+            stuck.cancel()
 
-    def _open_session_hung(self):
-        reason = f"EDSDK has not answered the camera search for {OPEN_SESSION_TIMEOUT_SECONDS} s"
+    def _search_stuck(self):
+        reason = f"EDSDK is still stuck in the camera search after {SEARCH_STUCK_SECONDS} s"
+        log.warning("Camera: %s", reason)
+        if self._stuck_cb:
+            self._stuck_cb(reason)
+
+    def _search_hung(self):
+        reason = f"EDSDK has not answered the camera search for {SEARCH_HANG_SECONDS} s"
         log.warning("Camera: %s", reason)
         if self._hung_cb:
             self._hung_cb(reason)

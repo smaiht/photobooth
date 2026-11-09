@@ -88,6 +88,12 @@ CONFIG = load_event_config()
 TEST_COUNTDOWN_SECONDS = 5 # 2
 TEST_COUNTDOWN_SOUND_SECONDS = 0  # the test countdown stays silent
 
+# A camera that EDSDK still calls connected can stop working: no live view
+# frames (the screen goes white), no photo download. A frame comes ~6 times a
+# second and a photo lands within a second of the shot, so these mean stuck.
+EVF_STALL_SECONDS = 5
+PHOTO_DOWNLOAD_SECONDS = 10
+
 STRESS_PAUSE_SECONDS = 7     # idle between stress sessions: the charger is on and the flash poll (~5 s) ends
 STRESS_CHOICE_SECONDS = 3    # the stress "guest" looks at the templates this long
 STRESS_MAX_SESSIONS = 120    # about an hour and a half, then the test stops by itself
@@ -1070,6 +1076,7 @@ _event_loop = None
 _latest_frame: bytes | None = None
 _live_view_active = False
 _evf_accept_after: float = 0.0
+_last_evf_frame: float = 0.0
 _background_uploads: set[asyncio.Task] = set()
 _service_tasks: set[asyncio.Task] = set()
 _session_running = False
@@ -1088,11 +1095,20 @@ def _require_session_camera(generation: int) -> None:
         raise CameraSessionAborted("Камера отключилась. Попробуйте снова")
     capture_err = getattr(camera, "capture_error", None)
     if capture_err:
+        # A folded or missing lens needs a person; any other refused shot
+        # (AF_NG on every shot with a white live view) is a stuck camera.
         if capture_err.startswith("Ошибка спуска затвора"):
-            # Not a folded or missing lens, which needs a person: the camera is
-            # stuck (live view goes white, AF_NG on every shot), cut its power.
-            camera_power.camera_hung(capture_err)
+            raise _camera_stuck(capture_err, capture_err)
         raise CameraSessionAborted(capture_err)
+    if _live_view_active and time.monotonic() - _last_evf_frame > EVF_STALL_SECONDS:
+        raise _camera_stuck(f"лайв-вью не приходит {EVF_STALL_SECONDS} с",
+                            "Камера зависла. Попробуйте снова")
+
+
+def _camera_stuck(reason: str, message: str) -> CameraSessionAborted:
+    """EDSDK still calls the camera connected, but only a power cut revives it."""
+    camera_power.camera_hung(reason)
+    return CameraSessionAborted(message)
 
 
 def _clear_live_view():
@@ -1246,7 +1262,8 @@ async def _enqueue_session_after_video(
 # --- Callbacks from EDSDK thread ---
 def on_evf_frame(jpeg_bytes: bytes):
     """Called from EDSDK thread - store latest frame, record video."""
-    global _latest_frame
+    global _latest_frame, _last_evf_frame
+    _last_evf_frame = time.monotonic()
     if not _live_view_active or time.monotonic() < _evf_accept_after:
         return
     _latest_frame = jpeg_bytes
@@ -1289,6 +1306,12 @@ def on_camera_hung(reason: str):
     # Runs on a timer thread while the camera thread is stuck inside EDSDK.
     if _event_loop and _event_loop.is_running():
         _event_loop.call_soon_threadsafe(camera_power.camera_hung, reason)
+
+
+def on_camera_stuck(reason: str):
+    # The power cut did not free the EDSDK call either: restart the process.
+    if _event_loop and _event_loop.is_running():
+        _event_loop.call_soon_threadsafe(asyncio.ensure_future, _do_restart())
 
 
 def on_camera_connected():
@@ -1587,7 +1610,7 @@ def _set_stress(on: bool) -> str:
 async def _run_session(test_session: bool = False):
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT, SESSION_LINK
     global TEMPLATE_OPTIONS
-    global _live_view_active, _evf_accept_after
+    global _live_view_active, _evf_accept_after, _last_evf_frame
 
     if not camera or not camera.is_connected:
         await set_state("camera_searching" if camera else "no_camera")
@@ -1649,6 +1672,7 @@ async def _run_session(test_session: bool = False):
         camera.set_download_dir(session_dir)
         camera.start_live_view()
         _evf_accept_after = time.monotonic() + float(CONFIG.get("live_view_warmup", 0.3))
+        _last_evf_frame = time.monotonic()
         _live_view_active = True
         log.info("Live view started")
 
@@ -1696,32 +1720,18 @@ async def _run_session(test_session: bool = False):
 
     # Wait for all photos to download. The camera is not needed after that.
     log.info(f"Waiting for {num_photos} photos to download...")
-    for _ in range(300):
-        if len(SESSION_PHOTOS) >= num_photos:
-            break
+    deadline = time.monotonic() + PHOTO_DOWNLOAD_SECONDS
+    while len(SESSION_PHOTOS) < num_photos:
+        if time.monotonic() > deadline:
+            raise _camera_stuck(
+                f"фото не скачались за {PHOTO_DOWNLOAD_SECONDS} с "
+                f"({len(SESSION_PHOTOS)} из {num_photos})",
+                "Не удалось сохранить фото. Попробуйте снова")
         _require_session_camera(camera_generation)
         await asyncio.sleep(0.1)
     _clear_live_view()
     camera.stop_live_view()
     log.info("Live view stopped")
-
-    if len(SESSION_PHOTOS) < num_photos:
-        video_recorder.abort()
-        if not test_session:
-            _record_event_history({
-                "type": "photo_session",
-                "session_id": SESSION_ID,
-                "result": "failed",
-                "reason": "photo_download_timeout",
-            })
-        # EDSDK still calls the camera connected, but it stopped answering
-        # (the live view went white too): only a power cut brings it back.
-        camera_power.camera_hung(
-            f"фото не скачались за 30 с ({len(SESSION_PHOTOS)} из {num_photos})")
-        await broadcast({"type": "error", "message": "Не удалось сохранить фото. Попробуйте снова"})
-        await asyncio.sleep(3)
-        await set_state("idle")
-        return
 
     photos_copy = SESSION_PHOTOS[:]
     if test_session:
@@ -3599,6 +3609,7 @@ async def startup():
             on_connected=on_camera_connected,
             on_search_failed=on_camera_search_failed,
             on_hung=on_camera_hung,
+            on_stuck=on_camera_stuck,
         )
         await set_state("camera_searching")
         camera.start()
