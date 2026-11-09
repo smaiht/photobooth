@@ -128,15 +128,33 @@ html, body {
 }
 .phone-print-close {
     position: absolute;
-    top: 3vh;
+    top: 5.5vh;
     right: 3vw;
-    width: 7vh;
-    height: 7vh;
+    width: clamp(70px, 14vh, 140px);
+    height: clamp(70px, 14vh, 140px);
     border: 0;
     border-radius: 50%;
     background: #191919;
     color: #fff;
-    font: 300 5vh/1 Arial, sans-serif;
+    font: 300 clamp(50px, 10vh, 100px)/1 Arial, sans-serif;
+    display: grid;
+    place-items: center;
+    padding: 0 0 0.8vh;
+    box-shadow: 0 0.5vh 1.5vh rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.1s ease, background 0.1s ease;
+}
+.phone-print-close:active {
+    transform: scale(0.95);
+    background: #333;
+}
+.phone-print-close::before {
+    content: '';
+    position: absolute;
+    inset: -3.5vh;
+    border-radius: 50%;
 }
 .phone-print-codes {
     display: flex;

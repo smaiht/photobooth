@@ -129,6 +129,7 @@ def parse_dump(packets):
 log = logging.getLogger(__name__)
 status = "выключено"
 session_active = False
+stress_test = False  # the stress test switches the charger itself; the watcher only reads the flash
 wake = asyncio.Event()
 
 
@@ -238,18 +239,20 @@ async def watch(config):
         if not session_active:
             cycle = next_cycle(cycle, battery)
         charging = cycle and not session_active
-        try:
-            await asyncio.to_thread(set_relay, charging)
-        except Exception as exc:
-            problems.append(f"реле: {exc or type(exc).__name__}")
-        state = f"зарядка {'вкл' if charging else 'выкл'}"
+        if not stress_test:
+            try:
+                await asyncio.to_thread(set_relay, charging)
+            except Exception as exc:
+                problems.append(f"реле: {exc or type(exc).__name__}")
+        state = ("зарядкой щёлкает нагрузочный тест" if stress_test
+                 else f"зарядка {'вкл' if charging else 'выкл'}")
         if session_active:
             status = f"сессия, {state}"
         else:
             status = "; ".join([f"{battery}%, {state}" if battery is not None else state, *problems])
         parts = [
             f"battery={battery}%" if battery is not None else "battery=?",
-            f"charging={'on' if charging else 'off'}",
+            "charging=stress" if stress_test else f"charging={'on' if charging else 'off'}",
             f"session={'yes' if session_active else 'no'}",
             extra, *problems,
         ]

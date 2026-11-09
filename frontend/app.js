@@ -184,6 +184,8 @@ const btnConfigApp = document.getElementById("btn-config-app");
 const btnConfigCamera = document.getElementById("btn-config-camera");
 const btnTemplatePack = document.getElementById("btn-template-pack");
 const btnTestSession = document.getElementById("btn-test-session");
+const btnStress = document.getElementById("btn-stress");
+let stressRunning = false;
 const btnBoothUnblock = document.getElementById("btn-booth-unblock");
 const btnBoothBlock = document.getElementById("btn-booth-block");
 const btnClearAll = document.getElementById("btn-clear-all");
@@ -1967,6 +1969,17 @@ function renderServiceStatus(data) {
             Boolean(data.uploads_error),
         ),
     );
+
+    const stress = data.stress || {};
+    stressRunning = stress.running === true;
+    if (btnStress) btnStress.textContent = stressRunning ? "Нагрузка: стоп" : "Нагрузка: старт";
+    if (stressRunning || stress.ran) {
+        serviceRuntimeStatus.append(createServiceStatusCard(
+            "Нагрузочный тест",
+            stressRunning ? "Идёт" : "Остановлен",
+            stress.summary || "",
+        ));
+    }
 }
 
 async function refreshServiceStatus() {
@@ -2704,6 +2717,12 @@ serviceUnlockInput?.addEventListener("keydown", e => {
 btnTestSession?.addEventListener("click", () => {
     closeServiceModal();
     send({ type: "start_session", test_session: true });
+});
+btnStress?.addEventListener("click", async () => {
+    const start = !stressRunning;
+    if (!await runLocalServiceAction("stress", start)) return;
+    if (start) closeServiceModal();
+    else refreshServiceStatus();
 });
 btnBoothUnblock?.addEventListener("click", async () => {
     try {

@@ -88,6 +88,12 @@ CONFIG = load_event_config()
 TEST_COUNTDOWN_SECONDS = 5 # 2
 TEST_COUNTDOWN_SOUND_SECONDS = 0  # the test countdown stays silent
 
+STRESS_PAUSE_SECONDS = 5     # idle between stress sessions, the flash charger is on meanwhile
+STRESS_CHOICE_SECONDS = 3    # the stress "guest" looks at the templates this long
+STRESS_MAX_SESSIONS = 120    # about an hour and a half, then the test stops by itself
+_stress = {"running": False, "sessions": 0, "failed": 0, "relay_errors": 0, "camera_generation": 0}
+_stress_task: asyncio.Task | None = None
+
 CAFE_UNLOCK_STATE_FILENAME = "cafe_unlock_state.json"
 EVENT_HISTORY_FILENAME = "event_history.json"
 EVENT_HISTORY_ARCHIVE_DIRNAME = "event_history_archive"
@@ -109,6 +115,7 @@ LOCAL_SERVICE_ACTIONS = frozenset((
     "camera_power",
     "flash_power",
     "phone_print",
+    "stress",
     *LOCAL_CLEAR_ACTIONS,
 ))
 
@@ -1464,7 +1471,7 @@ async def run_session(test_session: bool = False):
                 _save_cafe_payment(None)
             except (OSError, ValueError):
                 log.warning("Could not clear the used Cafe payment")
-        await _run_session(test_session=test_session)
+        return await _run_session(test_session=test_session)
     except CameraSessionAborted as exc:
         log.warning("Session aborted: %s", exc)
         if (not test_session
@@ -1514,6 +1521,63 @@ async def run_session(test_session: bool = False):
         if (camera and camera.is_connected
                 and STATE in ("no_camera", "camera_searching")):
             await set_state("idle")
+
+
+async def _stress_charger(on: bool) -> None:
+    try:
+        await asyncio.to_thread(flash.set_relay, on)
+    except Exception as exc:
+        _stress["relay_errors"] += 1
+        log.warning("Stress: charger relay %s failed: %s", "on" if on else "off", exc)
+
+
+async def _stress_loop() -> None:
+    """Test sessions back to back while the flash charger clicks as at an event.
+
+    Screens, shots, flash and the template step are a guest's; as in any test
+    session nothing is uploaded, printed or counted, so no setting has to change.
+    The charger goes off at each session start and on between sessions, the way
+    a charge cycle switched it on 7 November; the flash watcher keeps reading the
+    flash over Bluetooth but leaves the relay to this loop.
+    """
+    flash.stress_test = True
+    try:
+        while _stress["running"] and _stress["sessions"] < STRESS_MAX_SESSIONS:
+            if STATE != "idle" or not camera or not camera.is_connected:
+                await asyncio.sleep(1)  # a camera search or a guest session is on
+                continue
+            await _stress_charger(False)
+            ok = await run_session(test_session=True)
+            _stress["sessions"] += 1
+            if not ok:
+                _stress["failed"] += 1
+            log.info("Stress: session %d %s", _stress["sessions"], "ok" if ok else "FAILED")
+            await _stress_charger(True)
+            await asyncio.sleep(STRESS_PAUSE_SECONDS)
+    finally:
+        _stress["running"] = False
+        await _stress_charger(False)
+        flash.stress_test = False
+        flash.wake.set()  # the watcher takes the charger back at once
+        log.info("Stress: stopped, %s", _stress_summary())
+
+
+def _stress_summary() -> str:
+    drops = (camera.connection_generation - _stress["camera_generation"]) if camera else 0
+    return (f"сессий {_stress['sessions']}, сбоев {_stress['failed']}, "
+            f"камера отваливалась {drops}, реле не ответило {_stress['relay_errors']}")
+
+
+def _set_stress(on: bool) -> str:
+    global _stress_task
+    if not on:
+        _stress["running"] = False
+        return f"Нагрузка остановится после текущей сессии: {_stress_summary()}"
+    _stress.update(running=True, sessions=0, failed=0, relay_errors=0,
+                   camera_generation=camera.connection_generation if camera else 0)
+    if _stress_task is None or _stress_task.done():
+        _stress_task = asyncio.create_task(_stress_loop())
+    return "Нагрузочный тест запущен"
 
 
 async def _run_session(test_session: bool = False):
@@ -1824,7 +1888,9 @@ async def _run_session(test_session: bool = False):
 
     # Any touch on the template screen restarts the full timeout, so a visitor
     # who is still choosing never loses the session to the default template.
-    select_timeout = float(CONFIG["template_select_timeout"])
+    # The stress test has no visitor: it takes the default after a short look.
+    select_timeout = (STRESS_CHOICE_SECONDS if _stress["running"]
+                      else float(CONFIG["template_select_timeout"]))
     loop = asyncio.get_running_loop()
     deadline = {"at": loop.time() + select_timeout}
     extend_event = asyncio.Event()
@@ -1967,6 +2033,7 @@ async def _run_session(test_session: bool = False):
     await asyncio.sleep(max(0, float(CONFIG.get("done_screen_seconds", 8))))
     await set_state(
         "idle" if camera and camera.is_connected else "camera_searching")
+    return True
 
 
 # --- MJPEG live view stream ---
@@ -2136,6 +2203,11 @@ def _service_status_snapshot() -> dict:
         "pending_uploads": pending_uploads,
         "uploads_preparing": bool(_background_uploads),
         "uploads_error": uploads_error,
+        "stress": {
+            "running": _stress["running"],
+            "ran": _stress["sessions"] > 0,
+            "summary": _stress_summary(),
+        },
     }
 
 
@@ -2293,6 +2365,10 @@ async def service_action(payload: dict):
             "status": "ok",
             "message": f"Печать с телефона: {'ВКЛ' if enabled else 'ВЫКЛ'}",
         }
+    if command_name == "stress":
+        message = _set_stress(payload.get("data") is True)
+        log.info("Service menu: stress -> %s", message)
+        return {"status": "ok", "message": message}
     if command_name in ("camera_power", "flash_power"):
         on = bool(payload.get("data"))
         state_str = "ВКЛ" if on else "ВЫКЛ"
