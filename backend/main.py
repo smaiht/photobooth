@@ -1088,6 +1088,10 @@ def _require_session_camera(generation: int) -> None:
         raise CameraSessionAborted("Камера отключилась. Попробуйте снова")
     capture_err = getattr(camera, "capture_error", None)
     if capture_err:
+        if capture_err.startswith("Ошибка спуска затвора"):
+            # Not a folded or missing lens, which needs a person: the camera is
+            # stuck (live view goes white, AF_NG on every shot), cut its power.
+            camera_power.camera_hung(capture_err)
         raise CameraSessionAborted(capture_err)
 
 
@@ -1710,6 +1714,10 @@ async def _run_session(test_session: bool = False):
                 "result": "failed",
                 "reason": "photo_download_timeout",
             })
+        # EDSDK still calls the camera connected, but it stopped answering
+        # (the live view went white too): only a power cut brings it back.
+        camera_power.camera_hung(
+            f"фото не скачались за 30 с ({len(SESSION_PHOTOS)} из {num_photos})")
         await broadcast({"type": "error", "message": "Не удалось сохранить фото. Попробуйте снова"})
         await asyncio.sleep(3)
         await set_state("idle")
