@@ -590,35 +590,36 @@ class Camera:
         One attempt per search: the search loop in _run already repeats it.
         """
         self._transport_lost = False
-        self._camera = self._acquire_camera()
+        # These calls cannot be interrupted; only a camera power cut makes a
+        # stuck one return, so a hang is reported to cut the power. After a USB
+        # drop EDSDK can hang already in the camera list, before OpenSession.
+        hung = threading.Timer(OPEN_SESSION_TIMEOUT_SECONDS, self._open_session_hung)
+        hung.daemon = True
+        hung.start()
         try:
-            self._enable_limited_properties()
-            # The call cannot be interrupted; only a camera power cut makes a
-            # stuck one return, so a hang is reported to cut the power.
-            hung = threading.Timer(OPEN_SESSION_TIMEOUT_SECONDS, self._open_session_hung)
-            hung.daemon = True
-            started = time.monotonic()
-            hung.start()
+            self._camera = self._acquire_camera()
             try:
+                self._enable_limited_properties()
+                started = time.monotonic()
                 err = self._sdk.EdsOpenSession(self._camera)
+                elapsed = time.monotonic() - started
+                if err != EDS_ERR_OK:
+                    raise RuntimeError(
+                        f"Failed to open camera session after {elapsed:.1f} s: "
+                        f"0x{err:08X} {edsdk_error_name(err)}")
+                self._session_open = True
+                log.info("Session opened in %.1f s", elapsed)
             finally:
-                hung.cancel()
-            elapsed = time.monotonic() - started
-            if err != EDS_ERR_OK:
-                raise RuntimeError(
-                    f"Failed to open camera session after {elapsed:.1f} s: "
-                    f"0x{err:08X} {edsdk_error_name(err)}")
-            self._session_open = True
-            log.info("Session opened in %.1f s", elapsed)
+                if not self._session_open:
+                    camera = self._camera
+                    self._camera = EdsBaseRef()
+                    if camera:
+                        self._sdk.EdsRelease(camera)
         finally:
-            if not self._session_open:
-                camera = self._camera
-                self._camera = EdsBaseRef()
-                if camera:
-                    self._sdk.EdsRelease(camera)
+            hung.cancel()
 
     def _open_session_hung(self):
-        reason = f"EdsOpenSession has not answered for {OPEN_SESSION_TIMEOUT_SECONDS} s"
+        reason = f"EDSDK has not answered the camera search for {OPEN_SESSION_TIMEOUT_SECONDS} s"
         log.warning("Camera: %s", reason)
         if self._hung_cb:
             self._hung_cb(reason)

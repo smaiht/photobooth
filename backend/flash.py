@@ -131,6 +131,7 @@ status = "выключено"
 session_active = False
 stress_test = False  # the stress test switches the charger itself; the watcher only reads the flash
 wake = asyncio.Event()
+_poll = None  # the Bluetooth poll in progress; a session start cuts it short
 
 
 def next_cycle(cycle, battery):
@@ -150,11 +151,14 @@ def next_cycle(cycle, battery):
 def session(active):
     """A photo session started or ended; the watcher reacts at once.
 
-    A start puts the charger off, an end checks the battery right away so the
-    charge cycle resumes without waiting for the next poll.
+    A start puts the charger off and cuts a running Bluetooth poll short, so no
+    Bluetooth traffic overlaps the flash firing; an end checks the battery right
+    away so the charge cycle resumes without waiting for the next poll.
     """
     global session_active
     session_active = active
+    if active and _poll:
+        _poll.cancel()
     wake.set()
 
 
@@ -210,7 +214,7 @@ def set_relay(on):
 
 
 async def watch(config):
-    global status
+    global status, _poll
     if not config.get("flash_enabled", False):
         status = "выключено"
         log.info("Flash: disabled")
@@ -220,12 +224,20 @@ async def watch(config):
     while True:
         battery, extra, fixes, problems = None, "", [], []
         if not session_active:  # no Bluetooth traffic while the flash fires
+            _poll = asyncio.create_task(asyncio.wait_for(read_flash(), 45))
             try:
-                packets = await asyncio.wait_for(read_flash(), 45)
+                packets = await _poll
                 battery = min(packets[0x23][0], 100)
                 extra, fixes = parse_dump(packets)
+            except asyncio.CancelledError:
+                watcher = asyncio.current_task()
+                if watcher is None or watcher.cancelling():
+                    raise  # the watcher itself is stopping
+                extra = "опрос прерван: началась сессия"
             except Exception as exc:
                 problems.append(str(exc) or type(exc).__name__)
+            finally:
+                _poll = None
         if fixes:
             try:
                 await yadisk_control.publish_booth_notice(

@@ -88,7 +88,7 @@ CONFIG = load_event_config()
 TEST_COUNTDOWN_SECONDS = 5 # 2
 TEST_COUNTDOWN_SOUND_SECONDS = 0  # the test countdown stays silent
 
-STRESS_PAUSE_SECONDS = 5     # idle between stress sessions, the flash charger is on meanwhile
+STRESS_PAUSE_SECONDS = 7     # idle between stress sessions: the charger is on and the flash poll (~5 s) ends
 STRESS_CHOICE_SECONDS = 3    # the stress "guest" looks at the templates this long
 STRESS_MAX_SESSIONS = 120    # about an hour and a half, then the test stops by itself
 _stress = {"running": False, "sessions": 0, "failed": 0, "relay_errors": 0, "camera_generation": 0}
