@@ -1311,7 +1311,9 @@ def on_camera_hung(reason: str):
 def on_camera_stuck(reason: str):
     # The power cut did not free the EDSDK call either: restart the process.
     if _event_loop and _event_loop.is_running():
-        _event_loop.call_soon_threadsafe(asyncio.ensure_future, _do_restart())
+        # Joining the stuck camera thread would only waste the stop timeout.
+        _event_loop.call_soon_threadsafe(
+            asyncio.ensure_future, _do_restart(camera_timeout=0))
 
 
 def on_camera_connected():
@@ -2492,12 +2494,12 @@ async def apply_service_config(
     }
 
 
-async def _do_restart():
+async def _do_restart(camera_timeout: float = 10.0):
     _record_event_history({
         "type": "application_restart_requested",
     })
     log.info("Restart requested!")
-    await _shutdown_services()
+    await _shutdown_services(camera_timeout)
     si = None
     if sys.platform == "win32":
         si = subprocess.STARTUPINFO()
@@ -3490,7 +3492,7 @@ async def _yookassa_service():
     await broadcast(_state_message(STATE))
 
 
-async def _shutdown_services() -> None:
+async def _shutdown_services(camera_timeout: float = 10.0) -> None:
     """Stop EDSDK and all aiohttp owners before the process exits."""
     global _services_stopping
     if _services_stopping:
@@ -3520,7 +3522,7 @@ async def _shutdown_services() -> None:
     video_recorder.abort()
     if camera:
         log.info("Stopping camera...")
-        camera_stopped = await asyncio.to_thread(camera.stop)
+        camera_stopped = await asyncio.to_thread(camera.stop, camera_timeout)
         if camera_stopped:
             log.info("Camera stopped")
         else:

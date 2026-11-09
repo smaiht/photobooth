@@ -10,6 +10,10 @@ a camera that is still missing gets the next cut, until it is found.
 
 A camera that keeps EDSDK stuck inside a call is cut at once: while the call
 hangs no search can fail, and only the power cut makes it return.
+
+An unpowered camera cannot be on USB at all. A search during the cut that still
+lists it (only fails to open it) means the relay did not cut the power; the
+admin is told once per outage, since no cut can help until a person checks it.
 """
 
 import asyncio
@@ -27,11 +31,17 @@ _lost = asyncio.Event()
 _reason = ""
 _failed = 0    # failed searches since the camera was found or the power came back
 _told = False  # the admin already knows about this outage
+_cutting = False       # the relay is meant to hold the camera unpowered right now
+_seen_in_cut = False   # yet a search during this cut still listed it on USB
+_relay_told = False    # the admin already knows the relay did not cut
 
 
 def search_failed(reason):
     """One more search for the camera came back empty."""
-    global _failed
+    global _failed, _seen_in_cut
+    if _cutting:  # searches during the cut do not count
+        _seen_in_cut = _seen_in_cut or reason != "No camera found"
+        return
     _failed += 1
     if _failed >= SEARCHES_BEFORE_CUT:
         _cut(f"Камера не найдена после {SEARCHES_BEFORE_CUT} попыток поиска ({reason})")
@@ -48,9 +58,9 @@ def _cut(reason):
 
 
 def camera_found():
-    global _failed, _told
+    global _failed, _told, _relay_told
     _failed = 0
-    _told = False
+    _told = _relay_told = False
 
 
 def set_relay(on):
@@ -79,26 +89,40 @@ async def _tell_admin(text):
 
 
 async def _cycle(port, reason):
-    global _failed
+    global _failed, _cutting, _seen_in_cut, _relay_told
     notice = None
     try:
         await _power(port, True)
+        _cutting, _seen_in_cut = True, False
         log.warning("Camera power: %s, power off for %ss", reason, CUT_SECONDS)
         notice = asyncio.create_task(_tell_admin(
             f"{reason}. Питание камеры выключено на {CUT_SECONDS} с, потом включится само. "
             "Если камера не найдётся и после этого, отключение повторится."))
         await asyncio.sleep(CUT_SECONDS)
     finally:
+        _cutting = False
         # Always give the power back, also when the cut failed or the app stops.
         try:
             await _power(port, False)
             log.info("Camera power: power back on")
         except Exception as exc:
             log.error("Camera power: relay did not give the power back: %s", exc)
-        # The searches that failed while the power was cut do not count.
         _failed = 0
         _lost.clear()
     await notice
+    if _seen_in_cut:
+        log.error("Camera power: the camera stayed on USB through the cut, "
+                  "the relay on %s did not cut its power", port)
+        if not _relay_told:
+            try:
+                await yadisk_control.publish_booth_notice(
+                    "camera_power", "Реле не обесточило камеру",
+                    "Во время отключения камера оставалась на USB: реле не разорвало питание. "
+                    "Перезапуск по питанию не поможет: выключи и включи камеру руками "
+                    "и переткни USB реле камеры.", notice_id=uuid.uuid4().hex)
+                _relay_told = True
+            except Exception as exc:
+                log.warning("Camera power: notice not published: %s", exc)
 
 
 async def watch():

@@ -1263,7 +1263,7 @@ class EventCommandTests(unittest.IsolatedAsyncioTestCase):
             await main._shutdown_services()
             await main._shutdown_services()
 
-        camera.stop.assert_called_once_with()
+        camera.stop.assert_called_once_with(10.0)
         abort.assert_called_once_with()
         control_close.assert_awaited_once_with()
         cloud_close.assert_awaited_once_with()
