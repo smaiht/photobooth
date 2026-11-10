@@ -25,6 +25,7 @@ from backend import text_layer
 from backend import main
 from backend.printer import (
     _print_driver,
+    _read_dnp_counters,
     _printer_name,
     clear_windows_print_queues,
     get_dnp_printer_info,
@@ -63,6 +64,9 @@ class DnpPrinterInfoTests(unittest.TestCase):
         ), patch(
             "backend.printer._load_dnp_status_library",
             return_value=library,
+        ), patch(
+            "backend.printer._ask_dnp",  # the real one runs the library in a process of its own
+            side_effect=_read_dnp_counters,
         ):
             info = get_dnp_printer_info({
                 "printer_name": "DS-RX1",

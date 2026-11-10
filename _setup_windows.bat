@@ -36,10 +36,16 @@ if errorlevel 1 (
 echo [OK]
 
 :: 2. Install the narrow elevated adapter action
-echo [2/6] Setting up network adapter control...
+echo [2/6] Setting up network adapter and print service control...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $source=Get-Content -Raw -Encoding UTF8 -LiteralPath '%~dp0_network_task.ps1'; $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($source)); $action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' + $encoded); $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden; Register-ScheduledTask -TaskName 'Photobooth Network Adapter' -Description 'Enable or disable one adapter requested by the Photobooth kiosk' -Action $action -Principal $principal -Settings $settings -Force | Out-Null; $userSid=(New-Object System.Security.Principal.NTAccount('Photobooth')).Translate([System.Security.Principal.SecurityIdentifier]).Value; $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('\').GetTask('Photobooth Network Adapter'); $sddl=$task.GetSecurityDescriptor(4); if ($sddl -notmatch [regex]::Escape($userSid)) { $task.SetSecurityDescriptor($sddl + '(A;;FRFX;;;' + $userSid + ')', 0) }"
 if errorlevel 1 (
     echo ERROR: Could not install network adapter control.
+    pause
+    exit /b 1
+)
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command Restart-Service Spooler -Force'; $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest; $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden; Register-ScheduledTask -TaskName 'Photobooth Print Spooler' -Description 'Restart the print service when the printer stops answering' -Action $action -Principal $principal -Settings $settings -Force | Out-Null; $userSid=(New-Object System.Security.Principal.NTAccount('Photobooth')).Translate([System.Security.Principal.SecurityIdentifier]).Value; $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('\').GetTask('Photobooth Print Spooler'); $sddl=$task.GetSecurityDescriptor(4); if ($sddl -notmatch [regex]::Escape($userSid)) { $task.SetSecurityDescriptor($sddl + '(A;;FRFX;;;' + $userSid + ')', 0) }"
+if errorlevel 1 (
+    echo ERROR: Could not install print service control.
     pause
     exit /b 1
 )

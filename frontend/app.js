@@ -186,7 +186,10 @@ const btnTemplatePack = document.getElementById("btn-template-pack");
 const btnTestSession = document.getElementById("btn-test-session");
 const btnStress = document.getElementById("btn-stress");
 const btnStressShots = document.getElementById("btn-stress-shots");
+const btnEvfPause = document.getElementById("btn-evf-pause");
+const btnRestartSpooler = document.getElementById("btn-restart-spooler");
 let stressRunning = false;
+let evfPause = true;
 const btnBoothUnblock = document.getElementById("btn-booth-unblock");
 const btnBoothBlock = document.getElementById("btn-booth-block");
 const btnClearAll = document.getElementById("btn-clear-all");
@@ -599,6 +602,12 @@ function renderPhonePrint() {
     if (!available) closePhonePrint();
 }
 
+function syncEvfPause(data = {}) {
+    if (typeof data.evf_pause !== "boolean") return;
+    evfPause = data.evf_pause;
+    if (btnEvfPause) btnEvfPause.textContent = `Просмотр на съёмке: ${evfPause ? "пауза" : "всегда"}`;
+}
+
 function syncPhonePrint(data = {}) {
     if (!data.phone_print) return;
     const next = data.phone_print;
@@ -736,6 +745,7 @@ if (!previewMode) {
                 syncStartLock(s);
                 syncTechnicalEvent(s);
                 syncPhonePrint(s);
+                syncEvfPause(s);
                 syncPayment(s);
                 syncSessionContext(s.state, s);
                 if (s.state === "template_select") {
@@ -995,6 +1005,7 @@ function switchScreen(state, data = {}) {
     syncStartLock(data);
     syncTechnicalEvent(data);
     syncPhonePrint(data);
+    syncEvfPause(data);
     if (state !== "idle") closePhonePrint();
     if (data.payment) paymentState = data.payment;
     syncSessionContext(state, data);
@@ -2661,6 +2672,10 @@ btnConfigApp?.addEventListener("click", () => openConfig("application"));
 btnConfigCamera?.addEventListener("click", () => openConfig("camera"));
 btnTemplatePack?.addEventListener("click", openServiceTemplates);
 btnIdleExplainer?.addEventListener("click", toggleIdleExplainer);
+btnRestartSpooler?.addEventListener("click", () => runLocalServiceAction("restart_spooler"));
+btnEvfPause?.addEventListener("click", async () => {
+    await runLocalServiceAction("evf_pause", !evfPause);
+});
 btnPhonePrint?.addEventListener("click", async () => {
     btnPhonePrint.disabled = true;
     try {

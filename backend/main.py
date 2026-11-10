@@ -130,6 +130,8 @@ LOCAL_SERVICE_ACTIONS = frozenset((
     "phone_print",
     "stress",
     "stress_shots",
+    "evf_pause",
+    "restart_spooler",
     *LOCAL_CLEAR_ACTIONS,
 ))
 
@@ -980,6 +982,7 @@ if sys.platform == "win32":
         from .camera.edsdk import Camera
         camera = Camera(EDSDK_DLL)
         camera.set_download_dir(PHOTOS_DIR)
+        camera.evf_pause = CONFIG.get("evf_pause", True) is True
     except Exception as e:
         log.warning(f"EDSDK not available: {e}")
 
@@ -1178,6 +1181,7 @@ def _state_message(new_state: str) -> dict:
         "unlock_sessions_remaining": _cafe_unlock_sessions_remaining,
         "payment": _payment_state(),
         "phone_print": _phone_print_state(),
+        "evf_pause": CONFIG.get("evf_pause", True) is True,
     }
     if SESSION_ID:
         msg["session_id"] = SESSION_ID
@@ -2481,6 +2485,30 @@ async def service_action(payload: dict):
             "status": "ok",
             "message": f"Печать с телефона: {'ВКЛ' if enabled else 'ВЫКЛ'}",
         }
+    if command_name == "restart_spooler":
+        from .printer import restart_spooler
+        try:
+            await asyncio.to_thread(restart_spooler)
+        except Exception as exc:
+            log.warning("Service menu: print service restart failed: %s", exc)
+            return {"status": "error", "message": str(exc) or "Не удалось перезапустить службу печати"}
+        log.info("Service menu: print service restarted")
+        return {"status": "ok", "message": "Служба печати перезапущена"}
+    if command_name == "evf_pause":
+        enabled = payload.get("data")
+        if type(enabled) is not bool:
+            return {"status": "error", "message": "Нужно указать ВКЛ или ВЫКЛ"}
+        try:
+            _save_app_config_fields({"evf_pause": enabled})
+        except (OSError, ValueError) as exc:
+            log.warning("Service menu: could not save the live view setting: %s", exc)
+            return {"status": "error", "message": "Не удалось сохранить настройку"}
+        if camera:
+            camera.evf_pause = enabled
+        await broadcast(_state_message(STATE))
+        log.info("Service menu: live view during the shot -> %s", "pause" if enabled else "always")
+        return {"status": "ok", "message": "Просмотр на съёмке: "
+                + ("пауза вокруг кадра" if enabled else "всегда включён")}
     if command_name in ("stress", "stress_shots"):
         message = _set_stress(payload.get("data") is True,
                               "shots" if command_name == "stress_shots" else "flow")

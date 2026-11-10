@@ -7,11 +7,14 @@ its private options such as 2-inch cutting.
 
 import asyncio
 import io
+import json
 import locale
 import logging
 import os
 import subprocess
+import sys
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -31,6 +34,16 @@ _printing = False
 # the reported before/after counts could be sampled while the Windows image
 # handler is still submitting a job.
 _windows_spooler_lock = threading.Lock()
+DNP_STATUS_SECONDS = 10
+# The kiosk user cannot restart a service, but may run this SYSTEM task (_setup_windows.bat).
+SPOOLER_TASK = "Photobooth Print Spooler"
+SPOOLER_RESTART_SECONDS = 15  # the service is back after 5 s, the counters answer after 10 s
+SPOOLER_RESTART_GAP_SECONDS = 5 * 60  # a printer that stays silent must not restart it over and over
+# The queue is empty as soon as the data is with the printer, but it goes on printing
+# for a while. A silent status request then proves nothing.
+PRINT_QUIET_SECONDS = 2 * 60
+_spooler_restarted_at = None
+_printed_at = None
 DEFAULT_CUSTOM_PRINT_SIZE = (3688, 2480)
 MAX_CUSTOM_PRINT_PIXELS = 100_000_000
 DNP_STATUS_DLL = (
@@ -236,6 +249,91 @@ def _dnp_status_label(status: int) -> str:
     return f"неизвестное состояние (0x{status:08X})"
 
 
+def _read_dnp_counters(port_name: str) -> tuple:
+    library = _load_dnp_status_library()
+    port_number = int(library.CvInitialize(port_name))
+    if port_number <= 0:
+        raise RuntimeError(f"DNP не открыл порт {port_name}")
+
+    status_code = int(library.CvGetStatus(port_number)) & 0xFFFFFFFF
+    total_count = int(library.GetCounterL(port_number))
+    if total_count < 0:
+        raise RuntimeError(
+            "счётчики недоступны — "
+            + _dnp_status_label(status_code)
+        )
+
+    # This is the same correction used by DNP's RX1-Information utility.
+    media_offset = int(library.GetMediaCountOffset(port_number))
+    if media_offset < 0:
+        media_offset = 50
+    media_count = int(library.GetMediaCounter(port_number))
+    initial_media_count = int(library.GetInitialMediaCount(port_number))
+    return status_code, total_count, media_offset, media_count, initial_media_count
+
+
+def restart_spooler() -> None:
+    """Restart the Windows print service through its SYSTEM task and wait for it.
+
+    The DS-RX1 sometimes stops answering status requests, a hang that only a
+    restart of the print service cures; a USB replug and a printer power cycle
+    did not.
+    """
+    global _spooler_restarted_at
+    _spooler_restarted_at = time.monotonic()
+    result = subprocess.run(
+        ["schtasks", "/run", "/tn", SPOOLER_TASK],
+        capture_output=True, text=True, encoding="oem", errors="replace", timeout=10,
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    if result.returncode:
+        raise RuntimeError(
+            f"не удалось перезапустить службу печати: {(result.stderr or result.stdout).strip()}")
+    time.sleep(SPOOLER_RESTART_SECONDS)
+
+
+def _ask_dnp(port_name: str) -> tuple:
+    """Ask the DNP library in a process of its own (__main__.py).
+
+    A printer that does not answer leaves the call hanging inside the DLL for good.
+    A process can be killed on a timeout and lets go of the printer, a stuck thread
+    of this one would hold it, and the print service could not be brought back.
+    """
+    try:
+        done = subprocess.run(
+            [str(Path(sys.executable).with_name("python.exe")), "-m", "backend.printer", port_name],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=DNP_STATUS_SECONDS, cwd=Path(__file__).resolve().parents[2],
+            creationflags=subprocess.CREATE_NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        raise TimeoutError("принтер не отвечает на запрос статуса") from None
+    try:
+        answer = json.loads(done.stdout)
+    except ValueError:
+        detail = (done.stderr.strip().splitlines() or ["без ответа"])[-1]
+        raise RuntimeError(f"не удалось запросить статус принтера: {detail}") from None
+    if "error" in answer:
+        raise RuntimeError(answer["error"])
+    return tuple(answer["value"])
+
+
+def _dnp_counters(port_name: str) -> tuple:
+    """Status of the printer; one that does not answer gets the print service restarted.
+
+    The caller holds the spooler lock, which printing needs too, so printing waits
+    for the restart instead of meeting a service that is going down.
+    """
+    try:
+        return _ask_dnp(port_name)
+    except TimeoutError:
+        now = time.monotonic()
+        if ((_spooler_restarted_at is not None and now - _spooler_restarted_at < SPOOLER_RESTART_GAP_SECONDS)
+                or (_printed_at is not None and now - _printed_at < PRINT_QUIET_SECONDS)):
+            raise
+    log.warning("Printer: no answer to the status request, restarting the print service")
+    restart_spooler()
+    return _ask_dnp(port_name)
+
+
 def get_dnp_printer_info(config: dict) -> dict:
     """Read the DS-RX1 hardware counter and loaded-media balance."""
     win32print = _win32print()
@@ -265,25 +363,8 @@ def get_dnp_printer_info(config: dict) -> dict:
                 except Exception:
                     log.exception("Could not close printer handle %s", printer_name)
 
-        library = _load_dnp_status_library()
-        port_number = int(library.CvInitialize(port_name))
-        if port_number <= 0:
-            raise RuntimeError(f"DNP не открыл порт {port_name}")
-
-        status_code = int(library.CvGetStatus(port_number)) & 0xFFFFFFFF
-        total_count = int(library.GetCounterL(port_number))
-        if total_count < 0:
-            raise RuntimeError(
-                "счётчики недоступны — "
-                + _dnp_status_label(status_code)
-            )
-
-        # This is the same correction used by DNP's RX1-Information utility.
-        media_offset = int(library.GetMediaCountOffset(port_number))
-        if media_offset < 0:
-            media_offset = 50
-        media_count = int(library.GetMediaCounter(port_number))
-        initial_media_count = int(library.GetInitialMediaCount(port_number))
+        (status_code, total_count, media_offset,
+         media_count, initial_media_count) = _dnp_counters(port_name)
 
     return {
         "printer_name": printer_name,
@@ -702,5 +783,7 @@ def _print_driver(image_path: str, config: dict, template_name: str = ""):
 
 def _do_print(image_path: str, config: dict, template_name: str = ""):
     """Submit one print in a worker thread."""
+    global _printed_at
     with _windows_spooler_lock:
         _print_driver(image_path, config, template_name)
+    _printed_at = time.monotonic()

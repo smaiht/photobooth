@@ -94,10 +94,12 @@ SEARCH_HANG_SECONDS = 8
 # new process frees a thread stuck inside the EDSDK DLL, so the app restarts.
 SEARCH_STUCK_SECONDS = 30
 CAMERA_HEALTH_LOG_SECONDS = 10 * 60.0
-# No live view frames are asked for from the shot until its photo is downloaded
-# and EVF_PAUSE_SECONDS passed: asking while the camera takes and saves a shot
-# can leave its live view dead until a power cut. EVF_PAUSE_MAX_SECONDS ends the
-# wait for a photo that never comes, below the 5 s live view stall check.
+# No live view frames are asked for from the shot until the camera is done with it:
+# the photo is downloaded and the camera has reported that no transfer job is left
+# (a shot takes 0.7-1.5 s), and at least EVF_PAUSE_SECONDS passed. Asking while the
+# camera takes and saves a shot can leave its live view dead until a power cut.
+# EVF_PAUSE_MAX_SECONDS ends the wait for a signal that never comes, below the 5 s
+# live view stall check.
 EVF_PAUSE_SECONDS = 1.0
 EVF_PAUSE_MAX_SECONDS = 3.0
 MIN_FREE_DISK_GIB = 2.0
@@ -168,8 +170,10 @@ class Camera:
         self._connection_generation = 0
         self._failure_notified = False
         self._photo_tag = ""
+        self.evf_pause = True         # False: live view frames are asked for during the shot too
         self._evf_shot_at = None      # live view waits since this shot
         self._evf_photo_pending = False
+        self._evf_jobs_pending = False  # the camera still reports a transfer job for the shot
         self._cfg = {}
         self._property_options: dict[int, list[int]] = {}
         self._thread: threading.Thread | None = None
@@ -445,6 +449,7 @@ class Camera:
                     self._photo_tag = cmd[1] if len(cmd) > 1 else ""
                     self._evf_shot_at = time.monotonic()
                     self._evf_photo_pending = True
+                    self._evf_jobs_pending = True
                     try:
                         self._do_capture()
                     except EDSDKError as exc:
@@ -479,14 +484,15 @@ class Camera:
             time.sleep(0.03)
 
     def _evf_ready(self) -> bool:
-        if self._evf_shot_at is None:
+        if not self.evf_pause or self._evf_shot_at is None:
             return True
         waited = time.monotonic() - self._evf_shot_at
         if waited < EVF_PAUSE_MAX_SECONDS and (
-                waited < EVF_PAUSE_SECONDS or self._evf_photo_pending):
+                waited < EVF_PAUSE_SECONDS or self._evf_photo_pending or self._evf_jobs_pending):
             return False
         log.info("%s Live view resumed %.1f s after the shot%s", self._photo_tag, waited,
-                 " (no photo)" if self._evf_photo_pending else "")
+                 " (no photo)" if self._evf_photo_pending
+                 else " (camera still busy)" if self._evf_jobs_pending else "")
         self._evf_shot_at = None
         return True
 
@@ -1413,6 +1419,8 @@ class Camera:
                     with self._capture_error_lock:
                         self._capture_error = f"Ошибка съемки: {capture_error_name(data)} ({data})"
             elif event == kEdsStateEvent_JobStatusChanged:
+                if data == 0:
+                    self._evf_jobs_pending = False
                 log.info(
                     "Camera transfer jobs: %s",
                     "pending" if data == 1 else "none" if data == 0 else f"unknown({data})",
