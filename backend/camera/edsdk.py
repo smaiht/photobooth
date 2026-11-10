@@ -94,6 +94,12 @@ SEARCH_HANG_SECONDS = 8
 # new process frees a thread stuck inside the EDSDK DLL, so the app restarts.
 SEARCH_STUCK_SECONDS = 30
 CAMERA_HEALTH_LOG_SECONDS = 10 * 60.0
+# No live view frames are asked for from the shot until its photo is downloaded
+# and EVF_PAUSE_SECONDS passed: asking while the camera takes and saves a shot
+# can leave its live view dead until a power cut. EVF_PAUSE_MAX_SECONDS ends the
+# wait for a photo that never comes, below the 5 s live view stall check.
+EVF_PAUSE_SECONDS = 1.0
+EVF_PAUSE_MAX_SECONDS = 3.0
 MIN_FREE_DISK_GIB = 2.0
 
 TRANSIENT_CAPTURE_ERRORS = {
@@ -162,6 +168,8 @@ class Camera:
         self._connection_generation = 0
         self._failure_notified = False
         self._photo_tag = ""
+        self._evf_shot_at = None      # live view waits since this shot
+        self._evf_photo_pending = False
         self._cfg = {}
         self._property_options: dict[int, list[int]] = {}
         self._thread: threading.Thread | None = None
@@ -176,6 +184,7 @@ class Camera:
         self._search_failed_cb = None  # callback(error_str)
         self._hung_cb = None  # callback(reason): EDSDK is stuck in a camera call
         self._stuck_cb = None  # callback(reason): still stuck after the power cut
+        self._lost_cb = None   # callback(reason): a connected camera failed or dropped off USB
         self._failed_searches = 0
         self._download_dir = Path("photos")
         self._health_lock = threading.Lock()
@@ -198,7 +207,7 @@ class Camera:
         self._prop_handler_ref = None
 
     def set_callbacks(self, on_evf_frame=None, on_photo=None, on_error=None, on_connected=None,
-                      on_search_failed=None, on_hung=None, on_stuck=None):
+                      on_search_failed=None, on_hung=None, on_stuck=None, on_lost=None):
         self._evf_frame_cb = on_evf_frame
         self._photo_cb = on_photo
         self._error_cb = on_error
@@ -206,6 +215,7 @@ class Camera:
         self._search_failed_cb = on_search_failed
         self._hung_cb = on_hung
         self._stuck_cb = on_stuck
+        self._lost_cb = on_lost
 
     def set_download_dir(self, path: Path):
         self._download_dir = path
@@ -365,8 +375,9 @@ class Camera:
                     self._cleanup_camera()
 
                 if reached_ready:
-                    # A runtime USB disconnect gets one immediate retry.
-                    retry_delay = 0
+                    # No immediate retry: opening a camera that just failed in the
+                    # same process can crash it; camera_power cuts it meanwhile.
+                    retry_delay = SEARCH_RETRY_SECONDS
                 elif self._running:
                     self._failed_searches += 1
                     if self._search_failed_cb:
@@ -432,6 +443,8 @@ class Camera:
                 log.info(f"CMD: {cmd[0]}")
                 if cmd[0] == "capture":
                     self._photo_tag = cmd[1] if len(cmd) > 1 else ""
+                    self._evf_shot_at = time.monotonic()
+                    self._evf_photo_pending = True
                     try:
                         self._do_capture()
                     except EDSDKError as exc:
@@ -453,7 +466,7 @@ class Camera:
 
             self._process_property_updates()
 
-            if evf_active and self._evf_frame_cb:
+            if evf_active and self._evf_frame_cb and self._evf_ready():
                 frame = self._download_evf_frame()
                 if frame:
                     self._evf_frame_cb(frame)
@@ -464,6 +477,18 @@ class Camera:
                 next_health_log = now + CAMERA_HEALTH_LOG_SECONDS
 
             time.sleep(0.03)
+
+    def _evf_ready(self) -> bool:
+        if self._evf_shot_at is None:
+            return True
+        waited = time.monotonic() - self._evf_shot_at
+        if waited < EVF_PAUSE_MAX_SECONDS and (
+                waited < EVF_PAUSE_SECONDS or self._evf_photo_pending):
+            return False
+        log.info("%s Live view resumed %.1f s after the shot%s", self._photo_tag, waited,
+                 " (no photo)" if self._evf_photo_pending else "")
+        self._evf_shot_at = None
+        return True
 
     def _extend_shutdown_timer(self, reason: str) -> int:
         err = self._sdk.EdsSendCommand(
@@ -508,6 +533,8 @@ class Camera:
         self._connected = False
         if was_connected:
             self._connection_generation += 1
+            if self._lost_cb:
+                self._lost_cb(reason)
         self._discard_commands()
         self._update_health(
             connected=False,
@@ -1433,12 +1460,19 @@ class Camera:
         _check("SetPropertyEventHandler", self._sdk.EdsSetPropertyEventHandler(
             self._camera, kEdsPropertyEvent_All, self._prop_handler_ref, None))
 
+    def _set_evf_prop(self, name: str, prop_id: int, value: int):
+        """A camera that just started or shot is busy for a moment: wait, do not drop it."""
+        data = EdsUInt32(value)
+        for _ in range(20):
+            err = self._sdk.EdsSetPropertyData(
+                self._camera, prop_id, 0, ctypes.sizeof(data), ctypes.byref(data))
+            if err not in (EDS_ERR_DEVICE_BUSY, EDS_ERR_PTP_DEVICE_BUSY):
+                break
+            time.sleep(0.1)
+        _check(name, err)
+
     def _do_start_evf(self):
-        # Enable EVF mode
-        evf_mode = EdsUInt32(1)
-        _check("SetEvfMode", self._sdk.EdsSetPropertyData(
-            self._camera, kEdsPropID_Evf_Mode, 0,
-            ctypes.sizeof(evf_mode), ctypes.byref(evf_mode)))
+        self._set_evf_prop("SetEvfMode", kEdsPropID_Evf_Mode, 1)
 
         original = self._get_prop_u32(kEdsPropID_Evf_OutputDevice)
         self._evf_original_output = original if original is not None else 0
@@ -1446,10 +1480,7 @@ class Camera:
         output = kEdsEvfOutputDevice_PC
         if keep_camera_screen:
             output |= self._evf_original_output
-        device = EdsUInt32(output)
-        _check("SetEvfOutput", self._sdk.EdsSetPropertyData(
-            self._camera, kEdsPropID_Evf_OutputDevice, 0,
-            ctypes.sizeof(device), ctypes.byref(device)))
+        self._set_evf_prop("SetEvfOutput", kEdsPropID_Evf_OutputDevice, output)
         self._read_focal_length_on_next_evf_frame = True
         log.info("Live view started")
 
@@ -1459,6 +1490,7 @@ class Camera:
             self._camera, kEdsPropID_Evf_OutputDevice, 0,
             ctypes.sizeof(device), ctypes.byref(device))
         self._evf_original_output = None
+        self._evf_shot_at = None  # the wait for a shot ends with the live view
         if err != EDS_ERR_OK:
             log.warning(
                 "Stop live view output restore failed: 0x%08X %s",
@@ -1660,6 +1692,7 @@ class Camera:
             _check("EdsDownload", self._sdk.EdsDownload(dir_item, info.size, stream))
             _check("EdsDownloadComplete", self._sdk.EdsDownloadComplete(dir_item))
             completed = True
+            self._evf_photo_pending = False
             log.info(f"{t} Photo saved: {file_path}")
             if self._photo_cb:
                 self._photo_cb(str(file_path))

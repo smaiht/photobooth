@@ -202,7 +202,8 @@ class CameraWorkerRecoveryTests(unittest.TestCase):
                 camera._running = False
 
         camera.set_callbacks(on_error=on_error, on_connected=on_connected)
-        with patch.object(edsdk.ctypes, "WinDLL", return_value=object(), create=True), \
+        with patch.object(edsdk, "SEARCH_RETRY_SECONDS", 0.01), \
+             patch.object(edsdk.ctypes, "WinDLL", return_value=object(), create=True), \
              patch.object(camera, "_initialize_com"), \
              patch.object(camera, "_uninitialize_com"), \
              patch.object(camera, "_setup_sdk_functions"), \

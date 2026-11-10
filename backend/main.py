@@ -6,6 +6,7 @@ State machine:
 """
 
 import asyncio
+import contextlib
 import functools
 import hashlib
 import json
@@ -15,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -97,7 +99,12 @@ PHOTO_DOWNLOAD_SECONDS = 10
 STRESS_PAUSE_SECONDS = 7     # idle between stress sessions: the charger is on and the flash poll (~5 s) ends
 STRESS_CHOICE_SECONDS = 3    # the stress "guest" looks at the templates this long
 STRESS_MAX_SESSIONS = 120    # about an hour and a half, then the test stops by itself
-_stress = {"running": False, "sessions": 0, "failed": 0, "relay_errors": 0, "camera_generation": 0}
+STRESS_SHOT_SECONDS = 3      # shots-only stress: a 3-2-1 countdown between shots
+STRESS_MAX_SHOTS = 600       # about 45 minutes of shots, then the test stops by itself
+STRESS_RESUME_ENV = "PHOTOBOOTH_STRESS"  # the mode a restarted process goes on with
+# "sessions" counts sessions in the "flow" mode and shots in the "shots" mode.
+_stress = {"running": False, "mode": "flow", "sessions": 0, "failed": 0,
+           "relay_errors": 0, "camera_generation": 0}
 _stress_task: asyncio.Task | None = None
 
 CAFE_UNLOCK_STATE_FILENAME = "cafe_unlock_state.json"
@@ -122,6 +129,7 @@ LOCAL_SERVICE_ACTIONS = frozenset((
     "flash_power",
     "phone_print",
     "stress",
+    "stress_shots",
     *LOCAL_CLEAR_ACTIONS,
 ))
 
@@ -1098,17 +1106,27 @@ def _require_session_camera(generation: int) -> None:
         # A folded or missing lens needs a person; any other refused shot
         # (AF_NG on every shot with a white live view) is a stuck camera.
         if capture_err.startswith("Ошибка спуска затвора"):
-            raise _camera_stuck(capture_err, capture_err)
+            raise _hung_camera(capture_err, capture_err)
         raise CameraSessionAborted(capture_err)
     if _live_view_active and time.monotonic() - _last_evf_frame > EVF_STALL_SECONDS:
-        raise _camera_stuck(f"лайв-вью не приходит {EVF_STALL_SECONDS} с",
+        raise _hung_camera(f"лайв-вью не приходит {EVF_STALL_SECONDS} с",
                             "Камера зависла. Попробуйте снова")
 
 
-def _camera_stuck(reason: str, message: str) -> CameraSessionAborted:
+def _hung_camera(reason: str, message: str) -> CameraSessionAborted:
     """EDSDK still calls the camera connected, but only a power cut revives it."""
     camera_power.camera_hung(reason)
     return CameraSessionAborted(message)
+
+
+def _start_live_view(download_dir: Path) -> None:
+    global _live_view_active, _evf_accept_after, _last_evf_frame
+    camera.set_download_dir(download_dir)
+    camera.start_live_view()
+    _evf_accept_after = time.monotonic() + float(CONFIG.get("live_view_warmup", 0.3))
+    _last_evf_frame = time.monotonic()
+    _live_view_active = True
+    log.info("Live view started")
 
 
 def _clear_live_view():
@@ -1308,12 +1326,16 @@ def on_camera_hung(reason: str):
         _event_loop.call_soon_threadsafe(camera_power.camera_hung, reason)
 
 
-def on_camera_stuck(reason: str):
-    # The power cut did not free the EDSDK call either: restart the process.
+def on_camera_lost(reason: str):
+    # Runs on the EDSDK thread right when a connected camera fails.
     if _event_loop and _event_loop.is_running():
-        # Joining the stuck camera thread would only waste the stop timeout.
-        _event_loop.call_soon_threadsafe(
-            asyncio.ensure_future, _do_restart(camera_timeout=0))
+        _event_loop.call_soon_threadsafe(camera_power.camera_lost, reason)
+
+
+def on_camera_stuck(reason: str):
+    # Runs on a timer thread: the power cut did not free the EDSDK call either.
+    if _event_loop and _event_loop.is_running():
+        _event_loop.call_soon_threadsafe(camera_power.sdk_stuck, reason)
 
 
 def on_camera_connected():
@@ -1561,19 +1583,31 @@ async def _stress_charger(on: bool) -> None:
 
 
 async def _stress_loop() -> None:
-    """Test sessions back to back while the flash charger clicks as at an event.
+    """The stress test: "flow" runs test sessions back to back, "shots" only shoots.
 
-    Screens, shots, flash and the template step are a guest's; as in any test
-    session nothing is uploaded, printed or counted, so no setting has to change.
-    The charger goes off at each session start and on between sessions, the way
-    a charge cycle switched it on 7 November; the flash watcher keeps reading the
-    flash over Bluetooth but leaves the relay to this loop.
+    Flow: screens, shots, flash and the template step are a guest's; as in any
+    test session nothing is uploaded, printed or counted, so no setting has to
+    change. The charger goes off at each session start and on between sessions,
+    the way a charge cycle switched it on 7 November; the flash watcher keeps
+    reading the flash over Bluetooth but leaves the relay to this loop.
+    Shots: see _stress_shots; the charger stays off.
+    A camera restart keeps the test going (STRESS_RESUME_ENV).
     """
+    shots = _stress["mode"] == "shots"
+    limit = STRESS_MAX_SHOTS if shots else STRESS_MAX_SESSIONS
     flash.stress_test = True
     try:
-        while _stress["running"] and _stress["sessions"] < STRESS_MAX_SESSIONS:
+        if shots:
+            await _stress_charger(False)  # only the shots are tested: the charger stays off
+        while _stress["running"] and _stress["sessions"] < limit:
             if STATE != "idle" or not camera or not camera.is_connected:
                 await asyncio.sleep(1)  # a camera search or a guest session is on
+                continue
+            if shots:
+                if not await _stress_shots(limit):
+                    _stress["failed"] += 1
+                    # Let camera_power cut the camera before the next round starts.
+                    await asyncio.sleep(STRESS_PAUSE_SECONDS)
                 continue
             await _stress_charger(False)
             ok = await run_session(test_session=True)
@@ -1591,28 +1625,93 @@ async def _stress_loop() -> None:
         log.info("Stress: stopped, %s", _stress_summary())
 
 
+async def _stress_shots(limit: int) -> bool:
+    """Shots only: live view stays on and the camera fires every STRESS_SHOT_SECONDS.
+
+    The checks of a guest session catch a dead live view, a refused shot or a
+    photo that never comes and feed the camera power ladder. Returns False when
+    the camera failed, True when the test stopped.
+    """
+    generation = camera.connection_generation
+    _camera_disconnected_event.clear()
+    shots_dir = PHOTOS_DIR / "stress_shots"
+    shots_dir.mkdir(exist_ok=True)
+    for old_shot in shots_dir.iterdir():  # leftovers a busy file handle kept
+        with contextlib.suppress(OSError):
+            old_shot.unlink()
+    camera.clear_capture_error()
+    SESSION_PHOTOS.clear()
+    flash.session(True)
+    _start_live_view(shots_dir)
+    try:
+        while _stress["running"] and _stress["sessions"] < limit:
+            shot = _stress["sessions"] + 1
+            # Photo indexes 0-3 in turn keep the screen in its usual session look.
+            await set_state("countdown", {
+                "photo_index": (shot - 1) % 4, "total": 4,
+                "countdown_seconds": STRESS_SHOT_SECONDS,
+                "countdown_sound_seconds": 0, "test_session": True})
+            for sec in range(STRESS_SHOT_SECONDS, 0, -1):
+                _require_session_camera(generation)
+                await broadcast({"type": "countdown", "value": sec, "beep": False})
+                await asyncio.sleep(1)
+            _require_session_camera(generation)
+            camera.take_picture(f"[S{shot}]")
+            await broadcast({"type": "flash", "beep": False})
+            deadline = time.monotonic() + PHOTO_DOWNLOAD_SECONDS
+            while not SESSION_PHOTOS:
+                if time.monotonic() > deadline:
+                    raise _hung_camera(
+                        f"фото не скачалось за {PHOTO_DOWNLOAD_SECONDS} с",
+                        "Не удалось сохранить фото. Попробуйте снова")
+                _require_session_camera(generation)
+                await asyncio.sleep(0.1)
+            # Only the shot counts. EDSDK may still hold the file for a moment;
+            # the next round clears what is left.
+            with contextlib.suppress(OSError):
+                Path(SESSION_PHOTOS.pop()).unlink()
+            _stress["sessions"] = shot
+        return True
+    except CameraSessionAborted as exc:
+        log.warning("Stress: shot %d failed: %s", _stress["sessions"] + 1, exc)
+        await broadcast({"type": "error", "message": str(exc)})
+        return False
+    except Exception:
+        # Anything else must not end the stress test silently.
+        log.exception("Stress: shot %d failed", _stress["sessions"] + 1)
+        return False
+    finally:
+        flash.session(False)
+        _clear_live_view()
+        SESSION_PHOTOS.clear()
+        if camera.is_connected:
+            camera.stop_live_view()
+        await set_state("idle" if camera.is_connected else "camera_searching")
+
+
 def _stress_summary() -> str:
     drops = (camera.connection_generation - _stress["camera_generation"]) if camera else 0
-    return (f"сессий {_stress['sessions']}, сбоев {_stress['failed']}, "
+    counted = "кадров" if _stress["mode"] == "shots" else "сессий"
+    return (f"{counted} {_stress['sessions']}, сбоев {_stress['failed']}, "
             f"камера отваливалась {drops}, реле не ответило {_stress['relay_errors']}")
 
 
-def _set_stress(on: bool) -> str:
+def _set_stress(on: bool, mode: str = "flow") -> str:
     global _stress_task
     if not on:
         _stress["running"] = False
         return f"Нагрузка остановится после текущей сессии: {_stress_summary()}"
-    _stress.update(running=True, sessions=0, failed=0, relay_errors=0,
+    if _stress_task and not _stress_task.done():
+        return "Нагрузка уже идёт: сначала останови её"
+    _stress.update(running=True, mode=mode, sessions=0, failed=0, relay_errors=0,
                    camera_generation=camera.connection_generation if camera else 0)
-    if _stress_task is None or _stress_task.done():
-        _stress_task = asyncio.create_task(_stress_loop())
-    return "Нагрузочный тест запущен"
+    _stress_task = asyncio.create_task(_stress_loop())
+    return "Нагрузочный тест запущен" if mode == "flow" else "Нагрузка кадрами запущена"
 
 
 async def _run_session(test_session: bool = False):
     global SESSION_ID, SESSION_PHOTOS, SESSION_COUNT, SESSION_LINK
     global TEMPLATE_OPTIONS
-    global _live_view_active, _evf_accept_after, _last_evf_frame
 
     if not camera or not camera.is_connected:
         await set_state("camera_searching" if camera else "no_camera")
@@ -1671,12 +1770,7 @@ async def _run_session(test_session: bool = False):
 
     video_recorder.start(session_dir)
     if camera and camera.is_connected:
-        camera.set_download_dir(session_dir)
-        camera.start_live_view()
-        _evf_accept_after = time.monotonic() + float(CONFIG.get("live_view_warmup", 0.3))
-        _last_evf_frame = time.monotonic()
-        _live_view_active = True
-        log.info("Live view started")
+        _start_live_view(session_dir)
 
     # Countdown -> capture loop (live view continues throughout)
     for photo_idx in range(num_photos):
@@ -1713,7 +1807,7 @@ async def _run_session(test_session: bool = False):
         log.info(f"{tag} take_picture + mark_photo")
         camera.take_picture(tag)
         video_recorder.mark_photo()
-        await broadcast({"type": "flash"})
+        await broadcast({"type": "flash", "beep": not test_session})  # tests stay silent
 
         # Brief pause to verify shutter release and catch immediate errors (e.g. retracted lens)
         for _ in range(6):
@@ -1725,7 +1819,7 @@ async def _run_session(test_session: bool = False):
     deadline = time.monotonic() + PHOTO_DOWNLOAD_SECONDS
     while len(SESSION_PHOTOS) < num_photos:
         if time.monotonic() > deadline:
-            raise _camera_stuck(
+            raise _hung_camera(
                 f"фото не скачались за {PHOTO_DOWNLOAD_SECONDS} с "
                 f"({len(SESSION_PHOTOS)} из {num_photos})",
                 "Не удалось сохранить фото. Попробуйте снова")
@@ -1734,6 +1828,7 @@ async def _run_session(test_session: bool = False):
     _clear_live_view()
     camera.stop_live_view()
     log.info("Live view stopped")
+    flash.session(False)  # the last shot is in: light off, Bluetooth polling resumes
 
     photos_copy = SESSION_PHOTOS[:]
     if test_session:
@@ -2225,6 +2320,7 @@ def _service_status_snapshot() -> dict:
         "uploads_error": uploads_error,
         "stress": {
             "running": _stress["running"],
+            "mode": _stress["mode"],
             "ran": _stress["sessions"] > 0,
             "summary": _stress_summary(),
         },
@@ -2385,8 +2481,9 @@ async def service_action(payload: dict):
             "status": "ok",
             "message": f"Печать с телефона: {'ВКЛ' if enabled else 'ВЫКЛ'}",
         }
-    if command_name == "stress":
-        message = _set_stress(payload.get("data") is True)
+    if command_name in ("stress", "stress_shots"):
+        message = _set_stress(payload.get("data") is True,
+                              "shots" if command_name == "stress_shots" else "flow")
         log.info("Service menu: stress -> %s", message)
         return {"status": "ok", "message": message}
     if command_name in ("camera_power", "flash_power"):
@@ -2499,19 +2596,19 @@ async def _do_restart(camera_timeout: float = 10.0):
         "type": "application_restart_requested",
     })
     log.info("Restart requested!")
-    await _shutdown_services(camera_timeout)
-    si = None
-    if sys.platform == "win32":
-        si = subprocess.STARTUPINFO()
-        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    # Start the replacement first: it waits until this process exits, and it
+    # still comes up when stopping a broken camera takes this process down.
+    # No STARTUPINFO here: its default SW_HIDE would hide the booth's own window.
     log.info(f"Spawning: {sys.executable} {sys.argv}")
     child_env = os.environ.copy()
     child_env["PHOTOBOOTH_RESTART_PARENT_PID"] = str(os.getpid())
-    subprocess.Popen(
-        [sys.executable] + sys.argv,
-        startupinfo=si,
-        env=child_env,
-    )
+    if _stress["running"]:  # a camera restart must not end an unattended stress test
+        child_env[STRESS_RESUME_ENV] = _stress["mode"]
+    subprocess.Popen([sys.executable] + sys.argv, env=child_env)
+    # The replacement waits at most 30 s for this process to go: a shutdown
+    # that hangs must not outlive that, or nothing is left running.
+    threading.Timer(15, os._exit, args=(0,)).start()
+    await _shutdown_services(camera_timeout)
     await asyncio.sleep(0.1)
     os._exit(0)
 
@@ -3612,6 +3709,7 @@ async def startup():
             on_search_failed=on_camera_search_failed,
             on_hung=on_camera_hung,
             on_stuck=on_camera_stuck,
+            on_lost=on_camera_lost,
         )
         await set_state("camera_searching")
         camera.start()
@@ -3626,8 +3724,13 @@ async def startup():
     _service_tasks.add(asyncio.create_task(_periodic_status_service()))
     _service_tasks.add(asyncio.create_task(sms.watch(CONFIG)))
     _service_tasks.add(asyncio.create_task(flash.watch(CONFIG)))
+    resume = os.environ.pop(STRESS_RESUME_ENV, "")
+    if resume in ("flow", "shots"):
+        log.info("Stress: going on after the restart: %s", _set_stress(True, resume))
     _service_tasks.add(asyncio.create_task(camera_power.watch(
-        lambda: bool(camera and camera.is_connected))))
+        lambda: bool(camera and camera.is_connected),
+        # Joining a stuck or stale camera thread would only waste the stop timeout.
+        lambda: _do_restart(camera_timeout=0))))
 
 
 @app.on_event("shutdown")

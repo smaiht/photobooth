@@ -185,6 +185,7 @@ const btnConfigCamera = document.getElementById("btn-config-camera");
 const btnTemplatePack = document.getElementById("btn-template-pack");
 const btnTestSession = document.getElementById("btn-test-session");
 const btnStress = document.getElementById("btn-stress");
+const btnStressShots = document.getElementById("btn-stress-shots");
 let stressRunning = false;
 const btnBoothUnblock = document.getElementById("btn-booth-unblock");
 const btnBoothBlock = document.getElementById("btn-booth-block");
@@ -877,7 +878,7 @@ function handleMessage(msg) {
             if (msg.beep) beep(440 + (msg.beep_index ?? 0) * 110, 500);
             break;
         case "flash":
-            beep(880, 500);
+            if (msg.beep !== false) beep(880, 500);
             const flashEl = document.getElementById("flash-overlay");
             flashEl.style.opacity = "1";
             setTimeout(() => flashEl.style.opacity = "0", 150);
@@ -1972,7 +1973,9 @@ function renderServiceStatus(data) {
 
     const stress = data.stress || {};
     stressRunning = stress.running === true;
-    if (btnStress) btnStress.textContent = stressRunning ? "Нагрузка: стоп" : "Нагрузка: старт";
+    const shotsMode = stress.mode === "shots";
+    if (btnStress) btnStress.textContent = stressRunning && !shotsMode ? "Нагрузка: стоп" : "Нагрузка: старт";
+    if (btnStressShots) btnStressShots.textContent = stressRunning && shotsMode ? "Кадры: стоп" : "Кадры: старт";
     if (stressRunning || stress.ran) {
         serviceRuntimeStatus.append(createServiceStatusCard(
             "Нагрузочный тест",
@@ -2718,11 +2721,13 @@ btnTestSession?.addEventListener("click", () => {
     closeServiceModal();
     send({ type: "start_session", test_session: true });
 });
-btnStress?.addEventListener("click", async () => {
-    const start = !stressRunning;
-    if (!await runLocalServiceAction("stress", start)) return;
-    if (start) closeServiceModal();
-    else refreshServiceStatus();
+[[btnStress, "stress"], [btnStressShots, "stress_shots"]].forEach(([button, command]) => {
+    button?.addEventListener("click", async () => {
+        const start = !stressRunning;
+        if (!await runLocalServiceAction(command, start)) return;
+        if (start) closeServiceModal();
+        else refreshServiceStatus();
+    });
 });
 btnBoothUnblock?.addEventListener("click", async () => {
     try {

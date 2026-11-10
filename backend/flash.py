@@ -9,9 +9,9 @@ Every POLL_SECONDS the flash is asked over Bluetooth for its settings dump
   0x26  [0]                   Перегрев (если присылается)
   0x09  [1, 0, 5]             Прошивка: v1.0.5
   0x20  [1, 9, 0, 0, 0, 0]    Режим и мощность: 1 = M (ручной), шаг 9 (от минимума с шагом 0.1) -> запись 0xA0
-  0x0C  [18, 0, 0]            Радио 2.4G: канал Ch 18 (0x12), группа A (0), ID OFF (0) -> запись 0x8B
+  0x0C  [18, 0, 18]           Радио 2.4G: канал Ch 18 (0x12), группа A (0), ID 18 (0 = OFF) -> запись 0x8B
   0x07  [0]                   Синхронизация: 0 = радио 2.4G (1 = S1, 2 = S2 выкл) -> запись 0x8D
-  0x04  [0]                   Пилотный свет (Modeling lamp): 0 (ВЫКЛ) -> запись 0x87
+  0x04  [0]                   Пилотный свет (Modeling lamp): 0 (ВЫКЛ), на время сессии 1 -> запись 0x87
   0x21  [0, 0, 40, 27]        Уставки пилотного света: яркость 40%, температура 2700K -> запись 0xA2
   0x99  [0, 1, 0, 0, 0]       Шторка / HSS: 1-я шторка, без HSS -> запись 0x99
   0x02  [0]                   Burst (серия): 0 (ВЫКЛ) -> запись 0x83
@@ -81,15 +81,19 @@ def _fmt_menu(b):
             f"шаг={step}({b[3]}), шкала={scale}({b[4]}), экран={scr}({b[5]}), X-System={_off_on(b[6])}]")
 
 
+# The modeling light is the first byte of its settings (40%, 2700K): a session turns it
+# on for autofocus, the poll after it puts the reference (off) back.
+LAMP_TAG, LAMP_WRITE, LAMP_ON = 0x21, 0xA2, bytes.fromhex("01 00 28 1b")
+
 # (reply_tag, write_tag, expected_payload, name, formatter)
 SETTINGS = (
     (0x22, 0xA4, b"\x01", "сон_статус", lambda b: f"{'бодрствует' if b[0] == 1 else 'standby'}({b[0]})"),
-    (0x20, 0xA0, bytes.fromhex("01 09 00 00 00 00"), "режим", _fmt_mode),
-    (0x0C, 0x8B, bytes.fromhex("12 00 00"), "радио_2.4G", _fmt_radio),
+    (0x20, 0xA0, bytes.fromhex("00 14 00 00 00 00"), "режим", _fmt_mode),
+    # Channel 18, group A, ID 18: the same as on the Godox X2T-C trigger.
+    (0x0C, 0x8B, bytes.fromhex("12 00 12"), "радио_2.4G", _fmt_radio),
     (0x07, 0x8D, b"\x00", "синхр", lambda b: f"{ {0: '2.4G_радио', 1: 'S1', 2: 'S2'}.get(b[0], b[0]) }({b[0]})"),
-    (0x04, 0x87, b"\x00", "пилотный_свет", lambda b: _off_on(b[0])),
-    (0x21, 0xA2, bytes.fromhex("00 00 28 1b"), "уставки_пилота",
-     lambda b: f"{b[2]}%/{b[3]}00K" if b[:2] == b"\x00\x00" else b.hex(":")),
+    (LAMP_TAG, LAMP_WRITE, bytes.fromhex("00 00 28 1b"), "модельный_свет",
+     lambda b: f"{'ВКЛ' if b[0] else 'ВЫКЛ'}/{b[2]}%/{b[3]}00K" if b[1] == 0 else b.hex(":")),
     (0x99, 0x99, bytes.fromhex("00 01 00 00 00"), "шторка_HSS",
      lambda b: "1я_шторка_без_HSS" if b == b"\x00\x01\x00\x00\x00" else (
          "HSS" if b == b"\x00\x01\x00\x00\x01" else b.hex(":"))),
@@ -97,7 +101,7 @@ SETTINGS = (
     (0x0B, 0x92, b"\x00\x00\x00", "mask_ALT", lambda b: "ВЫКЛ(0)" if b == b"\x00\x00\x00" else b.hex(":")),
     (0x03, 0x85, b"\x00\x00\x00", "timelapse", lambda b: "ВЫКЛ(0)" if b == b"\x00\x00\x00" else b.hex(":")),
     (0x05, 0x89, b"\x00", "сцены_motif", lambda b: _off_on(b[0])),
-    (0x08, 0x90, bytes.fromhex("00 00 04 00 00 01 01"), "меню", _fmt_menu),
+    (0x08, 0x90, bytes.fromhex("00 00 04 00 00 00 01"), "меню", _fmt_menu),
 )
 
 
@@ -122,7 +126,8 @@ def parse_dump(packets):
         else:
             target = fmt(expected)
             items.append(f"{name}={actual}->{target}")
-            fixes.append(f"{name}: {actual} → {target}")
+            if packets[tag] != LAMP_ON:  # left on by the last session, not a drift
+                fixes.append(f"{name}: {actual} → {target}")
     items.append(f"(расходится: {', '.join(fixes)})" if fixes else "(все ок)")
     return " ".join(items), fixes
 
@@ -132,6 +137,11 @@ session_active = False
 stress_test = False  # the stress test switches the charger itself; the watcher only reads the flash
 wake = asyncio.Event()
 _poll = None  # the Bluetooth poll in progress; a session start cuts it short
+_enabled = False  # the watcher runs (flash_enabled), so Bluetooth may be used
+_ble = asyncio.Lock()  # one Bluetooth connection to the flash at a time
+# Turning the light on must be over before the first shot (pre-countdown 1 s +
+# countdown 5 s).
+LAMP_SECONDS = 4
 
 
 def next_cycle(cycle, battery):
@@ -151,15 +161,41 @@ def next_cycle(cycle, battery):
 def session(active):
     """A photo session started or ended; the watcher reacts at once.
 
-    A start puts the charger off and cuts a running Bluetooth poll short, so no
-    Bluetooth traffic overlaps the flash firing; an end checks the battery right
-    away so the charge cycle resumes without waiting for the next poll.
+    A start puts the charger off, turns the modeling light on and cuts a running
+    Bluetooth poll short, so no Bluetooth traffic overlaps the flash firing. An end
+    (after the last shot) polls at once: the light goes off, the charge cycle resumes.
     """
     global session_active
+    if active == session_active:
+        return
     session_active = active
     if active and _poll:
         _poll.cancel()
+    if active and _enabled:
+        asyncio.create_task(_lamp_on())
     wake.set()
+
+
+async def _lamp_on():
+    try:
+        await asyncio.wait_for(_write(LAMP_WRITE, LAMP_ON), LAMP_SECONDS)
+        log.info("Flash: modeling light on for the session")
+    except Exception as exc:
+        log.info("Flash: modeling light not turned on: %s", str(exc) or type(exc).__name__)
+
+
+async def _find_flash():
+    device = await BleakScanner.find_device_by_filter(
+        lambda device, adv: BLE_NAME in (adv.local_name or device.name or ""), timeout=10)
+    if device is None:
+        raise RuntimeError("вспышка не найдена по Bluetooth")
+    return device
+
+
+async def _write(write_tag, payload):
+    async with _ble:
+        async with BleakClient(await _find_flash(), timeout=15) as client:
+            await client.write_gatt_char(WRITE, write_packet(write_tag, payload), response=True)
 
 
 async def read_flash():
@@ -173,11 +209,7 @@ async def read_flash():
             if data[1] == 0x23:
                 battery_seen.set()
 
-    device = await BleakScanner.find_device_by_filter(
-        lambda device, adv: BLE_NAME in (adv.local_name or device.name or ""), timeout=10)
-    if device is None:
-        raise RuntimeError("вспышка не найдена по Bluetooth")
-    async with BleakClient(device, timeout=15) as client:
+    async with _ble, BleakClient(await _find_flash(), timeout=15) as client:
         await client.start_notify(NOTIFY, on_data)
         for _ in range(3):  # the first request after connecting can get lost
             await client.write_gatt_char(WRITE, DUMP_REQUEST, response=True)
@@ -214,11 +246,12 @@ def set_relay(on):
 
 
 async def watch(config):
-    global status, _poll
+    global status, _poll, _enabled
     if not config.get("flash_enabled", False):
         status = "выключено"
         log.info("Flash: disabled")
         return
+    _enabled = True
     log.info("Flash: battery watch started")
     cycle = False
     while True:
