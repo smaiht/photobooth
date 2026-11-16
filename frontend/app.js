@@ -187,9 +187,11 @@ const btnTestSession = document.getElementById("btn-test-session");
 const btnStress = document.getElementById("btn-stress");
 const btnStressShots = document.getElementById("btn-stress-shots");
 const btnEvfPause = document.getElementById("btn-evf-pause");
+const btnModelingLight = document.getElementById("btn-modeling-light");
 const btnRestartSpooler = document.getElementById("btn-restart-spooler");
 let stressRunning = false;
 let evfPause = true;
+let modelingLight = true;
 const btnBoothUnblock = document.getElementById("btn-booth-unblock");
 const btnBoothBlock = document.getElementById("btn-booth-block");
 const btnClearAll = document.getElementById("btn-clear-all");
@@ -608,6 +610,12 @@ function syncEvfPause(data = {}) {
     if (btnEvfPause) btnEvfPause.textContent = `Просмотр на съёмке: ${evfPause ? "пауза" : "всегда"}`;
 }
 
+function syncModelingLight(data = {}) {
+    if (typeof data.modeling_light !== "boolean") return;
+    modelingLight = data.modeling_light;
+    if (btnModelingLight) btnModelingLight.textContent = `Модельный свет: ${modelingLight ? "ВКЛ" : "ВЫКЛ"}`;
+}
+
 function syncPhonePrint(data = {}) {
     if (!data.phone_print) return;
     const next = data.phone_print;
@@ -746,6 +754,7 @@ if (!previewMode) {
                 syncTechnicalEvent(s);
                 syncPhonePrint(s);
                 syncEvfPause(s);
+                syncModelingLight(s);
                 syncPayment(s);
                 syncSessionContext(s.state, s);
                 if (s.state === "template_select") {
@@ -1006,6 +1015,7 @@ function switchScreen(state, data = {}) {
     syncTechnicalEvent(data);
     syncPhonePrint(data);
     syncEvfPause(data);
+    syncModelingLight(data);
     if (state !== "idle") closePhonePrint();
     if (data.payment) paymentState = data.payment;
     syncSessionContext(state, data);
@@ -2675,6 +2685,9 @@ btnIdleExplainer?.addEventListener("click", toggleIdleExplainer);
 btnRestartSpooler?.addEventListener("click", () => runLocalServiceAction("restart_spooler"));
 btnEvfPause?.addEventListener("click", async () => {
     await runLocalServiceAction("evf_pause", !evfPause);
+});
+btnModelingLight?.addEventListener("click", async () => {
+    await runLocalServiceAction("modeling_light", !modelingLight);
 });
 btnPhonePrint?.addEventListener("click", async () => {
     btnPhonePrint.disabled = true;

@@ -304,18 +304,20 @@ async def _watch(config):
         battery, extra, fixes, problems = None, "", [], []
         if session_active:  # the charger goes off before the light: the first shot is near
             problems += await _charger(False)
-        if session_active != _lamp:  # a session started or ended
-            _lamp = session_active
+        # modeling_light_enabled false: sessions leave the light off (a bright room).
+        lamp = session_active and config.get("modeling_light_enabled", True) is True
+        if lamp != _lamp:  # a session started or ended
+            _lamp = lamp
             try:
                 await asyncio.wait_for(
-                    _write(LAMP_WRITE, LAMP_ON if session_active else LAMP_OFF), LAMP_SECONDS)
+                    _write(LAMP_WRITE, LAMP_ON if lamp else LAMP_OFF), LAMP_SECONDS)
                 log.info("Flash: modeling light %s, %.1f s after the session %s",
-                         "on" if session_active else "off", time.monotonic() - _session_at,
+                         "on" if lamp else "off", time.monotonic() - _session_at,
                          "start" if session_active else "end")
             except Exception as exc:
                 problems.append(f"свет: {exc or type(exc).__name__}")
-            if session_active:
-                await _unlink()  # no Bluetooth link while the flash fires
+        if session_active:
+            await _unlink()  # no Bluetooth link while the flash fires
         if not session_active:  # no Bluetooth traffic while the flash fires
             _poll = asyncio.create_task(asyncio.wait_for(read_flash(), 45))
             try:

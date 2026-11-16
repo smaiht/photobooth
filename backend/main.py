@@ -131,6 +131,7 @@ LOCAL_SERVICE_ACTIONS = frozenset((
     "stress",
     "stress_shots",
     "evf_pause",
+    "modeling_light",
     "restart_spooler",
     *LOCAL_CLEAR_ACTIONS,
 ))
@@ -1182,6 +1183,7 @@ def _state_message(new_state: str) -> dict:
         "payment": _payment_state(),
         "phone_print": _phone_print_state(),
         "evf_pause": CONFIG.get("evf_pause", True) is True,
+        "modeling_light": CONFIG.get("modeling_light_enabled", True) is True,
     }
     if SESSION_ID:
         msg["session_id"] = SESSION_ID
@@ -2023,39 +2025,41 @@ async def _run_session(test_session: bool = False):
         extend_event.set()
         return True
 
-    app.state.on_template_choice = on_template_choice
-    app.state.on_skip_print = on_skip_print
-    app.state.on_template_activity = on_template_activity
-    await set_state("template_select")
-    log.info("Waiting for template choice...")
-    choice_task = asyncio.create_task(template_event.wait())
-    extend_task = asyncio.create_task(extend_event.wait())
-    try:
-        while True:
-            remaining = deadline["at"] - loop.time()
-            if remaining <= 0:
+    # template_select_enabled false: no choice screen, the default prints at once.
+    if CONFIG.get("template_select_enabled") is not False:
+        app.state.on_template_choice = on_template_choice
+        app.state.on_skip_print = on_skip_print
+        app.state.on_template_activity = on_template_activity
+        await set_state("template_select")
+        log.info("Waiting for template choice...")
+        choice_task = asyncio.create_task(template_event.wait())
+        extend_task = asyncio.create_task(extend_event.wait())
+        try:
+            while True:
+                remaining = deadline["at"] - loop.time()
+                if remaining <= 0:
+                    log.info(f"Template timeout, using default: {selected_template}")
+                    break
+                done, _ = await asyncio.wait(
+                    (choice_task, extend_task),
+                    timeout=remaining,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if choice_task in done:
+                    break
+                if extend_task in done:
+                    extend_event.clear()
+                    extend_task = asyncio.create_task(extend_event.wait())
+                    log.info("Template selection extended by visitor touch")
+                    continue
                 log.info(f"Template timeout, using default: {selected_template}")
                 break
-            done, _ = await asyncio.wait(
-                (choice_task, extend_task),
-                timeout=remaining,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if choice_task in done:
-                break
-            if extend_task in done:
-                extend_event.clear()
-                extend_task = asyncio.create_task(extend_event.wait())
-                log.info("Template selection extended by visitor touch")
-                continue
-            log.info(f"Template timeout, using default: {selected_template}")
-            break
-    finally:
-        app.state.on_template_activity = None
-        for task in (choice_task, extend_task):
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(choice_task, extend_task, return_exceptions=True)
+        finally:
+            app.state.on_template_activity = None
+            for task in (choice_task, extend_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(choice_task, extend_task, return_exceptions=True)
     template_event.set()
     if chosen["skip_print"]:
         if not test_session:
@@ -2509,6 +2513,18 @@ async def service_action(payload: dict):
         log.info("Service menu: live view during the shot -> %s", "pause" if enabled else "always")
         return {"status": "ok", "message": "Просмотр на съёмке: "
                 + ("пауза вокруг кадра" if enabled else "всегда включён")}
+    if command_name == "modeling_light":
+        enabled = payload.get("data")
+        if type(enabled) is not bool:
+            return {"status": "error", "message": "Нужно указать ВКЛ или ВЫКЛ"}
+        try:
+            _save_app_config_fields({"modeling_light_enabled": enabled})
+        except (OSError, ValueError) as exc:
+            log.warning("Service menu: could not save the modeling light setting: %s", exc)
+            return {"status": "error", "message": "Не удалось сохранить настройку"}
+        await broadcast(_state_message(STATE))
+        log.info("Service menu: modeling light in sessions -> %s", "on" if enabled else "off")
+        return {"status": "ok", "message": f"Модельный свет: {'ВКЛ' if enabled else 'ВЫКЛ'}"}
     if command_name in ("stress", "stress_shots"):
         message = _set_stress(payload.get("data") is True,
                               "shots" if command_name == "stress_shots" else "flow")
