@@ -141,6 +141,8 @@ status = "выключено"
 session_active = False
 stress_test = False  # the stress test switches the charger itself; the watcher only reads the flash
 wake = asyncio.Event()
+cycle = False  # a charge cycle is on: from LOW (or a manual start) up to HIGH
+_config = {}
 _lamp = False  # the modeling light was last sent on (a session) or off
 _poll = None  # the Bluetooth poll in progress; a session start cuts it short
 _device = None  # the flash found by the last scan
@@ -162,11 +164,36 @@ def next_cycle(cycle, battery):
     return cycle
 
 
+def off_in_session():
+    """flash_charger_off_in_session: the charger pauses for each session."""
+    return _config.get("flash_charger_off_in_session", True) is True
+
+
+async def charge(on):
+    """A manual start or stop of the charge cycle (service menu, admin bot).
+
+    On charges up to HIGH, off waits for LOW, as if the watcher had decided it;
+    an unreachable flash still turns charging on. Returns what happens now.
+    """
+    global cycle
+    cycle = on
+    wake.set()  # the watcher reads the battery at once and keeps the cycle going
+    if stress_test:
+        return "сейчас зарядкой управляет нагрузочный тест"
+    if session_active and off_in_session():
+        return "применится после сессии"
+    problems = await _charger(on)
+    if problems:
+        raise RuntimeError(problems[0])
+    return f"до {HIGH}%" if on else f"до {LOW}%"
+
+
 def session(active):
     """A photo session started or ended; the watcher reacts at once.
 
     A start cuts a poll in progress short (it takes 6-7 s, the first shot is 6 s
-    away), puts the charger off and the modeling light on, and no new poll starts
+    away), puts the charger off (flash_charger_off_in_session; otherwise the
+    charge cycle goes on) and the modeling light on, and no new poll starts
     during the session, so no Bluetooth traffic overlaps the flash firing. An end
     (after the last shot) puts the light off, then the polls and the charge cycle
     resume.
@@ -286,6 +313,8 @@ async def _charger(on):
 
 
 async def watch(config):
+    global _config
+    _config = config
     try:
         await _watch(config)
     finally:
@@ -293,16 +322,16 @@ async def watch(config):
 
 
 async def _watch(config):
-    global status, _lamp, _poll
+    global status, cycle, _lamp, _poll
     if not config.get("flash_enabled", False):
         status = "выключено"
         log.info("Flash: disabled")
         return
     log.info("Flash: battery watch started")
-    cycle = False
     while True:
         battery, extra, fixes, problems = None, "", [], []
-        if session_active:  # the charger goes off before the light: the first shot is near
+        paused = session_active and off_in_session()
+        if paused:  # the charger goes off before the light: the first shot is near
             problems += await _charger(False)
         # modeling_light_enabled false: sessions leave the light off (a bright room).
         lamp = session_active and config.get("modeling_light_enabled", True) is True
@@ -343,11 +372,10 @@ async def _watch(config):
                 )
             except Exception as exc:
                 log.warning("Flash: notice not published: %s", exc)
-        charging = False
-        if not session_active:
+        if not session_active:  # in a session the battery is unknown: the cycle stays
             cycle = next_cycle(cycle, battery)
-            charging = cycle
-            problems += await _charger(charging)
+            problems += await _charger(cycle)
+        charging = cycle and not paused
         state = ("зарядкой щёлкает нагрузочный тест" if stress_test
                  else f"зарядка {'вкл' if charging else 'выкл'}")
         if session_active:

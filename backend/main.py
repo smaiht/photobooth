@@ -132,6 +132,7 @@ LOCAL_SERVICE_ACTIONS = frozenset((
     "stress_shots",
     "evf_pause",
     "modeling_light",
+    "charger_session",
     "restart_spooler",
     *LOCAL_CLEAR_ACTIONS,
 ))
@@ -1184,6 +1185,7 @@ def _state_message(new_state: str) -> dict:
         "phone_print": _phone_print_state(),
         "evf_pause": CONFIG.get("evf_pause", True) is True,
         "modeling_light": CONFIG.get("modeling_light_enabled", True) is True,
+        "charger_off_in_session": flash.off_in_session(),
     }
     if SESSION_ID:
         msg["session_id"] = SESSION_ID
@@ -1593,15 +1595,18 @@ async def _stress_loop() -> None:
 
     Flow: screens, shots, flash and the template step are a guest's; as in any
     test session nothing is uploaded, printed or counted, so no setting has to
-    change. The charger goes off at each session start and on between sessions,
-    the way a charge cycle switched it on 7 November; the flash watcher keeps
-    reading the flash over Bluetooth but leaves the relay to this loop.
+    change. With flash_charger_off_in_session the charger goes off at each
+    session start and on between sessions, the way a charge cycle switched it on
+    7 November; the flash watcher keeps reading the flash over Bluetooth but
+    leaves the relay to this loop. Without it the watcher keeps the relay.
     Shots: see _stress_shots; the charger stays off.
     A camera restart keeps the test going (STRESS_RESUME_ENV).
     """
     shots = _stress["mode"] == "shots"
     limit = STRESS_MAX_SHOTS if shots else STRESS_MAX_SESSIONS
-    flash.stress_test = True
+    # Without flash_charger_off_in_session the sessions leave the charger to the watcher.
+    toggle = not shots and flash.off_in_session()
+    flash.stress_test = shots or toggle
     try:
         if shots:
             await _stress_charger(False)  # only the shots are tested: the charger stays off
@@ -1615,17 +1620,20 @@ async def _stress_loop() -> None:
                     # Let camera_power cut the camera before the next round starts.
                     await asyncio.sleep(STRESS_PAUSE_SECONDS)
                 continue
-            await _stress_charger(False)
+            if toggle:
+                await _stress_charger(False)
             ok = await run_session(test_session=True)
             _stress["sessions"] += 1
             if not ok:
                 _stress["failed"] += 1
             log.info("Stress: session %d %s", _stress["sessions"], "ok" if ok else "FAILED")
-            await _stress_charger(True)
+            if toggle:
+                await _stress_charger(True)
             await asyncio.sleep(STRESS_PAUSE_SECONDS)
     finally:
         _stress["running"] = False
-        await _stress_charger(False)
+        if flash.stress_test:
+            await _stress_charger(False)
         flash.stress_test = False
         flash.wake.set()  # the watcher takes the charger back at once
         log.info("Stress: stopped, %s", _stress_summary())
@@ -2525,26 +2533,37 @@ async def service_action(payload: dict):
         await broadcast(_state_message(STATE))
         log.info("Service menu: modeling light in sessions -> %s", "on" if enabled else "off")
         return {"status": "ok", "message": f"Модельный свет: {'ВКЛ' if enabled else 'ВЫКЛ'}"}
+    if command_name == "charger_session":
+        enabled = payload.get("data")
+        if type(enabled) is not bool:
+            return {"status": "error", "message": "Нужно указать ВКЛ или ВЫКЛ"}
+        try:
+            _save_app_config_fields({"flash_charger_off_in_session": enabled})
+        except (OSError, ValueError) as exc:
+            log.warning("Service menu: could not save the charger setting: %s", exc)
+            return {"status": "error", "message": "Не удалось сохранить настройку"}
+        flash.wake.set()
+        await broadcast(_state_message(STATE))
+        log.info("Service menu: charger pause in sessions -> %s", "on" if enabled else "off")
+        return {"status": "ok", "message": "Зарядка в сессии: "
+                + ("выключается" if enabled else "не прерывается")}
     if command_name in ("stress", "stress_shots"):
         message = _set_stress(payload.get("data") is True,
                               "shots" if command_name == "stress_shots" else "flow")
         log.info("Service menu: stress -> %s", message)
         return {"status": "ok", "message": message}
-    if command_name in ("camera_power", "flash_power"):
+    if command_name == "flash_power":
+        return await _flash_charge(payload.get("data") is True, "Service menu")
+    if command_name == "camera_power":
         on = bool(payload.get("data"))
         state_str = "ВКЛ" if on else "ВЫКЛ"
-        label, fn = (
-            ("Питание камеры", camera_power.set_relay)
-            if command_name == "camera_power"
-            else ("Зарядка вспышки", flash.set_relay)
-        )
         try:
-            await asyncio.to_thread(fn, on)
+            await asyncio.to_thread(camera_power.set_relay, on)
         except Exception as exc:
-            log.warning("Service menu: %s (%s: %s) failed: %s", command_name, label, state_str, exc)
-            return {"status": "error", "message": f"{label}: {exc}"}
-        log.info("Service menu: %s (%s: %s)", command_name, label, state_str)
-        return {"status": "ok", "message": f"{label}: {state_str}"}
+            log.warning("Service menu: camera_power (%s) failed: %s", state_str, exc)
+            return {"status": "error", "message": f"Питание камеры: {exc}"}
+        log.info("Service menu: camera_power (Питание камеры: %s)", state_str)
+        return {"status": "ok", "message": f"Питание камеры: {state_str}"}
     # Call the booth handler directly; no control channel or VPS is involved.
     if command_name == "clear_all":
         errors = []
@@ -2633,6 +2652,18 @@ async def apply_service_config(
         "message": f"Полей обработано: {processed_count}",
         "restart": True,
     }
+
+
+async def _flash_charge(on: bool, source: str) -> dict:
+    """Start or stop the flash charge cycle by hand: the service menu and the bot."""
+    state_str = "ВКЛ" if on else "ВЫКЛ"
+    try:
+        note = await flash.charge(on)
+    except Exception as exc:
+        log.warning("%s: flash charge %s failed: %s", source, state_str, exc)
+        return {"status": "error", "message": f"Зарядка вспышки: {exc}"}
+    log.info("%s: flash charge %s (%s)", source, state_str, note)
+    return {"status": "ok", "message": f"Зарядка вспышки: {state_str}, {note}"}
 
 
 async def _do_restart(camera_timeout: float = 10.0):
@@ -3223,6 +3254,12 @@ async def handle_disk_command(command: dict) -> dict:
             "message": "Перезапуск подтверждён",
             "_post_action": _do_restart,
         }
+
+    if cmd == "flash_charge":
+        on = data.get("on") if isinstance(data, dict) else None
+        if type(on) is not bool:
+            return {"status": "error", "message": "Зарядка: нужно on или off"}
+        return await _flash_charge(on, "Admin")
 
     if cmd == "set_app_config":
         if STATE not in ("idle", "no_camera", "camera_searching"):

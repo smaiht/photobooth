@@ -32,6 +32,7 @@
         "keep_custom_print_files",
         "sms_enabled",
         "flash_enabled",
+        "flash_charger_off_in_session",
         "modeling_light_enabled"
     ],
     "_admin_editable_fields_comment": "Only these config_app fields may be changed by direct Telegram/VK admin commands. Value type follows the current field; _<field>_options is enforced when present.",
@@ -83,7 +84,9 @@
     "sms_enabled": true,
     "_sms_comment": "Enable background BROVI SMS forwarding via Disk and VPS to Telegram/VK admins. Modem constants are at the top of backend/sms.py.",
     "flash_enabled": true,
-    "_flash_enabled_comment": "Poll the Q4 Pro battery over Bluetooth and switch its charger by USB relay; charging is always off during a session. Thresholds, poll interval and relay constants are at the top of backend/flash.py.",
+    "_flash_enabled_comment": "Poll the Q4 Pro battery over Bluetooth and switch its charger by USB relay: on at LOW or with no answer, off at HIGH. Thresholds, poll interval and relay constants are at the top of backend/flash.py.",
+    "flash_charger_off_in_session": false,
+    "_flash_charger_off_in_session_comment": "true switches the charger off for each session and back after it (2 relay clicks per session); false lets the charge cycle go on through sessions.",
     "modeling_light_enabled": true,
     "_modeling_light_enabled_comment": "Turn the flash modeling light on over Bluetooth for each session and off after the last shot. false leaves it off, for a room that is bright enough. Needs flash_enabled.",
     "yadisk_folder": "Кафе",

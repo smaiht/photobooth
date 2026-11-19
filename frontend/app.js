@@ -188,10 +188,12 @@ const btnStress = document.getElementById("btn-stress");
 const btnStressShots = document.getElementById("btn-stress-shots");
 const btnEvfPause = document.getElementById("btn-evf-pause");
 const btnModelingLight = document.getElementById("btn-modeling-light");
+const btnChargerSession = document.getElementById("btn-charger-session");
 const btnRestartSpooler = document.getElementById("btn-restart-spooler");
 let stressRunning = false;
 let evfPause = true;
 let modelingLight = true;
+let chargerOffInSession = true;
 const btnBoothUnblock = document.getElementById("btn-booth-unblock");
 const btnBoothBlock = document.getElementById("btn-booth-block");
 const btnClearAll = document.getElementById("btn-clear-all");
@@ -616,6 +618,14 @@ function syncModelingLight(data = {}) {
     if (btnModelingLight) btnModelingLight.textContent = `Модельный свет: ${modelingLight ? "ВКЛ" : "ВЫКЛ"}`;
 }
 
+function syncChargerSession(data = {}) {
+    if (typeof data.charger_off_in_session !== "boolean") return;
+    chargerOffInSession = data.charger_off_in_session;
+    if (btnChargerSession) {
+        btnChargerSession.textContent = `Зарядка в сессии: ${chargerOffInSession ? "ВЫКЛ" : "идёт"}`;
+    }
+}
+
 function syncPhonePrint(data = {}) {
     if (!data.phone_print) return;
     const next = data.phone_print;
@@ -755,6 +765,7 @@ if (!previewMode) {
                 syncPhonePrint(s);
                 syncEvfPause(s);
                 syncModelingLight(s);
+                syncChargerSession(s);
                 syncPayment(s);
                 syncSessionContext(s.state, s);
                 if (s.state === "template_select") {
@@ -1016,6 +1027,7 @@ function switchScreen(state, data = {}) {
     syncPhonePrint(data);
     syncEvfPause(data);
     syncModelingLight(data);
+    syncChargerSession(data);
     if (state !== "idle") closePhonePrint();
     if (data.payment) paymentState = data.payment;
     syncSessionContext(state, data);
@@ -2688,6 +2700,9 @@ btnEvfPause?.addEventListener("click", async () => {
 });
 btnModelingLight?.addEventListener("click", async () => {
     await runLocalServiceAction("modeling_light", !modelingLight);
+});
+btnChargerSession?.addEventListener("click", async () => {
+    await runLocalServiceAction("charger_session", !chargerOffInSession);
 });
 btnPhonePrint?.addEventListener("click", async () => {
     btnPhonePrint.disabled = true;
