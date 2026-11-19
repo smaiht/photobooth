@@ -1319,7 +1319,7 @@ class CustomPrintCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_queue_failure_is_reported_to_sender(self):
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch.object(main, "PRINT_JOBS_DIR", Path(tmpdir)), \
-             patch.dict(main.CONFIG, {"print_enabled": True}), \
+             patch.dict(main.CONFIG, {"print_enabled": True, "template_pack": TEMPLATE_DIR.name}), \
              patch.object(main.yadisk_cloud, "current_event_folder", return_value="event"), \
              patch.object(main.yadisk_control, "download_print_artifact", AsyncMock(return_value=b"photo")), \
              patch("backend.printer.prepare_custom_print"), \

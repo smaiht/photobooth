@@ -1084,6 +1084,7 @@ class UpdateMarkerTests(unittest.TestCase):
              patch.object(app, "wait_and_load"), \
              patch.object(app.threading, "Thread", ImmediateThread), \
              patch.object(app, "auto_update") as auto_update, \
+             patch.object(app, "sync_custom_templates"), \
              patch.object(app, "start_server") as start_server, \
              patch.dict(sys.modules, {"webview": webview}):
             app.main()

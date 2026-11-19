@@ -919,6 +919,7 @@ class SessionDisconnectTests(unittest.IsolatedAsyncioTestCase):
             "countdown_seconds": 0,
             "countdown_sound_seconds": 0,
             "print_enabled": True,
+            "template_pack": "wedding",
         })
 
         with tempfile.TemporaryDirectory() as tmpdir, \
@@ -1023,6 +1024,7 @@ class SessionDisconnectTests(unittest.IsolatedAsyncioTestCase):
             "countdown_seconds": 0,
             "countdown_sound_seconds": 0,
             "print_enabled": True,
+            "template_pack": "wedding",
         })
 
         with tempfile.TemporaryDirectory() as tmpdir, \
