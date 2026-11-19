@@ -12,15 +12,43 @@ from serial.tools import list_ports
 ON = bytes.fromhex("a0 01 01 a2")
 OFF = bytes.fromhex("a0 01 00 a1")
 RELAY_USB_ID = (0x1A86, 0x7523)  # CH340
+SECONDS = 3  # a board that does not answer by then is reported, not waited for
 # Windows lets one opener at a time into a COM port: a service menu tap that
 # meets the automatic power cut would fail one of them with "Access is denied".
-_lock = threading.Lock()
+_locks = {}
 
 
 def switch(port, on):
-    with _lock, serial.Serial(port, 9600, write_timeout=1) as board:
-        board.write(ON if on else OFF)
-        board.flush()
+    """Send one command; raise when the board does not answer in SECONDS.
+
+    A hung CH340 driver can block open, write or flush for good. The command runs
+    in its own thread, so the caller (flash watcher, service menu, camera power
+    cut) gets an error instead of hanging. The stuck thread keeps the port's lock:
+    later commands to that port fail fast until the board comes back (a USB
+    replug), and the other board is not affected.
+    """
+    lock = _locks.setdefault(port, threading.Lock())
+    if not lock.acquire(timeout=SECONDS):
+        raise RuntimeError(f"реле {port} не отвечает: прошлая команда зависла")
+    errors = []
+
+    def send():
+        try:
+            with serial.Serial(port, 9600, write_timeout=1) as board:
+                board.write(ON if on else OFF)
+                board.flush()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            lock.release()
+
+    worker = threading.Thread(target=send, daemon=True)
+    worker.start()
+    worker.join(SECONDS)
+    if worker.is_alive():
+        raise RuntimeError(f"реле {port} не отвечает")
+    if errors:
+        raise errors[0]
 
 
 def _usb_keyboards():

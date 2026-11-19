@@ -3641,10 +3641,14 @@ async def _shutdown_services(camera_timeout: float = 10.0) -> None:
     _services_stopping = True
     log.info("Stopping backend services...")
 
-    for task in list(_service_tasks):
+    # The camera power watcher restarts the app from inside its own task: a task
+    # that cancels and awaits itself loops forever (RecursionError) and the
+    # camera below would never be stopped.
+    tasks = [task for task in _service_tasks if task is not asyncio.current_task()]
+    for task in tasks:
         task.cancel()
-    if _service_tasks:
-        await asyncio.gather(*list(_service_tasks), return_exceptions=True)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
     _service_tasks.clear()
 
     if _background_uploads:
