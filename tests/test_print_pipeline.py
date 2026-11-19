@@ -35,8 +35,8 @@ from backend.printer import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_CONFIG = json.loads((ROOT / "config_app.json").read_text(encoding="utf-8"))
-TEMPLATE_DIR = ROOT / "templates" / APP_CONFIG["template_pack"]
+# A pack kept in the repo: config_app.json may name a custom pack from the Disk.
+TEMPLATE_DIR = ROOT / "templates" / "wedding"
 
 
 class DnpPrinterInfoTests(unittest.TestCase):
