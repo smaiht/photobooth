@@ -2866,11 +2866,13 @@ window.addEventListener("keydown", e => {
     });
 });
 
-// The hyperlink button sends Tab, and Enter on a double press: Tab walks focus
-// onto a package or the print button, Enter presses it. Guests only touch the
-// screen, so outside the service menu both keys do nothing.
+// The square sends Tab on a single press and Enter on a double press.
 window.addEventListener("keydown", e => {
-    if (e.key !== "Tab" && e.key !== "Enter") return;
-    if (serviceModal && !serviceModal.hidden) return;
-    e.preventDefault();
+    if (e.key === "Tab") {
+        e.preventDefault();
+        if (e.repeat) return;
+        presenterQueue = presenterQueue.then(() => send({ type: "start_session" }));
+    } else if (e.key === "Enter" && serviceModal.hidden) {
+        e.preventDefault();
+    }
 });
